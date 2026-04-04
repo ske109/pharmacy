@@ -55,6 +55,9 @@ if (CONFIGURED) {
   db = firebase.database();
 }
 
+const CLAUDE_KEY = "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";
+const CLAUDE_HEADERS = { "Content-Type": "application/json", "x-api-key": CLAUDE_KEY, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" };
+
 // ══════════════════════════════════════════════
 // PHARMACY INFO
 // ══════════════════════════════════════════════
@@ -312,12 +315,14 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm }) {
     const file = e.target.files[0]; if (!file) return; setImgP(true);
     try {
       const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result.split(",")[1]); r.onerror = rej; r.readAsDataURL(file); });
-      const resp = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "Content-Type": "application/json" },
+      const resp = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: CLAUDE_HEADERS,
         body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 2000, messages: [{ role: "user", content: [{ type: "image", source: { type: "base64", media_type: file.type || "image/jpeg", data: b64 } }, { type: "text", text: "Extract ALL medicine items from this purchase invoice. Return ONLY valid JSON, no markdown. Format: object with keys supplier, invoiceNo, date (YYYY-MM-DD), and items array. Each item: name, manufacturer, hsn, batch, expiry, pack, mrp, qty, ptr, gstRate, rack, packQty, discPct, schemePct, freeQty, amount." }] }] }) });
-      const data = await resp.json(); let text = data.content.map((c) => c.text || "").join("").trim();
+      const data = await resp.json();
+      if (data.error) { alert("API error: " + (data.error.message || "Check API key")); setImgP(false); return; }
+      let text = (data.content || []).map((c) => c.text || "").join("").trim();
       if (text.indexOf("{") > 0) text = text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1);
       setRev({ ...JSON.parse(text), srcType: "image", srcFile: file.name });
-    } catch (err) { console.error(err); alert("Could not read image."); } setImgP(false); e.target.value = "";
+    } catch (err) { console.error(err); alert("Could not read image. Try again."); } setImgP(false); e.target.value = "";
   };
 
   const updR = (i, f, v) => { setRev((p) => { const items = p.items.map((it, idx) => { if (idx !== i) return it; const updated = { ...it, [f]: typeof it[f] === "number" ? (Number(v) || 0) : v }; updated.amount = purchCalcAmt(updated); return updated; }); return { ...p, items }; }); };
@@ -349,7 +354,7 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm }) {
         <div style={{ display: "flex", gap: 3, background: "#E8E4DD", borderRadius: 8, padding: 3, marginBottom: 16 }}>
           {[["csv","CSV"],["image","Image AI"],["manual","Manual"]].map(([id, l]) => <button key={id} onClick={() => setTab(id)} style={{ flex: 1, padding: 8, border: "none", borderRadius: 6, fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: tab === id ? "#fff" : "transparent", color: tab === id ? "#0D6B5B" : "#888", boxShadow: tab === id ? "0 1px 3px rgba(0,0,0,.1)" : "none" }}>{l}</button>)}</div>
         {tab === "csv" && <div style={{ border: "2px dashed #bbb", borderRadius: 10, padding: 36, textAlign: "center", cursor: "pointer", background: "#FAFAF7" }} onClick={() => csvR.current && csvR.current.click()}><input ref={csvR} type="file" accept=".csv" onChange={doCSV} style={{ display: "none" }} /><div style={{ fontSize: 36 }}>📄</div><div style={{ fontSize: 14, fontWeight: 600, color: "#555", marginTop: 8 }}>Upload CSV</div></div>}
-        {tab === "image" && <div style={{ border: "2px dashed #bbb", borderRadius: 10, padding: 36, textAlign: "center", cursor: "pointer", background: "#FAFAF7" }} onClick={() => !imgP && imgR.current && imgR.current.click()}><input ref={imgR} type="file" accept="image/*" capture="environment" onChange={doImg} style={{ display: "none" }} />{imgP ? <div><div style={{ fontSize: 36 }}>🔄</div><div style={{ fontSize: 14, fontWeight: 600, color: "#0D6B5B", marginTop: 8 }}>AI reading...</div></div> : <div><div style={{ fontSize: 36 }}>📸</div><div style={{ fontSize: 14, fontWeight: 600, color: "#555", marginTop: 8 }}>Upload Invoice Photo</div></div>}</div>}
+        {tab === "image" && <div style={{ border: "2px dashed #bbb", borderRadius: 10, padding: 36, textAlign: "center", cursor: "pointer", background: "#FAFAF7" }} onClick={() => !imgP && imgR.current && imgR.current.click()}><input ref={imgR} type="file" accept="image/*" onChange={doImg} style={{ display: "none" }} />{imgP ? <div><div style={{ fontSize: 36 }}>🔄</div><div style={{ fontSize: 14, fontWeight: 600, color: "#0D6B5B", marginTop: 8 }}>AI reading...</div></div> : <div><div style={{ fontSize: 36 }}>📸</div><div style={{ fontSize: 14, fontWeight: 600, color: "#555", marginTop: 8 }}>Take Photo or Upload Image</div></div>}</div>}
         {tab === "manual" && <div>
           <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr 1fr", gap: 10, marginBottom: 14 }}>
             <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Supplier *</label><input value={mf.sup} onChange={(e) => setMf((f) => ({ ...f, sup: e.target.value }))} style={inps} /></div>
@@ -471,17 +476,17 @@ function BillPage({ inv, saveInv, addBill, mob, showBill }) {
     setScanning(true); setScanResult(null);
     try {
       const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result.split(",")[1]); r.onerror = rej; r.readAsDataURL(file); });
-      const resp = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "Content-Type": "application/json" },
+      const resp = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: CLAUDE_HEADERS,
         body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000,
           messages: [{ role: "user", content: [
             { type: "image", source: { type: "base64", media_type: file.type || "image/jpeg", data: b64 } },
-            { type: "text", text: "You are a pharmacy medicine identifier. Look at this medicine strip/box image and extract: Name (full name with strength like 'Paracetamol 500mg'), Manufacturer, Batch number, Expiry (YYYY-MM), Pack (like '10 Tab'), MRP (number only). Return ONLY valid JSON, no markdown: {\"name\":\"\",\"manufacturer\":\"\",\"batch\":\"\",\"expiry\":\"\",\"pack\":\"\",\"mrp\":0}" }
+            { type: "text", text: "You are a pharmacy medicine identifier. Look at this medicine strip/box image and extract: Name (full name with strength like Paracetamol 500mg), Manufacturer, Batch number, Expiry (YYYY-MM), Pack (like 10 Tab), MRP (number only). Return ONLY valid JSON no markdown: {\"name\":\"\",\"manufacturer\":\"\",\"batch\":\"\",\"expiry\":\"\",\"pack\":\"\",\"mrp\":0}" }
           ] }] }) });
       const data = await resp.json();
+      if (data.error) { setScanResult({ type: "err", msg: "API error: " + (data.error.message || "Unknown") }); setScanning(false); return; }
       let text = (data.content || []).map((c) => c.text || "").join("").trim();
       if (text.indexOf("{") > 0) text = text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1);
       const parsed = JSON.parse(text);
-      // Try to match with inventory
       const medName = (parsed.name || "").toLowerCase();
       const match = inv.find((m) => m.stock > 0 && (
         m.name.toLowerCase() === medName ||
@@ -493,13 +498,12 @@ function BillPage({ inv, saveInv, addBill, mob, showBill }) {
         addIt(match);
         setScanResult({ type: "ok", msg: "Found: " + match.name + " (Stock: " + match.stock + ")" });
       } else {
-        // Show what was read so user can search manually
-        setScanResult({ type: "info", msg: "Read: " + (parsed.name || "Unknown") + " | MRP: " + (parsed.mrp || "?") + " | Batch: " + (parsed.batch || "?") + " - Not found in inventory. Search manually or add via Purchases first." });
+        setScanResult({ type: "info", msg: "Read: " + (parsed.name || "Unknown") + " | MRP: " + (parsed.mrp || "?") + " | Batch: " + (parsed.batch || "?") + " - Not found in inventory." });
         if (parsed.name) setSq(parsed.name);
       }
     } catch (err) {
       console.error(err);
-      setScanResult({ type: "err", msg: "Could not read medicine. Try again with clearer image." });
+      setScanResult({ type: "err", msg: "Could not read medicine. Try clearer image." });
     }
     setScanning(false);
     e.target.value = "";
@@ -528,8 +532,8 @@ function BillPage({ inv, saveInv, addBill, mob, showBill }) {
             {so && res.length > 0 && <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: "1px solid #ddd", borderRadius: 8, boxShadow: "0 8px 24px rgba(0,0,0,.12)", maxHeight: 220, overflowY: "auto", zIndex: 100 }}>
               {res.map((m) => (<button key={m.id} onClick={() => addIt(m)} style={{ display: "flex", justifyContent: "space-between", width: "100%", padding: "10px 14px", border: "none", borderBottom: "1px solid #f5f5f0", background: "transparent", cursor: "pointer", textAlign: "left", fontSize: 13 }}><span><b>{m.name}</b> {m.uid && <span style={{ color: "#7C3AED", fontSize: 10 }}>({m.uid})</span>} - {m.batch} (Stock:{m.stock})</span><span style={{ color: "#0D6B5B", fontWeight: 600, whiteSpace: "nowrap", marginLeft: 8 }}>Rs.{f2(m.mrp)}</span></button>))}</div>}</div>
           <div>
-            <input ref={camRef} type="file" accept="image/*" capture="environment" onChange={doScan} style={{ display: "none" }} />
-            <button onClick={() => camRef.current && camRef.current.click()} disabled={scanning} style={{ ...bts(false), padding: "12px 16px", fontSize: 13, opacity: scanning ? 0.6 : 1 }}>{scanning ? "Reading..." : "📷 Scan Medicine"}</button>
+            <input ref={camRef} type="file" accept="image/*" onChange={doScan} style={{ display: "none" }} />
+            <button onClick={() => camRef.current && camRef.current.click()} disabled={scanning} style={{ ...bts(false), padding: "12px 16px", fontSize: 13, opacity: scanning ? 0.6 : 1 }}>{scanning ? "Reading..." : "📷 Scan / Upload"}</button>
           </div>
         </div>
         {scanning && <div style={{ marginTop: 10, padding: 12, background: "#EFF6FF", borderRadius: 8, fontSize: 13, color: "#1E40AF", display: "flex", alignItems: "center", gap: 8 }}><span style={{ display: "inline-block", width: 16, height: 16, border: "2px solid #1E40AF", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.7s linear infinite" }}></span> AI is reading the medicine strip...</div>}
