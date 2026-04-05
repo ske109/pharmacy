@@ -55,8 +55,10 @@ if (CONFIGURED) {
   db = firebase.database();
 }
 
-const CLAUDE_KEY = "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";
-const CLAUDE_HEADERS = { "Content-Type": "application/json", "x-api-key": CLAUDE_KEY, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" };
+// Claude API Proxy URL (deploy worker.js to Cloudflare Workers, then paste URL here)
+const PROXY_URL = "https://atoz-pharmacy-api.sk05012024.workers.dev/";
+const PROXY_READY = PROXY_URL.indexOf("YOUR-WORKER") === -1;
+const CLAUDE_HEADERS = { "Content-Type": "application/json" };
 
 // ══════════════════════════════════════════════
 // PHARMACY INFO
@@ -312,10 +314,12 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm }) {
   const doCSV = (e) => { const file = e.target.files[0]; if (!file) return; const r = new FileReader(); r.onload = (ev) => { const rows = parseCSV(ev.target.result); const p = csvToItems(rows); if (p && p.items.length) setRev({ ...p, srcType: "csv", srcFile: file.name }); else alert("Cannot parse CSV"); }; r.readAsText(file); e.target.value = ""; };
 
   const doImg = async (e) => {
-    const file = e.target.files[0]; if (!file) return; setImgP(true);
+    const file = e.target.files[0]; if (!file) return;
+    if (!PROXY_READY) { alert("Image AI not configured. See PROXY_SETUP guide to enable."); return; }
+    setImgP(true);
     try {
       const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result.split(",")[1]); r.onerror = rej; r.readAsDataURL(file); });
-      const resp = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: CLAUDE_HEADERS,
+      const resp = await fetch(PROXY_URL, { method: "POST", headers: CLAUDE_HEADERS,
         body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 2000, messages: [{ role: "user", content: [{ type: "image", source: { type: "base64", media_type: file.type || "image/jpeg", data: b64 } }, { type: "text", text: "Extract ALL medicine items from this purchase invoice. Return ONLY valid JSON, no markdown. Format: object with keys supplier, invoiceNo, date (YYYY-MM-DD), and items array. Each item: name, manufacturer, hsn, batch, expiry, pack, mrp, qty, ptr, gstRate, rack, packQty, discPct, schemePct, freeQty, amount." }] }] }) });
       const data = await resp.json();
       if (data.error) { alert("API error: " + (data.error.message || "Check API key")); setImgP(false); return; }
@@ -473,10 +477,11 @@ function BillPage({ inv, saveInv, addBill, mob, showBill }) {
   // Camera scan - reads medicine strip/box image and matches to inventory
   const doScan = async (e) => {
     const file = e.target.files[0]; if (!file) return;
+    if (!PROXY_READY) { alert("Image AI not configured. See PROXY_SETUP guide to enable."); return; }
     setScanning(true); setScanResult(null);
     try {
       const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result.split(",")[1]); r.onerror = rej; r.readAsDataURL(file); });
-      const resp = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: CLAUDE_HEADERS,
+      const resp = await fetch(PROXY_URL, { method: "POST", headers: CLAUDE_HEADERS,
         body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000,
           messages: [{ role: "user", content: [
             { type: "image", source: { type: "base64", media_type: file.type || "image/jpeg", data: b64 } },
