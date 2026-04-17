@@ -241,7 +241,7 @@ function Login({ onLogin }) {
 // ══════════════════════════════════════════════
 function Sidebar({ page, setPage, user, onLogout, counts, mob, sideOpen, setSideOpen }) {
   const isO = user.role === "owner";
-  const nav = [{ id: "dash", i: "📊", l: "Dashboard" }, { id: "purch", i: "📦", l: "Purchases" }, { id: "inv", i: "💊", l: "Inventory" }, { id: "bill", i: "🧾", l: "New Bill" }, ...(isO ? [{ id: "sales", i: "📈", l: "Sales" }] : []), { id: "stock", i: "📋", l: "Stock" }, { id: "hist", i: "🗂", l: "Bills" }, ...(isO ? [{ id: "users", i: "👥", l: "Users" }, { id: "backup", i: "💾", l: "Backup" }] : [])];
+  const nav = [{ id: "dash", i: "📊", l: "Dashboard" }, { id: "purch", i: "📦", l: "Purchases" }, { id: "returns", i: "↩️", l: "Returns" }, { id: "inv", i: "💊", l: "Inventory" }, { id: "rack", i: "🗄", l: "Racks" }, { id: "bill", i: "🧾", l: "New Bill" }, ...(isO ? [{ id: "sales", i: "📈", l: "Sales" }] : []), { id: "stock", i: "📋", l: "Stock" }, { id: "hist", i: "🗂", l: "Bills" }, ...(isO ? [{ id: "users", i: "👥", l: "Users" }, { id: "backup", i: "💾", l: "Backup" }] : [])];
   if (mob && !sideOpen) return null;
   return (
     <div>
@@ -632,16 +632,58 @@ function StockPage({ inv, isO, mob }) {
 // ══════════════════════════════════════════════
 // BILL HISTORY
 // ══════════════════════════════════════════════
-function HistPage({ bills, showBill }) {
+function HistPage({ bills, showBill, saveBills, askConfirm }) {
+  const [editBill, setEditBill] = useState(null);
+
+  const saveEditedBill = () => {
+    if (!editBill) return;
+    const tMRP = editBill.items.reduce((s, i) => s + (i.unitPrice || i.mrp) * i.qty, 0);
+    const tDisc = editBill.items.reduce((s, i) => s + (i.unitPrice || i.mrp) * i.qty * (i.discount || 0) / 100, 0);
+    const tGST = editBill.items.reduce((s, i) => { const a = (i.unitPrice || i.mrp) * i.qty * (1 - (i.discount || 0) / 100); return s + (a - a / (1 + (i.gstRate || 0) / 100)); }, 0);
+    const net = Math.max(0, Math.round(tMRP - tDisc - (editBill.billDiscount || 0)));
+    const updated = { ...editBill, totalMRP: tMRP, totalDiscount: tDisc, netAmount: net, cgst: tGST / 2, sgst: tGST / 2, items: editBill.items.map((i) => ({ ...i, amount: (i.unitPrice || i.mrp) * i.qty * (1 - (i.discount || 0) / 100) })) };
+    const next = bills.map((b) => b.billNo === updated.billNo ? updated : b);
+    saveBills(next);
+    setEditBill(null);
+  };
+
   return (
     <div><h2 style={hds}>Bills ({bills.length})</h2>
+      {editBill && (
+        <div style={{ ...cds, border: "2px solid #2563EB", marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <b style={{ color: "#2563EB" }}>Edit Bill: {editBill.billNo}</b>
+            <div style={{ display: "flex", gap: 6 }}><button onClick={saveEditedBill} style={{ ...bts(true), background: "#2563EB" }}>Save</button><button onClick={() => setEditBill(null)} style={bts(false)}>Cancel</button></div></div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 12 }}>
+            <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Patient</label><input value={editBill.patient} onChange={(e) => setEditBill((p) => ({ ...p, patient: e.target.value }))} style={inps} /></div>
+            <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Doctor</label><input value={editBill.doctor || ""} onChange={(e) => setEditBill((p) => ({ ...p, doctor: e.target.value }))} style={inps} /></div>
+            <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Payment</label><select value={editBill.paymentMode} onChange={(e) => setEditBill((p) => ({ ...p, paymentMode: e.target.value }))} style={{ ...inps, background: "#fff" }}>{["Cash","UPI","Card","Credit"].map((m) => <option key={m}>{m}</option>)}</select></div></div>
+          <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
+            {["Medicine","Qty","Price","Disc%","GST%","Amt"].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
+            {editBill.items.map((it, i) => (
+              <tr key={i}>
+                <td style={{ ...tds, fontWeight: 500 }}>{it.name}</td>
+                <td style={{ padding: "4px" }}><input type="number" min="1" value={it.qty} onChange={(e) => { const items = [...editBill.items]; items[i] = { ...items[i], qty: Math.max(1, parseInt(e.target.value) || 1) }; setEditBill((p) => ({ ...p, items })); }} style={{ ...smis, width: 55 }} /></td>
+                <td style={tds}>Rs.{f2(it.unitPrice || it.mrp)}</td>
+                <td style={{ padding: "4px" }}><input type="number" min="0" max="100" value={it.discount || 0} onChange={(e) => { const items = [...editBill.items]; items[i] = { ...items[i], discount: parseFloat(e.target.value) || 0 }; setEditBill((p) => ({ ...p, items })); }} style={{ ...smis, width: 55 }} /></td>
+                <td style={tds}>{it.gstRate}%</td>
+                <td style={{ ...tds, fontWeight: 700 }}>Rs.{f2((it.unitPrice || it.mrp) * it.qty * (1 - (it.discount || 0) / 100))}</td>
+              </tr>
+            ))}</tbody></table></div>
+          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8 }}>
+            <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Bill Discount</label><input type="number" min="0" value={editBill.billDiscount || 0} onChange={(e) => setEditBill((p) => ({ ...p, billDiscount: parseFloat(e.target.value) || 0 }))} style={{ ...smis, width: 80 }} /></div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: "#0D6B5B" }}>Net: Rs.{f2(Math.max(0, Math.round(editBill.items.reduce((s, i) => s + (i.unitPrice || i.mrp) * i.qty * (1 - (i.discount || 0) / 100), 0) - (editBill.billDiscount || 0))))}</div>
+          </div>
+        </div>
+      )}
       {bills.length === 0 ? <div style={{ ...cds, padding: 30, textAlign: "center", color: "#aaa" }}>None</div> :
       <div style={{ ...cds, padding: 0, overflow: "hidden" }}><div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: 500 }}><thead><tr>
-        {["Bill","Date","Patient","Amount","Pay",""].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
+        {["Bill","Date","Patient","Amount","Pay","",""].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
         {[...bills].reverse().map((b) => (<tr key={b.billNo}><td style={{ ...tds, fontFamily: "monospace", fontWeight: 600, color: "#0D6B5B" }}>{b.billNo}</td><td style={tds}>{fD(b.date)}</td>
           <td style={{ ...tds, fontWeight: 500 }}>{b.patient}</td><td style={{ ...tds, fontWeight: 700 }}>Rs.{f2(b.netAmount)}</td>
           <td style={tds}><Tag bg={b.paymentMode === "Cash" ? "#D1FAE5" : "#DBEAFE"} fg={b.paymentMode === "Cash" ? "#065F46" : "#1E40AF"}>{b.paymentMode}</Tag></td>
-          <td style={tds}><button onClick={() => showBill(b, true)} style={{ ...bts(true), padding: "5px 12px", fontSize: 11 }}>View</button></td></tr>))}</tbody></table></div></div>}</div>
+          <td style={tds}><button onClick={() => showBill(b, true)} style={{ ...bts(true), padding: "5px 12px", fontSize: 11 }}>View</button></td>
+          <td style={tds}><button onClick={() => setEditBill({ ...b, items: b.items.map((i) => ({ ...i })) })} style={{ ...bts(false), padding: "5px 12px", fontSize: 11 }}>Edit</button></td></tr>))}</tbody></table></div></div>}</div>
   );
 }
 
@@ -690,6 +732,208 @@ function BackupPage({ inv, bills, purch, saveAll, askConfirm }) {
         <div style={{ ...cds, textAlign: "center", padding: 24, border: "2px solid #FEE2E2" }}><div style={{ fontSize: 36, marginBottom: 8 }}>🗑</div><b style={{ color: "#DC2626" }}>Reset</b>
           <p style={{ fontSize: 12, color: "#888", margin: "8px 0" }}>Backup then delete all</p>
           <button onClick={doReset} style={{ ...bts(false), width: "100%", background: "#DC2626", color: "#fff" }}>Reset Everything</button></div></div></div>
+  );
+}
+
+// ══════════════════════════════════════════════
+// RACK MANAGEMENT PAGE
+// ══════════════════════════════════════════════
+function RackPage({ inv, saveInv, mob }) {
+  const [racks, setRacks] = useState([]);
+  const [newRack, setNewRack] = useState("");
+  const [selected, setSelected] = useState([]);
+  const [dragMed, setDragMed] = useState(null);
+
+  // Get unique racks from inventory
+  useEffect(() => {
+    const rSet = new Set();
+    inv.forEach((m) => { if (m.rack) rSet.add(m.rack); });
+    setRacks(Array.from(rSet).sort());
+  }, [inv]);
+
+  const addRack = () => {
+    const r = newRack.trim().toUpperCase();
+    if (!r || racks.includes(r)) return;
+    setRacks((p) => [...p, r].sort());
+    setNewRack("");
+  };
+
+  const assignToRack = (rackName, medIds) => {
+    const next = inv.map((m) => medIds.includes(m.id) ? { ...m, rack: rackName } : m);
+    saveInv(next);
+    setSelected([]);
+  };
+
+  const removeFromRack = (medId) => {
+    const next = inv.map((m) => m.id === medId ? { ...m, rack: "" } : m);
+    saveInv(next);
+  };
+
+  const toggleSelect = (id) => {
+    setSelected((p) => p.includes(id) ? p.filter((x) => x !== id) : [...p, id]);
+  };
+
+  const unassigned = inv.filter((m) => !m.rack);
+  const getRackMeds = (r) => inv.filter((m) => m.rack === r);
+
+  return (
+    <div><h2 style={hds}>Rack Management</h2>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        <input value={newRack} onChange={(e) => setNewRack(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addRack()} placeholder="New rack name (e.g. A1, B2)" style={{ ...inps, maxWidth: 250 }} />
+        <button onClick={addRack} style={bts(true)}>+ Add Rack</button>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 16 }}>
+        <div>
+          <div style={{ ...cds, border: "2px solid #D4D0C8" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <b style={{ fontSize: 14 }}>Unassigned Medicines ({unassigned.length})</b>
+              {selected.length > 0 && <span style={{ fontSize: 12, color: "#0D6B5B", fontWeight: 600 }}>{selected.length} selected</span>}
+            </div>
+            <div style={{ maxHeight: 400, overflowY: "auto" }}>
+              {unassigned.length === 0 && <p style={{ color: "#aaa", fontSize: 12, textAlign: "center", padding: 16 }}>All medicines assigned to racks</p>}
+              {unassigned.map((m) => (
+                <div key={m.id} draggable onDragStart={() => setDragMed(m.id)} onClick={() => toggleSelect(m.id)}
+                  style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", marginBottom: 4, borderRadius: 8, cursor: "pointer", border: selected.includes(m.id) ? "2px solid #0D6B5B" : "1px solid #eee", background: selected.includes(m.id) ? "#D1FAE5" : "#FAFAF7", fontSize: 12.5, transition: "all 0.15s" }}>
+                  <div><b>{m.name}</b><span style={{ color: "#888", marginLeft: 6 }}>{m.batch}</span></div>
+                  <span style={{ color: "#888", fontSize: 11 }}>Stock: {m.stock}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#888", marginBottom: 8 }}>Drop medicines on a rack or select + click "Assign"</div>
+          {racks.length === 0 && <div style={{ ...cds, textAlign: "center", color: "#aaa", fontSize: 13, padding: 30 }}>No racks yet. Add one above.</div>}
+          {racks.map((r) => {
+            const meds = getRackMeds(r);
+            return (
+              <div key={r}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => { e.preventDefault(); if (dragMed) { assignToRack(r, [dragMed]); setDragMed(null); } }}
+                style={{ ...cds, border: "2px dashed #bbb", minHeight: 60, position: "relative" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <b style={{ fontSize: 15, color: "#0D6B5B" }}>{r}</b>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <Tag bg="#D1FAE5" fg="#065F46">{meds.length} items</Tag>
+                    {selected.length > 0 && <button onClick={() => assignToRack(r, selected)} style={{ ...bts(true), padding: "4px 10px", fontSize: 11 }}>Assign {selected.length}</button>}
+                  </div>
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                  {meds.map((m) => (
+                    <div key={m.id} style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 8px", background: "#EFF6FF", borderRadius: 6, fontSize: 11 }}>
+                      <span>{m.name}</span>
+                      <button onClick={() => removeFromRack(m.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#DC2626", fontSize: 12, padding: 0 }}>x</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════
+// RETURNS PAGE
+// ══════════════════════════════════════════════
+function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm }) {
+  const [retPurch, setRetPurch] = useState(null);
+  const [retQtys, setRetQtys] = useState({});
+  const [returns, setReturns] = useState([]);
+
+  useEffect(() => {
+    fbListen("returns", (data) => { setReturns(data ? Object.values(data) : []); });
+  }, []);
+
+  const saveReturns = (data) => {
+    const obj = {}; data.forEach((r) => { obj[r.id] = r; });
+    fbSet("returns", obj);
+  };
+
+  const startReturn = (p) => {
+    setRetPurch(p);
+    const qtys = {};
+    p.items.forEach((it, i) => { qtys[i] = 0; });
+    setRetQtys(qtys);
+  };
+
+  const processReturn = () => {
+    if (!retPurch) return;
+    const returnItems = [];
+    retPurch.items.forEach((it, i) => {
+      const rq = retQtys[i] || 0;
+      if (rq > 0) returnItems.push({ ...it, returnQty: rq });
+    });
+    if (returnItems.length === 0) { alert("Set return quantities"); return; }
+
+    askConfirm("Return " + returnItems.length + " item(s) from " + retPurch.supplier + "?", () => {
+      const ret = { id: mkId(), purchaseId: retPurch.id, supplier: retPurch.supplier, invoiceNo: retPurch.invoiceNo, date: new Date().toISOString(), items: returnItems, totalAmount: returnItems.reduce((s, i) => s + (i.ptr || i.mrp || 0) * i.returnQty, 0) };
+      const newReturns = [...returns, ret];
+      saveReturns(newReturns);
+
+      // Update inventory - reduce stock
+      const next = inv.map((m) => {
+        const retItem = returnItems.find((ri) => m.name.toLowerCase() === ri.name.toLowerCase() && m.batch === ri.batch);
+        if (retItem) return { ...m, stock: Math.max(0, m.stock - retItem.returnQty) };
+        return m;
+      });
+      saveInv(next);
+
+      setRetPurch(null);
+      setRetQtys({});
+    });
+  };
+
+  return (
+    <div><h2 style={hds}>Purchase Returns</h2>
+
+      {retPurch ? (
+        <div style={{ ...cds, border: "2px solid #DC2626" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div><b style={{ color: "#DC2626" }}>Return from: {retPurch.supplier}</b><div style={{ fontSize: 12, color: "#888" }}>Invoice: {retPurch.invoiceNo || "-"} | Date: {fD(retPurch.date)}</div></div>
+            <div style={{ display: "flex", gap: 6 }}><button onClick={processReturn} style={{ border: "none", borderRadius: 7, padding: "9px 18px", fontWeight: 600, cursor: "pointer", fontSize: 13, background: "#DC2626", color: "#fff" }}>Process Return</button><button onClick={() => setRetPurch(null)} style={bts(false)}>Cancel</button></div>
+          </div>
+          <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
+            {["Medicine","Batch","Purchased Qty","Return Qty","PTR","Return Amt"].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
+            {retPurch.items.map((it, i) => (
+              <tr key={i}>
+                <td style={{ ...tds, fontWeight: 500 }}>{it.name}</td>
+                <td style={{ ...tds, fontFamily: "monospace", fontSize: 11 }}>{it.batch || "-"}</td>
+                <td style={tds}>{it.qty}</td>
+                <td style={{ padding: "4px" }}><input type="number" min="0" max={it.qty} value={retQtys[i] || 0} onChange={(e) => setRetQtys((p) => ({ ...p, [i]: Math.min(it.qty, Math.max(0, parseInt(e.target.value) || 0)) }))} style={{ ...smis, width: 65, textAlign: "center" }} /></td>
+                <td style={tds}>Rs.{f2(it.ptr || it.mrp)}</td>
+                <td style={{ ...tds, fontWeight: 700, color: "#DC2626" }}>Rs.{f2((it.ptr || it.mrp || 0) * (retQtys[i] || 0))}</td>
+              </tr>
+            ))}</tbody></table></div>
+          <div style={{ textAlign: "right", marginTop: 8, fontSize: 14, fontWeight: 700, color: "#DC2626" }}>
+            Total Return: Rs.{f2(retPurch.items.reduce((s, it, i) => s + (it.ptr || it.mrp || 0) * (retQtys[i] || 0), 0))}
+          </div>
+        </div>
+      ) : (
+        <div style={cds}><b>Select Purchase to Return</b>
+          {purch.length === 0 ? <p style={{ color: "#aaa", fontSize: 12, textAlign: "center", padding: 16 }}>No purchases</p> :
+          <div style={{ overflowX: "auto", marginTop: 10 }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
+            {["Invoice","Supplier","Date","Items","Amount",""].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
+            {[...purch].reverse().map((p) => (<tr key={p.id}>
+              <td style={{ ...tds, fontWeight: 600 }}>{p.invoiceNo || "-"}</td><td style={tds}>{p.supplier}</td><td style={tds}>{fD(p.date)}</td>
+              <td style={tds}>{p.items.length}</td><td style={{ ...tds, fontWeight: 600 }}>Rs.{f2(p.netAmount)}</td>
+              <td style={tds}><button onClick={() => startReturn(p)} style={{ border: "none", borderRadius: 7, padding: "5px 12px", fontWeight: 600, cursor: "pointer", fontSize: 11, background: "#DC2626", color: "#fff" }}>Return</button></td>
+            </tr>))}</tbody></table></div>}
+        </div>
+      )}
+
+      {returns.length > 0 && <div style={cds}><b>Return History ({returns.length})</b>
+        <div style={{ overflowX: "auto", marginTop: 10 }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
+          {["Date","Supplier","Invoice","Items","Amount"].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
+          {[...returns].reverse().map((r) => (<tr key={r.id}>
+            <td style={tds}>{fD(r.date)}</td><td style={tds}>{r.supplier}</td><td style={tds}>{r.invoiceNo || "-"}</td>
+            <td style={tds}>{r.items.length}</td><td style={{ ...tds, fontWeight: 700, color: "#DC2626" }}>Rs.{f2(r.totalAmount)}</td>
+          </tr>))}</tbody></table></div></div>}
+    </div>
   );
 }
 
@@ -782,7 +1026,11 @@ function App() {
       rev.items.forEach((it) => {
         const ex = next.findIndex((m) => m.name.toLowerCase() === it.name.toLowerCase() && m.batch === it.batch);
         if (ex >= 0) { next = next.map((m, i) => i === ex ? { ...m, stock: m.stock + (it.qty || 0) + (it.freeQty || 0), ptr: it.ptr || m.ptr, mrp: it.mrp || m.mrp } : m); }
-        else { next.push({ id: mkId(), name: it.name, manufacturer: it.manufacturer || "", hsn: it.hsn || "300490", batch: it.batch || "", expiry: it.expiry || "", pack: it.pack || "", mrp: it.mrp || 0, ptr: it.ptr || 0, stock: (it.qty || 0) + (it.freeQty || 0), gstRate: it.gstRate || 5, rack: it.rack || "", packQty: it.packQty || 0, distributor: rev.supplier, addedFrom: rev.srcType || "manual", uid: mkUID() }); }
+        else {
+          // Auto-assign rack if same medicine name exists with a rack
+          const rackMatch = next.find((m) => m.name.toLowerCase() === it.name.toLowerCase() && m.rack);
+          const autoRack = rackMatch ? rackMatch.rack : (it.rack || "");
+          next.push({ id: mkId(), name: it.name, manufacturer: it.manufacturer || "", hsn: it.hsn || "300490", batch: it.batch || "", expiry: it.expiry || "", pack: it.pack || "", mrp: it.mrp || 0, ptr: it.ptr || 0, stock: (it.qty || 0) + (it.freeQty || 0), gstRate: it.gstRate || 5, rack: autoRack, packQty: it.packQty || 0, distributor: rev.supplier, addedFrom: rev.srcType || "manual", uid: mkUID() }); }
       });
       saveInv(next);
       return next;
@@ -811,11 +1059,13 @@ function App() {
         <div style={{ flex: 1, padding: mob ? 14 : 24, overflow: "auto" }}>
           {page === "dash" && <DashPage inv={inv} bills={bills} purch={purch} isO={isO} mob={mob} />}
           {page === "purch" && <PurchPage purch={purch} addPurchase={addPurchase} deletePurchase={deletePurchase} mob={mob} askConfirm={askConfirm} />}
+          {page === "returns" && <ReturnsPage purch={purch} inv={inv} saveInv={saveInv} savePurch={savePurch} mob={mob} askConfirm={askConfirm} />}
           {page === "inv" && <InvPage inv={inv} saveInv={saveInv} isO={isO} mob={mob} askConfirm={askConfirm} />}
+          {page === "rack" && <RackPage inv={inv} saveInv={saveInv} mob={mob} />}
           {page === "bill" && <BillPage inv={inv} saveInv={saveInv} addBill={addBill} mob={mob} showBill={showBill} />}
           {page === "sales" && isO && <SalesPage bills={bills} mob={mob} />}
           {page === "stock" && <StockPage inv={inv} isO={isO} mob={mob} />}
-          {page === "hist" && <HistPage bills={bills} showBill={showBill} />}
+          {page === "hist" && <HistPage bills={bills} showBill={showBill} saveBills={saveBills} askConfirm={askConfirm} />}
           {page === "users" && isO && <UsersPage sessions={sessions} mob={mob} />}
           {page === "backup" && isO && <BackupPage inv={inv} bills={bills} purch={purch} saveAll={saveAll} askConfirm={askConfirm} />}
         </div></div></div>
