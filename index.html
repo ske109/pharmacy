@@ -864,35 +864,38 @@ function RackPage({ inv, saveInv, mob }) {
   const [newRack, setNewRack] = useState("");
   const [selected, setSelected] = useState([]);
   const [dragMed, setDragMed] = useState(null);
+  const [rackLoaded, setRackLoaded] = useState(false);
+  const inputRef = useRef(null);
 
-  // Load racks from Firebase real-time + merge inventory racks
-  useEffect(() => {
-    var invRacks = [];
-    inv.forEach(function(m) { if (m.rack && invRacks.indexOf(m.rack) === -1) invRacks.push(m.rack); });
-    var unsub = fbListen("racks", function(data) {
+  // Load racks once on mount
+  useEffect(function() {
+    db.ref("racks").once("value").then(function(snap) {
+      var data = snap.val();
       var saved = data ? Object.values(data) : [];
-      var all = {};
-      saved.forEach(function(r) { all[r] = true; });
-      invRacks.forEach(function(r) { all[r] = true; });
-      setRacks(Object.keys(all).sort());
-    });
-    return unsub;
-  }, [inv]);
+      // Also get racks from inventory
+      var fromInv = [];
+      inv.forEach(function(m) { if (m.rack && fromInv.indexOf(m.rack) === -1) fromInv.push(m.rack); });
+      // Merge
+      var merged = {};
+      saved.forEach(function(r) { merged[r] = true; });
+      fromInv.forEach(function(r) { merged[r] = true; });
+      setRacks(Object.keys(merged).sort());
+      setRackLoaded(true);
+    }).catch(function() { setRackLoaded(true); });
+  }, []);
 
-  var saveRacks = function(list) {
-    var obj = {};
-    list.forEach(function(r, i) { obj["r" + i] = r; });
-    fbSet("racks", obj);
-  };
-
-  var addRack = function() {
-    var r = newRack.trim().toUpperCase();
-    if (!r) { alert("Enter a rack name"); return; }
-    if (racks.indexOf(r) >= 0) { alert("Rack " + r + " already exists"); return; }
-    var next = racks.concat([r]).sort();
+  var doAddRack = function() {
+    var val = inputRef.current ? inputRef.current.value.trim().toUpperCase() : "";
+    if (!val) return;
+    if (racks.indexOf(val) >= 0) { alert("Rack " + val + " already exists"); return; }
+    var next = racks.concat([val]).sort();
     setRacks(next);
-    saveRacks(next);
+    // Save to Firebase
+    var obj = {};
+    next.forEach(function(r, i) { obj["r" + i] = r; });
+    db.ref("racks").set(obj);
     setNewRack("");
+    if (inputRef.current) inputRef.current.value = "";
   };
 
   const assignToRack = (rackName, medIds) => {
@@ -916,8 +919,8 @@ function RackPage({ inv, saveInv, mob }) {
   return (
     <div><h2 style={hds}>Rack Management</h2>
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        <input value={newRack} onChange={(e) => setNewRack(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addRack()} placeholder="New rack name (e.g. A1, B2)" style={{ ...inps, maxWidth: 250 }} />
-        <button onClick={addRack} style={bts(true)}>+ Add Rack</button>
+        <input ref={inputRef} defaultValue="" onChange={function(e) { setNewRack(e.target.value); }} onKeyDown={function(e) { if (e.key === "Enter") doAddRack(); }} placeholder="New rack name (e.g. A1, B2)" style={{ ...inps, maxWidth: 250 }} />
+        <button onClick={doAddRack} style={bts(true)}>+ Add Rack</button>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 16 }}>
