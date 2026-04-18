@@ -79,11 +79,15 @@ const mkUID = () => "AZ-" + String(Date.now()).slice(-4) + Math.random().toStrin
 function useM() { const [m, s] = useState(window.innerWidth < 768); useEffect(() => { const h = () => s(window.innerWidth < 768); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []); return m; }
 // Stock display: 19.667 with packQty=15 shows "19 + 10T"
 function fStock(stock, packQty) {
-  if (!packQty || packQty <= 1 || Number.isInteger(stock)) return String(Math.floor(stock));
+  if (!packQty || packQty <= 1 || stock < 0) return String(Math.max(0, Math.floor(stock)));
   const packs = Math.floor(stock);
   const loose = Math.round((stock - packs) * packQty);
   if (loose === 0) return String(packs);
-  return packs + " + " + loose + "T";
+  return packs + "." + String(loose).padStart(2, "0");
+}
+function getAvailUnits(stock, packQty) {
+  if (!packQty || packQty <= 1) return Math.floor(stock);
+  return Math.floor(stock) * packQty + Math.round((stock - Math.floor(stock)) * packQty);
 }
 
 // ══════════════════════════════════════════════
@@ -509,7 +513,7 @@ function BillPage({ inv, saveInv, addBill, mob, showBill }) {
       ));
       if (match) {
         addIt(match);
-        setScanResult({ type: "ok", msg: "Found: " + match.name + " (Stock: " + match.stock + ")" });
+        setScanResult({ type: "ok", msg: "Found: " + match.name + " (Stock: " + fStock(match.stock, match.packQty) + ")" });
       } else {
         setScanResult({ type: "info", msg: "Read: " + (parsed.name || "Unknown") + " | MRP: " + (parsed.mrp || "?") + " | Batch: " + (parsed.batch || "?") + " - Not found in inventory." });
         if (parsed.name) setSq(parsed.name);
@@ -529,6 +533,25 @@ function BillPage({ inv, saveInv, addBill, mob, showBill }) {
   const net = Math.max(0, Math.round(tMRP - tDisc - billDisc));
 
   const gen = () => { if (!pt || !items.length) { alert("Add patient and items"); return; }
+    // Validate stock availability
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      const med = inv.find((m) => m.id === it.mid);
+      if (!med) continue;
+      if (it.loose) {
+        const availTablets = getAvailUnits(med.stock, med.packQty || 10);
+        if (it.qty > availTablets) {
+          alert(it.name + ": Only " + availTablets + " tablets available, but " + it.qty + " requested.");
+          return;
+        }
+      } else {
+        const availPacks = Math.floor(med.stock);
+        if (it.qty > availPacks) {
+          alert(it.name + ": Only " + availPacks + " pack(s) available, but " + it.qty + " requested.");
+          return;
+        }
+      }
+    }
     const bill = { billNo: mkBill(), date: new Date().toISOString(), patient: pt, patientContact: pc, patientAddress: pa, doctor: doc, doctorContact: dc, paymentMode: pm, items: items.map((i) => ({ ...i, amount: ca(i) })), totalMRP: tMRP, totalDiscount: tDisc, billDiscount: billDisc, netAmount: net, cgst: tGST / 2, sgst: tGST / 2 };
     const updInv = inv.map((m) => { const sold = items.filter((i) => i.mid === m.id); if (!sold.length) return m; const totalSold = sold.reduce((s, i) => i.loose ? s + (i.qty / (i.packQty || 10)) : s + i.qty, 0); return { ...m, stock: Math.max(0, parseFloat((m.stock - totalSold).toFixed(4))) }; });
     saveInv(updInv); addBill(bill); showBill(bill); setPt(""); setPc(""); setPa(""); setDoc(""); setDc(""); setItems([]); setPm("Cash"); setBillDisc(0); };
@@ -718,11 +741,17 @@ function UsersPage({ sessions, mob }) {
 // ══════════════════════════════════════════════
 function BackupPage({ inv, bills, purch, saveAll, askConfirm }) {
   const [backupLink, setBackupLink] = useState(null);
+  const [returns, setReturns] = useState([]);
   const fr = useRef(null);
-  const doBackup = () => { const data = JSON.stringify({ inv, bills, purch, v: "fb1", date: new Date().toISOString() }); setBackupLink(URL.createObjectURL(new Blob([data], { type: "application/json" }))); };
+  useEffect(() => { fbListen("returns", (data) => { setReturns(data ? Object.values(data) : []); }); }, []);
+  const doBackup = () => { const data = JSON.stringify({ inv, bills, purch, returns, v: "fb2", date: new Date().toISOString() }); setBackupLink(URL.createObjectURL(new Blob([data], { type: "application/json" }))); };
   const doRestore = (e) => { const file = e.target.files[0]; if (!file) return; const r = new FileReader();
     r.onload = (ev) => { try { const d = JSON.parse(ev.target.result);
-      askConfirm("Restore from " + (d.date ? fD(d.date) : "unknown") + "?", () => { saveAll(d.inv || [], d.bills || [], d.purch || []); alert("Restored!"); });
+      askConfirm("Restore from " + (d.date ? fD(d.date) : "unknown") + "?", () => {
+        saveAll(d.inv || [], d.bills || [], d.purch || []);
+        if (d.returns && d.returns.length) { const ro = {}; d.returns.forEach((r) => { ro[r.id] = r; }); fbSet("returns", ro); } else { fbSet("returns", null); }
+        alert("Restored!");
+      });
     } catch(err) { alert("Invalid file"); } }; r.readAsText(file); e.target.value = ""; };
   const doReset = () => { askConfirm("DELETE ALL DATA? Backup will be prepared first.", () => { doBackup(); setTimeout(() => { askConfirm("Backup ready. NOW DELETE?", () => { saveAll([], [], []); alert("Reset done."); }); }, 500); }); };
 
@@ -1091,7 +1120,7 @@ function App() {
     const io = {}; i.forEach((m) => { io[m.id] = m; });
     const bo = {}; b.forEach((x) => { bo[x.billNo] = x; });
     const po = {}; p.forEach((x) => { po[x.id] = x; });
-    fbSet("inventory", io); fbSet("bills", bo); fbSet("purchases", po);
+    fbSet("inventory", io); fbSet("bills", bo); fbSet("purchases", po); fbSet("returns", null);
   }, []);
 
   const askConfirm = useCallback((msg, cb) => { setConfirmMsg(msg); confirmCb.current = cb; }, []);
