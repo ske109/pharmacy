@@ -112,7 +112,7 @@ function csvToItems(rows) {
   if (rows.length < 2) return null; const h = rows[0].map((x) => x.toLowerCase().trim()); const ix = (n) => h.findIndex((x) => x.includes(n));
   const items = [], sup = (rows[1] && rows[1][ix("seller name")]) || (rows[1] && rows[1][ix("seller")]) || "Unknown", inv = (rows[1] && rows[1][ix("invoice")]) || "", dt = (rows[1] && rows[1][ix("date")]) || "";
   for (let i = 1; i < rows.length; i++) { const r = rows[i]; if (!r || r.length < 5) continue; const g = (n) => r[ix(n)] || "", gn = (n) => parseFloat(r[ix(n)]) || 0;
-    items.push({ name: g("description") || g("name"), manufacturer: g("mfg"), hsn: g("hsn") || "300490", batch: g("batch"), expiry: g("expiry"), pack: g("pkg") || g("pack"), mrp: gn("mrp"), qty: gn("qty"), ptr: gn("ptr"), gstRate: gn("cgst") ? gn("cgst") * 2 : 5, rack: "", packQty: 0, discPct: gn("disc"), schemePct: 0, freeQty: 0, amount: gn("linetotal") || 0 }); }
+    items.push({ name: g("description") || g("name"), manufacturer: g("mfg"), hsn: g("hsn") || "300490", batch: g("batch"), expiry: g("expiry"), pack: g("pkg") || g("pack"), mrp: gn("mrp"), qty: gn("qty"), ptr: gn("ptr"), gstRate: gn("cgst") ? gn("cgst") * 2 : 5, rack: "", packQty: gn("pkg") || gn("pack") || 0, discPct: gn("disc"), schemePct: gn("scheme"), freeQty: 0, amount: gn("linetotal") || 0 }); }
   return { supplier: sup, invoiceNo: inv, date: dt, items: items.filter((i) => i.name) };
 }
 
