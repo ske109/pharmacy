@@ -896,6 +896,18 @@ function RackPage({ inv, saveInv, mob }) {
 
   var unassigned = inv.filter(function(m) { return !m.rack; });
   var getRackMeds = function(r) { return inv.filter(function(m) { return m.rack === r; }); };
+  const [medSearch, setMedSearch] = useState("");
+  var filteredMeds = inv.filter(function(m) {
+    if (m.rack) return false;
+    if (!medSearch) return true;
+    var s = medSearch.toLowerCase();
+    return m.name.toLowerCase().indexOf(s) >= 0 || (m.batch || "").toLowerCase().indexOf(s) >= 0 || (m.manufacturer || "").toLowerCase().indexOf(s) >= 0;
+  });
+
+  var selectAll = function() {
+    if (selected.length === filteredMeds.length) { setSelected([]); }
+    else { setSelected(filteredMeds.map(function(m) { return m.id; })); }
+  };
 
   return (
     <div><h2 style={hds}>Rack Management</h2>
@@ -919,10 +931,14 @@ function RackPage({ inv, saveInv, mob }) {
           <div style={{ ...cds, border: "2px solid #D4D0C8" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
               <b style={{ fontSize: 14 }}>Unassigned ({unassigned.length})</b>
+              <div style={{ display: "flex", gap: 6 }}>
+                {filteredMeds.length > 0 && <button onClick={selectAll} style={{ ...bts(false), padding: "4px 10px", fontSize: 11 }}>{selected.length === filteredMeds.length ? "Deselect All" : "Select All"}</button>}
+              </div>
             </div>
+            <input value={medSearch} onChange={function(e) { setMedSearch(e.target.value); }} placeholder="Search medicine name, batch, manufacturer..." style={{ ...inps, marginBottom: 10, fontSize: 12 }} />
             <div style={{ maxHeight: 400, overflowY: "auto" }}>
-              {unassigned.length === 0 && <p style={{ color: "#aaa", fontSize: 12, textAlign: "center", padding: 16 }}>All assigned</p>}
-              {unassigned.map(function(m) {
+              {filteredMeds.length === 0 && <p style={{ color: "#aaa", fontSize: 12, textAlign: "center", padding: 16 }}>{medSearch ? "No matches" : "All assigned"}</p>}
+              {filteredMeds.map(function(m) {
                 return (
                   <div key={m.id} draggable onDragStart={function() { setDragMed(m.id); }} onClick={function() { toggleSelect(m.id); }}
                     style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", marginBottom: 4, borderRadius: 8, cursor: "pointer", border: selected.indexOf(m.id) >= 0 ? "2px solid #0D6B5B" : "1px solid #eee", background: selected.indexOf(m.id) >= 0 ? "#D1FAE5" : "#FAFAF7", fontSize: 12.5 }}>
