@@ -78,13 +78,13 @@ const mkBill = () => "ATZ" + String(Date.now()).slice(-5) + String(Math.floor(Ma
 const mkUID = () => "AZ-" + String(Date.now()).slice(-4) + Math.random().toString(36).slice(2, 5).toUpperCase();
 function useM() { const [m, s] = useState(window.innerWidth < 768); useEffect(() => { const h = () => s(window.innerWidth < 768); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []); return m; }
 // Stock display: 19.667 with packQty=15 shows "19 + 10T"
-// Stock is stored as total tablets (integer). Display as packs.tablets
+// Stock is in packs/strips. Fractional part = loose tablets. Display as packs.tablets
 function fStock(stock, packQty) {
-  var s = Math.round(stock || 0);
-  if (s <= 0) return "0";
+  if (!stock || stock <= 0) return "0";
   var pq = packQty || 10;
-  var packs = Math.floor(s / pq);
-  var loose = s % pq;
+  var packs = Math.floor(stock);
+  var loose = Math.round((stock - packs) * pq);
+  if (loose >= pq) { packs += 1; loose = 0; }
   if (loose === 0) return String(packs);
   return packs + "." + String(loose).padStart(2, "0");
 }
@@ -279,7 +279,7 @@ function Sidebar({ page, setPage, user, onLogout, counts, mob, sideOpen, setSide
 // DASHBOARD
 // ══════════════════════════════════════════════
 function DashPage({ inv, bills, purch, isO, mob }) {
-  const ts = inv.reduce((s, m) => s + (m.stock || 0), 0), low = inv.filter((m) => m.stock > 0 && m.stock < (m.packQty || 10) * 3).length;
+  const ts = inv.reduce((s, m) => s + (m.stock || 0), 0), low = inv.filter((m) => m.stock > 0 && m.stock < 3).length;
   const today = new Date().toDateString(), tb = bills.filter((b) => new Date(b.date).toDateString() === today);
   const tr = tb.reduce((s, b) => s + b.netAmount, 0), tc = tb.reduce((s, b) => s + b.items.reduce((ss, i) => ss + (i.ptr || 0) * i.qty, 0), 0);
   return (
@@ -288,7 +288,7 @@ function DashPage({ inv, bills, purch, isO, mob }) {
         <Stat icon="💊" label="Medicines" value={inv.length} sub={ts + " units"} color="#0D6B5B" />
         <Stat icon="🧾" label="Today Sales" value={tb.length} sub={"Rs." + f2(tr)} color="#2563EB" />
         <Stat icon="⚠️" label="Low Stock" value={low} color="#DC2626" />
-        {isO && <Stat icon="💰" label="Stock Value" value={"Rs." + Math.round(inv.reduce((s, m) => s + (m.ptr || 0) * (m.stock || 0) / (m.packQty || 1), 0)).toLocaleString()} color="#B45309" />}
+        {isO && <Stat icon="💰" label="Stock Value" value={"Rs." + Math.round(inv.reduce((s, m) => s + (m.ptr || 0) * (m.stock || 0), 0)).toLocaleString()} color="#B45309" />}
         {isO && <Stat icon="📈" label="Today Profit" value={"Rs." + f2(tr - tc)} color="#059669" />}
       </div>
       <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 14 }}>
@@ -462,7 +462,7 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm }) {
           <td style={{ ...tds, fontFamily: "monospace", fontSize: 11 }}>{m.batch}</td><td style={tds}>{m.expiry || "-"}</td>
           <td style={{ ...tds, fontWeight: 600 }}>Rs.{f2(m.mrp)}</td>
           {isO && <td style={{ ...tds, color: "#B45309" }}>Rs.{f2(m.ptr)}</td>}
-          <td style={tds}><span style={{ fontWeight: 700, color: m.stock < (m.packQty || 10) * 3 ? "#DC2626" : m.stock < (m.packQty || 10) * 5 ? "#D97706" : "#065F46" }}>{fStock(m.stock, m.packQty)}</span></td>
+          <td style={tds}><span style={{ fontWeight: 700, color: m.stock < 3 ? "#DC2626" : m.stock < 5 ? "#D97706" : "#065F46" }}>{fStock(m.stock, m.packQty)}</span></td>
           <td style={tds}>{m.rack || "-"}</td>
           <td style={{ ...tds, fontSize: 11, color: "#888" }}>{m.distributor || "-"}</td>
           <td style={tds}><Tag bg={m.addedFrom === "csv" ? "#DBEAFE" : m.addedFrom === "image" ? "#FEE2E2" : "#E8E4DD"} fg={m.addedFrom === "csv" ? "#1E40AF" : m.addedFrom === "image" ? "#991B1B" : "#555"}>{(m.addedFrom || "M").slice(0, 3).toUpperCase()}</Tag></td>
@@ -532,19 +532,20 @@ function BillPage({ inv, saveInv, addBill, mob, showBill }) {
   const net = Math.max(0, Math.round(tMRP - tDisc - billDisc));
 
   const gen = () => { if (!pt || !items.length) { alert("Add patient and items"); return; }
-    // Validate stock availability (stock is in tablets)
+    // Validate stock availability
     for (let i = 0; i < items.length; i++) {
       const it = items[i];
       const med = inv.find((m) => m.id === it.mid);
       if (!med) continue;
+      const pq = med.packQty || 10;
       if (it.loose) {
-        if (it.qty > med.stock) {
-          alert(it.name + ": Only " + med.stock + " tablets available, but " + it.qty + " requested.");
+        const availTablets = Math.floor(med.stock) * pq + Math.round((med.stock - Math.floor(med.stock)) * pq);
+        if (it.qty > availTablets) {
+          alert(it.name + ": Only " + availTablets + " tablets available, but " + it.qty + " requested.");
           return;
         }
       } else {
-        const pq = med.packQty || 10;
-        const availPacks = Math.floor(med.stock / pq);
+        const availPacks = Math.floor(med.stock);
         if (it.qty > availPacks) {
           alert(it.name + ": Only " + availPacks + " pack(s) available, but " + it.qty + " requested.");
           return;
@@ -552,7 +553,7 @@ function BillPage({ inv, saveInv, addBill, mob, showBill }) {
       }
     }
     const bill = { billNo: mkBill(), date: new Date().toISOString(), patient: pt, patientContact: pc, patientAddress: pa, doctor: doc, doctorContact: dc, paymentMode: pm, items: items.map((i) => ({ ...i, amount: ca(i) })), totalMRP: tMRP, totalDiscount: tDisc, billDiscount: billDisc, netAmount: net, cgst: tGST / 2, sgst: tGST / 2 };
-    const updInv = inv.map((m) => { const sold = items.filter((i) => i.mid === m.id); if (!sold.length) return m; const totalSold = sold.reduce((s, i) => i.loose ? s + i.qty : s + i.qty * (i.packQty || 10), 0); return { ...m, stock: Math.max(0, m.stock - totalSold) }; });
+    const updInv = inv.map((m) => { const sold = items.filter((i) => i.mid === m.id); if (!sold.length) return m; const totalSold = sold.reduce((s, i) => i.loose ? s + (i.qty / (i.packQty || 10)) : s + i.qty, 0); return { ...m, stock: Math.max(0, Math.round((m.stock - totalSold) * 10000) / 10000) }; });
     saveInv(updInv); addBill(bill); showBill(bill); setPt(""); setPc(""); setPa(""); setDoc(""); setDc(""); setItems([]); setPm("Cash"); setBillDisc(0); };
 
   return (
@@ -633,7 +634,7 @@ function SalesPage({ bills, mob }) {
 function StockPage({ inv, isO, mob }) {
   const [v, setV] = useState("all"); const [q, setQ] = useState("");
   const safeExp = (m) => { if (!m || !m.expiry) return 9999; try { return (new Date(m.expiry + "-01") - new Date()) / 864e5; } catch(e) { return 9999; } };
-  const low = inv.filter((m) => m.stock > 0 && m.stock < (m.packQty || 10) * 3), out = inv.filter((m) => m.stock <= 0);
+  const low = inv.filter((m) => m.stock > 0 && m.stock < 3), out = inv.filter((m) => m.stock <= 0);
   const expS = inv.filter((m) => { const d = safeExp(m); return d < 90 && d > 0; });
   const expD = inv.filter((m) => safeExp(m) <= 0 && m.expiry);
   let list = v === "low" ? low : v === "out" ? out : v === "exp" ? expS : v === "expd" ? expD : inv;
@@ -648,7 +649,7 @@ function StockPage({ inv, isO, mob }) {
       <div style={{ ...cds, padding: 0, overflow: "hidden" }}><div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: 500 }}><thead><tr>
         {["Medicine","Batch","Exp","MRP",...(isO ? ["PTR"] : []),"Stock","Status"].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
         {list.map((m) => { const d = safeExp(m); const isE = d <= 0 && m.expiry; const isES = d > 0 && d < 90;
-          const st = m.stock <= 0 ? "Out" : m.stock < (m.packQty || 10) * 3 ? "Low" : isE ? "Expd" : isES ? "Exp" : "OK";
+          const st = m.stock <= 0 ? "Out" : m.stock < 3 ? "Low" : isE ? "Expd" : isES ? "Exp" : "OK";
           const sc = { Out: "#DC2626", Low: "#D97706", Expd: "#991B1B", Exp: "#B45309", OK: "#059669" }[st];
           const sb = { Out: "#FEE2E2", Low: "#FEF3C7", Expd: "#FEE2E2", Exp: "#FEF9E7", OK: "#D1FAE5" }[st];
           return (<tr key={m.id}><td style={{ ...tds, fontWeight: 500, whiteSpace: "nowrap" }}>{m.name}</td><td style={{ ...tds, fontFamily: "monospace", fontSize: 11 }}>{m.batch}</td>
@@ -1019,7 +1020,7 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm }) {
       // Update inventory - reduce stock
       const next = inv.map((m) => {
         const retItem = returnItems.find((ri) => m.name.toLowerCase() === ri.name.toLowerCase() && m.batch === ri.batch);
-        if (retItem) return { ...m, stock: Math.max(0, m.stock - retItem.returnQty * (m.packQty || 1)) };
+        if (retItem) return { ...m, stock: Math.max(0, m.stock - retItem.returnQty) };
         return m;
       });
       saveInv(next);
@@ -1166,12 +1167,12 @@ function App() {
       let next = [...prevInv];
       rev.items.forEach((it) => {
         const ex = next.findIndex((m) => m.name.toLowerCase() === it.name.toLowerCase() && m.batch === it.batch);
-        if (ex >= 0) { next = next.map((m, i) => i === ex ? { ...m, stock: m.stock + ((it.qty || 0) + (it.freeQty || 0)) * (it.packQty || 1), ptr: it.ptr || m.ptr, mrp: it.mrp || m.mrp } : m); }
+        if (ex >= 0) { next = next.map((m, i) => i === ex ? { ...m, stock: m.stock + (it.qty || 0) + (it.freeQty || 0), ptr: it.ptr || m.ptr, mrp: it.mrp || m.mrp } : m); }
         else {
           // Auto-assign rack if same medicine name exists with a rack
           const rackMatch = next.find((m) => m.name.toLowerCase() === it.name.toLowerCase() && m.rack);
           const autoRack = rackMatch ? rackMatch.rack : (it.rack || "");
-          next.push({ id: mkId(), name: it.name, manufacturer: it.manufacturer || "", hsn: it.hsn || "300490", batch: it.batch || "", expiry: it.expiry || "", pack: it.pack || "", mrp: it.mrp || 0, ptr: it.ptr || 0, stock: ((it.qty || 0) + (it.freeQty || 0)) * (it.packQty || 1), gstRate: it.gstRate || 5, rack: autoRack, packQty: it.packQty || 0, distributor: rev.supplier, addedFrom: rev.srcType || "manual", uid: mkUID() }); }
+          next.push({ id: mkId(), name: it.name, manufacturer: it.manufacturer || "", hsn: it.hsn || "300490", batch: it.batch || "", expiry: it.expiry || "", pack: it.pack || "", mrp: it.mrp || 0, ptr: it.ptr || 0, stock: (it.qty || 0) + (it.freeQty || 0), gstRate: it.gstRate || 5, rack: autoRack, packQty: it.packQty || 0, distributor: rev.supplier, addedFrom: rev.srcType || "manual", uid: mkUID() }); }
       });
       saveInv(next);
       return next;
@@ -1185,7 +1186,7 @@ function App() {
   if (loading) return (<div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#EFECE5", fontFamily: "'Playfair Display',serif", fontSize: 18, color: "#0C2E24" }}>Loading...</div>);
   if (!user) return (<Login onLogin={login} />);
 
-  const counts = { purch: purch.length, returns: 0, hist: bills.length, inv: inv.length, stock: inv.filter((m) => m.stock > 0 && m.stock < (m.packQty || 10) * 3).length, rack: inv.filter((m) => !m.rack).length };
+  const counts = { purch: purch.length, returns: 0, hist: bills.length, inv: inv.length, stock: inv.filter((m) => m.stock > 0 && m.stock < 3).length, rack: inv.filter((m) => !m.rack).length };
 
   return (
     <div style={{ display: "flex", height: "100vh", fontFamily: "'DM Sans',sans-serif", background: "#EFECE5", overflow: "hidden" }}>
