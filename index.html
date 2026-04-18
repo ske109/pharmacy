@@ -864,41 +864,32 @@ function RackPage({ inv, saveInv, mob }) {
   const [newRack, setNewRack] = useState("");
   const [selected, setSelected] = useState([]);
   const [dragMed, setDragMed] = useState(null);
-  const [loaded, setLoaded] = useState(false);
 
-  // Load saved racks from Firebase + merge with inventory racks
+  // Load racks from Firebase real-time + merge inventory racks
   useEffect(() => {
-    fbGet("racks").then((saved) => {
-      const savedList = saved ? Object.values(saved) : [];
-      const invRacks = new Set();
-      inv.forEach((m) => { if (m.rack) invRacks.add(m.rack); });
-      const merged = new Set([...savedList, ...invRacks]);
-      setRacks(Array.from(merged).sort());
-      setLoaded(true);
+    var invRacks = [];
+    inv.forEach(function(m) { if (m.rack && invRacks.indexOf(m.rack) === -1) invRacks.push(m.rack); });
+    var unsub = fbListen("racks", function(data) {
+      var saved = data ? Object.values(data) : [];
+      var all = {};
+      saved.forEach(function(r) { all[r] = true; });
+      invRacks.forEach(function(r) { all[r] = true; });
+      setRacks(Object.keys(all).sort());
     });
-  }, []);
+    return unsub;
+  }, [inv]);
 
-  // Also merge inventory racks when inv changes (but keep user-added racks)
-  useEffect(() => {
-    if (!loaded) return;
-    setRacks((prev) => {
-      const invRacks = new Set();
-      inv.forEach((m) => { if (m.rack) invRacks.add(m.rack); });
-      const merged = new Set([...prev, ...invRacks]);
-      return Array.from(merged).sort();
-    });
-  }, [inv, loaded]);
-
-  const saveRacks = (list) => {
-    const obj = {};
-    list.forEach((r, i) => { obj["r" + i] = r; });
+  var saveRacks = function(list) {
+    var obj = {};
+    list.forEach(function(r, i) { obj["r" + i] = r; });
     fbSet("racks", obj);
   };
 
-  const addRack = () => {
-    const r = newRack.trim().toUpperCase();
-    if (!r || racks.includes(r)) return;
-    const next = [...racks, r].sort();
+  var addRack = function() {
+    var r = newRack.trim().toUpperCase();
+    if (!r) { alert("Enter a rack name"); return; }
+    if (racks.indexOf(r) >= 0) { alert("Rack " + r + " already exists"); return; }
+    var next = racks.concat([r]).sort();
     setRacks(next);
     saveRacks(next);
     setNewRack("");
