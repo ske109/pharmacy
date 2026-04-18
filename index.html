@@ -330,14 +330,18 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm }) {
     setImgP(true);
     try {
       const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result.split(",")[1]); r.onerror = rej; r.readAsDataURL(file); });
+      const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+      const contentBlock = isPdf
+        ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 } }
+        : { type: "image", source: { type: "base64", media_type: file.type || "image/jpeg", data: b64 } };
       const resp = await fetch(PROXY_URL, { method: "POST", headers: CLAUDE_HEADERS,
-        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 2000, messages: [{ role: "user", content: [{ type: "image", source: { type: "base64", media_type: file.type || "image/jpeg", data: b64 } }, { type: "text", text: "Extract ALL medicine items from this purchase invoice. Return ONLY valid JSON, no markdown. Format: object with keys supplier, invoiceNo, date (YYYY-MM-DD), and items array. Each item: name, manufacturer, hsn, batch, expiry, pack, mrp, qty, ptr, gstRate, rack, packQty, discPct, schemePct, freeQty, amount." }] }] }) });
+        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 4000, messages: [{ role: "user", content: [contentBlock, { type: "text", text: "Extract ALL medicine/product items from this purchase invoice. Return ONLY valid JSON, no markdown. Format: object with keys supplier, invoiceNo, date (YYYY-MM-DD), and items array. Each item needs: name (full product name), manufacturer, hsn (HSN code), batch (batch number), expiry (YYYY-MM format), pack (pack description), mrp (MRP as number), qty (quantity as number), ptr (price to retailer / Rate as number), gstRate (total GST percent = CGST+SGST combined), rack, packQty (units per pack as number), discPct (discount percent), schemePct (scheme discount percent), freeQty (free quantity), amount (total amount as number from Total Amt column)." }] }] }) });
       const data = await resp.json();
-      if (data.error) { alert("API error: " + (data.error.message || "Check API key")); setImgP(false); return; }
+      if (data.error) { alert("API error: " + (data.error.message || "Check API key/credits")); setImgP(false); return; }
       let text = (data.content || []).map((c) => c.text || "").join("").trim();
       if (text.indexOf("{") > 0) text = text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1);
-      setRev({ ...JSON.parse(text), srcType: "image", srcFile: file.name });
-    } catch (err) { console.error(err); alert("Could not read image. Try again."); } setImgP(false); e.target.value = "";
+      setRev({ ...JSON.parse(text), srcType: isPdf ? "pdf" : "image", srcFile: file.name });
+    } catch (err) { console.error(err); alert("Could not read file. Try again."); } setImgP(false); e.target.value = "";
   };
 
   const updR = (i, f, v) => { setRev((p) => { const items = p.items.map((it, idx) => { if (idx !== i) return it; const updated = { ...it, [f]: typeof it[f] === "number" ? (Number(v) || 0) : v }; updated.amount = purchCalcAmt(updated); return updated; }); return { ...p, items }; }); };
@@ -369,7 +373,7 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm }) {
         <div style={{ display: "flex", gap: 3, background: "#E8E4DD", borderRadius: 8, padding: 3, marginBottom: 16 }}>
           {[["csv","CSV"],["image","Image AI"],["manual","Manual"]].map(([id, l]) => <button key={id} onClick={() => setTab(id)} style={{ flex: 1, padding: 8, border: "none", borderRadius: 6, fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: tab === id ? "#fff" : "transparent", color: tab === id ? "#0D6B5B" : "#888", boxShadow: tab === id ? "0 1px 3px rgba(0,0,0,.1)" : "none" }}>{l}</button>)}</div>
         {tab === "csv" && <div style={{ border: "2px dashed #bbb", borderRadius: 10, padding: 36, textAlign: "center", cursor: "pointer", background: "#FAFAF7" }} onClick={() => csvR.current && csvR.current.click()}><input ref={csvR} type="file" accept=".csv" onChange={doCSV} style={{ display: "none" }} /><div style={{ fontSize: 36 }}>📄</div><div style={{ fontSize: 14, fontWeight: 600, color: "#555", marginTop: 8 }}>Upload CSV</div></div>}
-        {tab === "image" && <div style={{ border: "2px dashed #bbb", borderRadius: 10, padding: 36, textAlign: "center", cursor: "pointer", background: "#FAFAF7" }} onClick={() => !imgP && imgR.current && imgR.current.click()}><input ref={imgR} type="file" accept="image/*" onChange={doImg} style={{ display: "none" }} />{imgP ? <div><div style={{ fontSize: 36 }}>🔄</div><div style={{ fontSize: 14, fontWeight: 600, color: "#0D6B5B", marginTop: 8 }}>AI reading...</div></div> : <div><div style={{ fontSize: 36 }}>📸</div><div style={{ fontSize: 14, fontWeight: 600, color: "#555", marginTop: 8 }}>Take Photo or Upload Image</div></div>}</div>}
+        {tab === "image" && <div style={{ border: "2px dashed #bbb", borderRadius: 10, padding: 36, textAlign: "center", cursor: "pointer", background: "#FAFAF7" }} onClick={() => !imgP && imgR.current && imgR.current.click()}><input ref={imgR} type="file" accept="image/*,.pdf,application/pdf" onChange={doImg} style={{ display: "none" }} />{imgP ? <div><div style={{ fontSize: 36 }}>🔄</div><div style={{ fontSize: 14, fontWeight: 600, color: "#0D6B5B", marginTop: 8 }}>AI reading...</div></div> : <div><div style={{ fontSize: 36 }}>📸</div><div style={{ fontSize: 14, fontWeight: 600, color: "#555", marginTop: 8 }}>Upload Invoice (Photo or PDF)</div></div>}</div>}
         {tab === "manual" && <div>
           <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr 1fr", gap: 10, marginBottom: 14 }}>
             <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Supplier *</label><input value={mf.sup} onChange={(e) => setMf((f) => ({ ...f, sup: e.target.value }))} style={inps} /></div>
