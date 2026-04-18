@@ -860,114 +860,107 @@ function ProfitPage({ bills, inv, mob }) {
 // RACK MANAGEMENT PAGE
 // ══════════════════════════════════════════════
 function RackPage({ inv, saveInv, mob }) {
-  const [racks, setRacks] = useState([]);
-  const [newRack, setNewRack] = useState("");
   const [selected, setSelected] = useState([]);
   const [dragMed, setDragMed] = useState(null);
-  const [rackLoaded, setRackLoaded] = useState(false);
-  const inputRef = useRef(null);
+  const [filterRack, setFilterRack] = useState("");
+  const [showAll, setShowAll] = useState(false);
 
-  // Load racks once on mount
-  useEffect(function() {
-    db.ref("racks").once("value").then(function(snap) {
-      var data = snap.val();
-      var saved = data ? Object.values(data) : [];
-      // Also get racks from inventory
-      var fromInv = [];
-      inv.forEach(function(m) { if (m.rack && fromInv.indexOf(m.rack) === -1) fromInv.push(m.rack); });
-      // Merge
-      var merged = {};
-      saved.forEach(function(r) { merged[r] = true; });
-      fromInv.forEach(function(r) { merged[r] = true; });
-      setRacks(Object.keys(merged).sort());
-      setRackLoaded(true);
-    }).catch(function() { setRackLoaded(true); });
-  }, []);
+  // Generate all rack names
+  var ALL_RACKS = [];
+  var letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+  letters.forEach(function(l) { for (var i = 1; i <= 100; i++) ALL_RACKS.push(l + i); });
+  for (var i = 1; i <= 100; i++) ALL_RACKS.push("BH-" + i);
 
-  var doAddRack = function() {
-    var val = inputRef.current ? inputRef.current.value.trim().toUpperCase() : "";
-    if (!val) return;
-    if (racks.indexOf(val) >= 0) { alert("Rack " + val + " already exists"); return; }
-    var next = racks.concat([val]).sort();
-    setRacks(next);
-    // Save to Firebase
-    var obj = {};
-    next.forEach(function(r, i) { obj["r" + i] = r; });
-    db.ref("racks").set(obj);
-    setNewRack("");
-    if (inputRef.current) inputRef.current.value = "";
-  };
+  // Get racks that have medicines
+  var usedRacks = {};
+  inv.forEach(function(m) { if (m.rack) usedRacks[m.rack] = true; });
+  var usedList = Object.keys(usedRacks).sort();
 
-  const assignToRack = (rackName, medIds) => {
-    const next = inv.map((m) => medIds.includes(m.id) ? { ...m, rack: rackName } : m);
+  // Filter racks for display
+  var displayRacks = showAll ? ALL_RACKS.filter(function(r) { return !filterRack || r.toLowerCase().indexOf(filterRack.toLowerCase()) >= 0; }).slice(0, 50) : usedList;
+
+  var assignToRack = function(rackName, medIds) {
+    var next = inv.map(function(m) { return medIds.indexOf(m.id) >= 0 ? Object.assign({}, m, { rack: rackName }) : m; });
     saveInv(next);
     setSelected([]);
   };
 
-  const removeFromRack = (medId) => {
-    const next = inv.map((m) => m.id === medId ? { ...m, rack: "" } : m);
+  var removeFromRack = function(medId) {
+    var next = inv.map(function(m) { return m.id === medId ? Object.assign({}, m, { rack: "" }) : m; });
     saveInv(next);
   };
 
-  const toggleSelect = (id) => {
-    setSelected((p) => p.includes(id) ? p.filter((x) => x !== id) : [...p, id]);
+  var toggleSelect = function(id) {
+    setSelected(function(p) { return p.indexOf(id) >= 0 ? p.filter(function(x) { return x !== id; }) : p.concat([id]); });
   };
 
-  const unassigned = inv.filter((m) => !m.rack);
-  const getRackMeds = (r) => inv.filter((m) => m.rack === r);
+  var unassigned = inv.filter(function(m) { return !m.rack; });
+  var getRackMeds = function(r) { return inv.filter(function(m) { return m.rack === r; }); };
 
   return (
     <div><h2 style={hds}>Rack Management</h2>
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        <input ref={inputRef} defaultValue="" onChange={function(e) { setNewRack(e.target.value); }} onKeyDown={function(e) { if (e.key === "Enter") doAddRack(); }} placeholder="New rack name (e.g. A1, B2)" style={{ ...inps, maxWidth: 250 }} />
-        <button onClick={doAddRack} style={bts(true)}>+ Add Rack</button>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+        <button onClick={function() { setShowAll(!showAll); }} style={bts(!showAll)}>{showAll ? "Show Used Racks Only" : "Show All Racks"}</button>
+        {showAll && <input value={filterRack} onChange={function(e) { setFilterRack(e.target.value); }} placeholder="Filter racks (e.g. A1, BH-5)" style={{ ...inps, maxWidth: 200 }} />}
+        {showAll && <span style={{ fontSize: 11, color: "#888" }}>Showing max 50. Type to filter.</span>}
       </div>
+
+      {selected.length > 0 && <div style={{ ...cds, background: "#D1FAE5", border: "2px solid #059669", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <b style={{ color: "#065F46", fontSize: 13 }}>{selected.length} medicine(s) selected. Assign to rack:</b>
+        <select onChange={function(e) { if (e.target.value) { assignToRack(e.target.value, selected); e.target.value = ""; } }} style={{ ...inps, width: 120 }}>
+          <option value="">Select rack</option>
+          {ALL_RACKS.map(function(r) { return <option key={r} value={r}>{r}</option>; })}
+        </select>
+        <button onClick={function() { setSelected([]); }} style={bts(false)}>Clear</button>
+      </div>}
 
       <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 16 }}>
         <div>
           <div style={{ ...cds, border: "2px solid #D4D0C8" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-              <b style={{ fontSize: 14 }}>Unassigned Medicines ({unassigned.length})</b>
-              {selected.length > 0 && <span style={{ fontSize: 12, color: "#0D6B5B", fontWeight: 600 }}>{selected.length} selected</span>}
+              <b style={{ fontSize: 14 }}>Unassigned ({unassigned.length})</b>
             </div>
             <div style={{ maxHeight: 400, overflowY: "auto" }}>
-              {unassigned.length === 0 && <p style={{ color: "#aaa", fontSize: 12, textAlign: "center", padding: 16 }}>All medicines assigned to racks</p>}
-              {unassigned.map((m) => (
-                <div key={m.id} draggable onDragStart={() => setDragMed(m.id)} onClick={() => toggleSelect(m.id)}
-                  style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", marginBottom: 4, borderRadius: 8, cursor: "pointer", border: selected.includes(m.id) ? "2px solid #0D6B5B" : "1px solid #eee", background: selected.includes(m.id) ? "#D1FAE5" : "#FAFAF7", fontSize: 12.5, transition: "all 0.15s" }}>
-                  <div><b>{m.name}</b><span style={{ color: "#888", marginLeft: 6 }}>{m.batch}</span></div>
-                  <span style={{ color: "#888", fontSize: 11 }}>Stock: {fStock(m.stock, m.packQty)}</span>
-                </div>
-              ))}
+              {unassigned.length === 0 && <p style={{ color: "#aaa", fontSize: 12, textAlign: "center", padding: 16 }}>All assigned</p>}
+              {unassigned.map(function(m) {
+                return (
+                  <div key={m.id} draggable onDragStart={function() { setDragMed(m.id); }} onClick={function() { toggleSelect(m.id); }}
+                    style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", marginBottom: 4, borderRadius: 8, cursor: "pointer", border: selected.indexOf(m.id) >= 0 ? "2px solid #0D6B5B" : "1px solid #eee", background: selected.indexOf(m.id) >= 0 ? "#D1FAE5" : "#FAFAF7", fontSize: 12.5 }}>
+                    <div><b>{m.name}</b><span style={{ color: "#888", marginLeft: 6 }}>{m.batch}</span></div>
+                    <span style={{ color: "#888", fontSize: 11 }}>Stock: {fStock(m.stock, m.packQty)}</span>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
 
         <div>
-          <div style={{ fontSize: 13, fontWeight: 600, color: "#888", marginBottom: 8 }}>Drop medicines on a rack or select + click "Assign"</div>
-          {racks.length === 0 && <div style={{ ...cds, textAlign: "center", color: "#aaa", fontSize: 13, padding: 30 }}>No racks yet. Add one above.</div>}
-          {racks.map((r) => {
-            const meds = getRackMeds(r);
+          {displayRacks.length === 0 && <div style={{ ...cds, textAlign: "center", color: "#aaa", fontSize: 13, padding: 30 }}>{showAll ? "No racks match filter" : "No racks in use yet. Select medicines and assign, or click 'Show All Racks'"}</div>}
+          {displayRacks.map(function(r) {
+            var meds = getRackMeds(r);
             return (
               <div key={r}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => { e.preventDefault(); if (dragMed) { assignToRack(r, [dragMed]); setDragMed(null); } }}
-                style={{ ...cds, border: "2px dashed #bbb", minHeight: 60, position: "relative" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                onDragOver={function(e) { e.preventDefault(); }}
+                onDrop={function(e) { e.preventDefault(); if (dragMed) { assignToRack(r, [dragMed]); setDragMed(null); } }}
+                style={{ ...cds, border: meds.length > 0 ? "2px solid #0D6B5B" : "2px dashed #bbb", minHeight: 50 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: meds.length > 0 ? 8 : 0 }}>
                   <b style={{ fontSize: 15, color: "#0D6B5B" }}>{r}</b>
                   <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                    <Tag bg="#D1FAE5" fg="#065F46">{meds.length} items</Tag>
-                    {selected.length > 0 && <button onClick={() => assignToRack(r, selected)} style={{ ...bts(true), padding: "4px 10px", fontSize: 11 }}>Assign {selected.length}</button>}
+                    {meds.length > 0 && <Tag bg="#D1FAE5" fg="#065F46">{meds.length} items</Tag>}
+                    {selected.length > 0 && <button onClick={function() { assignToRack(r, selected); }} style={{ ...bts(true), padding: "4px 10px", fontSize: 11 }}>Assign {selected.length}</button>}
                   </div>
                 </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                  {meds.map((m) => (
-                    <div key={m.id} style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 8px", background: "#EFF6FF", borderRadius: 6, fontSize: 11 }}>
-                      <span>{m.name}</span>
-                      <button onClick={() => removeFromRack(m.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#DC2626", fontSize: 12, padding: 0 }}>x</button>
-                    </div>
-                  ))}
-                </div>
+                {meds.length > 0 && <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                  {meds.map(function(m) {
+                    return (
+                      <div key={m.id} style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 8px", background: "#EFF6FF", borderRadius: 6, fontSize: 11 }}>
+                        <span>{m.name}</span>
+                        <button onClick={function() { removeFromRack(m.id); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#DC2626", fontSize: 12, padding: 0 }}>x</button>
+                      </div>
+                    );
+                  })}
+                </div>}
               </div>
             );
           })}
