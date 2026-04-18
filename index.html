@@ -79,15 +79,19 @@ const mkUID = () => "AZ-" + String(Date.now()).slice(-4) + Math.random().toStrin
 function useM() { const [m, s] = useState(window.innerWidth < 768); useEffect(() => { const h = () => s(window.innerWidth < 768); window.addEventListener("resize", h); return () => window.removeEventListener("resize", h); }, []); return m; }
 // Stock display: 19.667 with packQty=15 shows "19 + 10T"
 function fStock(stock, packQty) {
-  if (!packQty || packQty <= 1 || stock < 0) return String(Math.max(0, Math.floor(stock)));
-  const packs = Math.floor(stock);
-  const loose = Math.round((stock - packs) * packQty);
-  if (loose === 0) return String(packs);
+  var pq = packQty || 10;
+  if (stock <= 0) return "0";
+  if (Number.isInteger(stock)) return String(stock);
+  var packs = Math.floor(stock);
+  var loose = Math.round((stock - packs) * pq);
+  if (loose <= 0) return String(packs);
+  if (loose >= pq) return String(packs + 1);
   return packs + "." + String(loose).padStart(2, "0");
 }
 function getAvailUnits(stock, packQty) {
-  if (!packQty || packQty <= 1) return Math.floor(stock);
-  return Math.floor(stock) * packQty + Math.round((stock - Math.floor(stock)) * packQty);
+  var pq = packQty || 10;
+  if (stock <= 0) return 0;
+  return Math.floor(stock) * pq + Math.round((stock - Math.floor(stock)) * pq);
 }
 
 // ══════════════════════════════════════════════
@@ -860,18 +864,43 @@ function RackPage({ inv, saveInv, mob }) {
   const [newRack, setNewRack] = useState("");
   const [selected, setSelected] = useState([]);
   const [dragMed, setDragMed] = useState(null);
+  const [loaded, setLoaded] = useState(false);
 
-  // Get unique racks from inventory
+  // Load saved racks from Firebase + merge with inventory racks
   useEffect(() => {
-    const rSet = new Set();
-    inv.forEach((m) => { if (m.rack) rSet.add(m.rack); });
-    setRacks(Array.from(rSet).sort());
-  }, [inv]);
+    fbGet("racks").then((saved) => {
+      const savedList = saved ? Object.values(saved) : [];
+      const invRacks = new Set();
+      inv.forEach((m) => { if (m.rack) invRacks.add(m.rack); });
+      const merged = new Set([...savedList, ...invRacks]);
+      setRacks(Array.from(merged).sort());
+      setLoaded(true);
+    });
+  }, []);
+
+  // Also merge inventory racks when inv changes (but keep user-added racks)
+  useEffect(() => {
+    if (!loaded) return;
+    setRacks((prev) => {
+      const invRacks = new Set();
+      inv.forEach((m) => { if (m.rack) invRacks.add(m.rack); });
+      const merged = new Set([...prev, ...invRacks]);
+      return Array.from(merged).sort();
+    });
+  }, [inv, loaded]);
+
+  const saveRacks = (list) => {
+    const obj = {};
+    list.forEach((r, i) => { obj["r" + i] = r; });
+    fbSet("racks", obj);
+  };
 
   const addRack = () => {
     const r = newRack.trim().toUpperCase();
     if (!r || racks.includes(r)) return;
-    setRacks((p) => [...p, r].sort());
+    const next = [...racks, r].sort();
+    setRacks(next);
+    saveRacks(next);
     setNewRack("");
   };
 
@@ -1120,7 +1149,7 @@ function App() {
     const io = {}; i.forEach((m) => { io[m.id] = m; });
     const bo = {}; b.forEach((x) => { bo[x.billNo] = x; });
     const po = {}; p.forEach((x) => { po[x.id] = x; });
-    fbSet("inventory", io); fbSet("bills", bo); fbSet("purchases", po); fbSet("returns", null);
+    fbSet("inventory", io); fbSet("bills", bo); fbSet("purchases", po); fbSet("returns", null); fbSet("racks", null);
   }, []);
 
   const askConfirm = useCallback((msg, cb) => { setConfirmMsg(msg); confirmCb.current = cb; }, []);
