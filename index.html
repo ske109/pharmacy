@@ -203,30 +203,42 @@ function parsePdfToItems(text) {
     if (!qm) return;
     var qty = parseInt(qm[1]); // Pure number only
 
-    // Separate numbers and text
-    var nums = [], texts = [];
-    parts.forEach(function(p) {
-      if (qtyRe.test(p)) return;
-      var n = parseFloat(p);
-      if (!isNaN(n) && p.match(/^[\d.]+$/)) nums.push(n);
-      else if (p.length > 1 && !p.match(/^\d+\.?\d*%$/)) texts.push(p);
-    });
-    if (nums.length < 2) return;
+    // Split line at QtyEA to find MRP (last num before) and PTR (first num after)
+    var qtyPos = l.indexOf(qm[0]);
+    var beforeQty = l.substring(0, qtyPos);
+    var afterQty = l.substring(qtyPos + qm[0].length);
 
-    // Remove serial number (small int at start)
-    if (nums[0] < 50 && Number.isInteger(nums[0]) && nums[0] > 0) nums.shift();
+    var numsBefore = [];
+    beforeQty.split("|").forEach(function(p) {
+      p = p.trim();
+      if (p.replace(/\s/g, "").match(/^[0-9]{6,8}$/)) return;
+      var n = parseFloat(p);
+      if (!isNaN(n) && p.match(/^[\d.]+$/)) numsBefore.push(n);
+    });
+    var numsAfter = [];
+    afterQty.split("|").forEach(function(p) {
+      p = p.trim();
+      var n = parseFloat(p);
+      if (!isNaN(n) && p.match(/^[\d.]+$/)) numsAfter.push(n);
+    });
+    if (numsBefore.length === 0 || numsAfter.length === 0) return;
+
+    var mrp = numsBefore[numsBefore.length - 1];
+    var ptr = numsAfter[0];
 
     // HSN: 6-8 digit number
     var hsn = "";
+    var parts = l.split("|").map(function(p){return p.trim();});
     parts.forEach(function(p) { var h = p.replace(/\s/g,""); if (h.match(/^[0-9]{6,8}$/)) hsn = h; });
 
-    // MRP and PTR (Rate)
-    // Column order after removing Sr: [PackSize/UOM, MRP, Rate/PTR, ...]
-    var mrp = 0, ptr = 0;
-    if (nums.length >= 3) { mrp = nums[1]; ptr = nums[2]; }
-    else if (nums.length === 2) { mrp = nums[0]; ptr = nums[1]; }
-
     // Name: combine text parts + item code from line above
+    var texts = [];
+    parts.forEach(function(p) {
+      if (qtyRe.test(p)) return;
+      if (p.replace(/\s/g, "").match(/^[0-9]{6,8}$/)) return;
+      if (p.match(/^[\d.]+$/) || p.match(/^\d+\.?\d*%$/)) return;
+      if (p.length > 1) texts.push(p);
+    });
     var name = texts.filter(function(t) {
       return t.length > 2 && !t.match(/^(EA|UOM|Sr|Qty|MRP|Rate|HSN|Amt|Disc|CGST|SGST|IGST|Taxable|Total|Sch|Amount|NOS|PCS)$/i);
     }).join(" ");
