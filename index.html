@@ -17,6 +17,10 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
 
+<!-- PDF.js for free PDF text extraction -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>if(window.pdfjsLib)pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";</script>
+
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 html,body,#root{height:100%;width:100%;overflow:hidden}
@@ -115,6 +119,226 @@ function csvToItems(rows) {
     items.push({ name: g("description") || g("name"), manufacturer: g("mfg"), hsn: g("hsn") || "300490", batch: g("batch"), expiry: g("expiry"), pack: g("pkg") || g("pack"), mrp: gn("mrp"), qty: gn("qty"), ptr: gn("ptr"), gstRate: gn("cgst") ? gn("cgst") * 2 : 5, rack: "", packQty: gn("pkg") || gn("pack") || 0, discPct: gn("disc"), schemePct: gn("scheme"), freeQty: 0, amount: gn("linetotal") || 0 }); }
   return { supplier: sup, invoiceNo: inv, date: dt, items: items.filter((i) => i.name) };
 }
+
+// ══════════════════════════════════════════════
+// PDF TEXT EXTRACTION (free, using pdf.js)
+// ══════════════════════════════════════════════
+async function extractPdfText(file) {
+  var arrayBuf = await file.arrayBuffer();
+  var pdf = await pdfjsLib.getDocument({ data: arrayBuf }).promise;
+  var allText = "";
+  for (var p = 1; p <= pdf.numPages; p++) {
+    var page = await pdf.getPage(p);
+    var content = await page.getTextContent();
+    var lines = {};
+    content.items.forEach(function(item) {
+      var y = Math.round(item.transform[5]);
+      if (!lines[y]) lines[y] = [];
+      lines[y].push({ x: Math.round(item.transform[4]), text: item.str });
+    });
+    var sortedY = Object.keys(lines).sort(function(a, b) { return b - a; });
+    sortedY.forEach(function(y) {
+      var row = lines[y].sort(function(a, b) { return a.x - b.x; });
+      allText += row.map(function(r) { return r.text; }).join(" | ") + "\n";
+    });
+    allText += "\n---PAGE---\n";
+  }
+  return allText;
+}
+
+function parsePdfToItems(text) {
+  var lines = text.split("\n").filter(function(l) { return l.trim() && l !== "---PAGE---"; });
+  var supplier = "", invoiceNo = "", date = "";
+  var items = [];
+
+  // Extract header info
+  lines.forEach(function(l) {
+    var lower = l.toLowerCase();
+    if (lower.indexOf("invoice no") >= 0 || lower.indexOf("invoice :") >= 0) {
+      var m = l.match(/[A-Z]{2,}[0-9]+/); if (m) invoiceNo = m[0];
+    }
+    if (lower.indexOf("dated") >= 0 || lower.indexOf("date") >= 0) {
+      var dm = l.match(/(\d{1,2})[\/\-](\w{3,}|\d{1,2})[\/\-](\d{2,4})/);
+      if (dm) date = dm[0];
+    }
+  });
+
+  // Find supplier from first few lines
+  for (var i = 0; i < Math.min(5, lines.length); i++) {
+    if (lines[i].match(/TRADERS|PHARMA|DISTRIBUTORS|HEALTHCARE|PVTLTD|PVT|PRIVATE|HIVELOOP|ENTERPRISES/i)) {
+      supplier = lines[i].replace(/\|/g, " ").replace(/\s+/g, " ").trim().substring(0, 60);
+      break;
+    }
+  }
+
+  // Parse item lines - look for patterns with MRP, Qty, HSN
+  lines.forEach(function(l) {
+    var parts = l.split("|").map(function(p) { return p.trim(); });
+    if (parts.length < 4) return;
+
+    // Try to find a line with a product name and numbers
+    var nums = [];
+    var texts = [];
+    parts.forEach(function(p) {
+      var n = parseFloat(p);
+      if (!isNaN(n) && p.match(/^[\d.]+$/)) nums.push(n);
+      else texts.push(p);
+    });
+
+    if (nums.length >= 3 && texts.length >= 1) {
+      var name = texts.find(function(t) { return t.length > 3 && !t.match(/^\d/) && !t.match(/^(EA|ML|GM|TAB|CAP|SYR|INJ)$/i); });
+      if (!name) return;
+
+      // Clean name
+      name = name.replace(/^[\d\s]+/, "").replace(/\s*-\s*$/, "").trim();
+      if (name.length < 3) return;
+
+      // Try to identify fields from numbers context
+      var hsn = "";
+      parts.forEach(function(p) { if (p.match(/^3004|^3401|^3808|^4014|^3005|^1211/)) hsn = p.trim(); });
+
+      // Extract batch and expiry from text parts
+      var batch = "";
+      var expiry = "";
+      texts.forEach(function(t) {
+        if (t.match(/^[A-Z]{1,3}\d{3,}/i) && !batch) batch = t;
+        if (t.match(/\d{1,2}\/\d{2,4}/) && !expiry) {
+          var em = t.match(/(\d{1,2})\/(\d{2,4})/);
+          if (em) expiry = (em[2].length === 2 ? "20" + em[2] : em[2]) + "-" + em[1].padStart(2, "0");
+        }
+      });
+
+      // Find MRP (usually one of the larger numbers)
+      var sortedNums = nums.slice().sort(function(a, b) { return b - a; });
+      var mrp = sortedNums.length > 0 ? sortedNums[0] : 0;
+      var qty = nums.find(function(n) { return n > 0 && n < 200 && Number.isInteger(n); }) || 1;
+      var ptr = sortedNums.length > 2 ? sortedNums[2] : sortedNums.length > 1 ? sortedNums[1] : mrp * 0.76;
+
+      // Find GST
+      var gstRate = 5;
+      parts.forEach(function(p) {
+        if (p.match(/^2\.50%?$/)) gstRate = 5;
+        if (p.match(/^9\.00%?$|^9%$/)) gstRate = 18;
+        if (p.match(/^6\.00%?$|^6%$/)) gstRate = 12;
+      });
+
+      // Find pack size from name
+      var packQty = 0;
+      var pkm = name.match(/(\d+)\s*(tab|cap|ml|gm|g|strips?)/i);
+      if (pkm) packQty = parseInt(pkm[1]);
+
+      items.push({ name: name.substring(0, 60), manufacturer: "", hsn: hsn || "300490", batch: batch, expiry: expiry, pack: packQty ? packQty + "" : "", mrp: mrp, qty: qty, ptr: Math.round(ptr * 100) / 100, gstRate: gstRate, rack: "", packQty: packQty, discPct: 0, schemePct: 0, freeQty: 0, amount: 0 });
+    }
+  });
+
+  return { supplier: supplier, invoiceNo: invoiceNo, date: date, items: items };
+}
+
+// ══════════════════════════════════════════════
+// MEDICINE DATABASE (free, offline, no API)
+// ══════════════════════════════════════════════
+var MED_DB = [
+  {n:"Dolo 650",g:"Paracetamol",c:"Analgesic/Antipyretic",sc:["Nervous System","Analgesics","Non-Opioid","Aniline Derivatives"],cp:[{s:"Paracetamol",st:"650mg"}],u:["Fever","Headache","Body pain","Toothache","Cold"],alt:[{n:"Crocin 650",m:"GSK",e:true},{n:"Calpol 650",m:"GSK",e:true},{n:"Pacimol 650",m:"Ipca",e:true},{n:"Metacin",m:"Unique Pharma",e:true},{n:"Combiflam",m:"Sanofi",e:false},{n:"Sumo",m:"Alkem",e:false}],se:["Nausea","Liver damage (overdose)","Allergic reaction"],d:"1-2 tablets every 4-6 hours, max 4g/day",rx:false},
+  {n:"Azithromycin 500",g:"Azithromycin",c:"Antibiotic",sc:["Anti-infectives","Antibacterials","Macrolides","Azalides"],cp:[{s:"Azithromycin",st:"500mg"}],u:["Bacterial infections","Respiratory infections","Ear infections","Skin infections","STIs"],alt:[{n:"Azee 500",m:"Cipla",e:true},{n:"Zithromax",m:"Pfizer",e:true},{n:"Azicip",m:"Cipla",e:true},{n:"Amoxicillin",m:"Various",e:false},{n:"Erythromycin",m:"Various",e:false}],se:["Nausea","Diarrhoea","Stomach pain","Headache"],d:"500mg once daily for 3 days",rx:true},
+  {n:"Amoxicillin 500",g:"Amoxicillin",c:"Antibiotic",sc:["Anti-infectives","Antibacterials","Penicillins","Aminopenicillins"],cp:[{s:"Amoxicillin",st:"500mg"}],u:["Bacterial infections","Ear infections","UTI","Dental infections","H.pylori"],alt:[{n:"Mox 500",m:"Ranbaxy",e:true},{n:"Novamox",m:"Cipla",e:true},{n:"Augmentin",m:"GSK",e:false},{n:"Amoxyclav",m:"Various",e:false}],se:["Nausea","Diarrhoea","Rash","Allergic reaction"],d:"250-500mg every 8 hours",rx:true},
+  {n:"Pan 40",g:"Pantoprazole",c:"Antacid/PPI",sc:["GI System","Acid-related","Proton Pump Inhibitors"],cp:[{s:"Pantoprazole",st:"40mg"}],u:["Acidity","GERD","Gastric ulcer","Heartburn"],alt:[{n:"Pantocid",m:"Sun Pharma",e:true},{n:"Pantop 40",m:"Aristo",e:true},{n:"Omeprazole",m:"Various",e:false},{n:"Rabeprazole",m:"Various",e:false}],se:["Headache","Nausea","Flatulence","Dizziness"],d:"40mg once daily before breakfast",rx:true},
+  {n:"Metformin 500",g:"Metformin",c:"Antidiabetic",sc:["Endocrine","Antidiabetics","Biguanides"],cp:[{s:"Metformin HCl",st:"500mg"}],u:["Type 2 Diabetes","PCOS","Pre-diabetes"],alt:[{n:"Glycomet 500",m:"USV",e:true},{n:"Glucophage",m:"Merck",e:true},{n:"Obimet",m:"Zydus",e:true},{n:"Glimepiride",m:"Various",e:false}],se:["Nausea","Diarrhoea","Stomach upset","Metallic taste"],d:"500mg-1000mg twice daily with meals",rx:true},
+  {n:"Atorvastatin 10",g:"Atorvastatin",c:"Lipid Lowering",sc:["Cardiovascular","Lipid Modifying","Statins","HMG-CoA Reductase Inhibitors"],cp:[{s:"Atorvastatin",st:"10mg"}],u:["High cholesterol","Heart disease prevention","Dyslipidemia"],alt:[{n:"Atorva 10",m:"Zydus",e:true},{n:"Lipitor",m:"Pfizer",e:true},{n:"Tonact 10",m:"Lupin",e:true},{n:"Rosuvastatin",m:"Various",e:false}],se:["Muscle pain","Headache","Nausea","Liver issues"],d:"10-80mg once daily",rx:true},
+  {n:"Amlodipine 5",g:"Amlodipine",c:"Antihypertensive",sc:["Cardiovascular","Antihypertensives","Calcium Channel Blockers","Dihydropyridines"],cp:[{s:"Amlodipine",st:"5mg"}],u:["High blood pressure","Angina","Coronary artery disease"],alt:[{n:"Amlong 5",m:"Micro Labs",e:true},{n:"Stamlo 5",m:"Dr Reddy",e:true},{n:"Norvasc",m:"Pfizer",e:true},{n:"Cilnidipine",m:"Various",e:false}],se:["Swelling","Headache","Dizziness","Flushing"],d:"5-10mg once daily",rx:true},
+  {n:"Cetirizine 10",g:"Cetirizine",c:"Antihistamine",sc:["Respiratory","Antihistamines","Second Generation","Piperazine Derivatives"],cp:[{s:"Cetirizine HCl",st:"10mg"}],u:["Allergies","Hay fever","Urticaria","Sneezing","Runny nose"],alt:[{n:"Cetzine",m:"GSK",e:true},{n:"Alerid",m:"Cipla",e:true},{n:"Zyrtec",m:"UCB",e:true},{n:"Levocetirizine",m:"Various",e:false},{n:"Fexofenadine",m:"Various",e:false}],se:["Drowsiness","Dry mouth","Headache","Fatigue"],d:"10mg once daily",rx:false},
+  {n:"Montelukast 10",g:"Montelukast",c:"Anti-asthmatic",sc:["Respiratory","Antiasthmatics","Leukotriene Receptor Antagonists"],cp:[{s:"Montelukast",st:"10mg"}],u:["Asthma","Allergic rhinitis","Exercise-induced bronchospasm"],alt:[{n:"Montair 10",m:"Cipla",e:true},{n:"Montek 10",m:"Sun Pharma",e:true},{n:"Singulair",m:"MSD",e:true}],se:["Headache","Stomach pain","Mood changes"],d:"10mg once daily at bedtime",rx:true},
+  {n:"Montair LC",g:"Montelukast+Levocetirizine",c:"Anti-allergic",sc:["Respiratory","Antihistamines","Combination"],cp:[{s:"Montelukast",st:"10mg"},{s:"Levocetirizine",st:"5mg"}],u:["Allergic rhinitis","Asthma with allergies","Sneezing","Watery eyes"],alt:[{n:"Montek LC",m:"Sun Pharma",e:true},{n:"Montewok LC",m:"Wockhardt",e:true},{n:"Monticope",m:"Various",e:true}],se:["Drowsiness","Headache","Dry mouth","Fatigue"],d:"1 tablet daily at bedtime",rx:true},
+  {n:"Crocin 650",g:"Paracetamol",c:"Analgesic/Antipyretic",sc:["Nervous System","Analgesics","Non-Opioid","Aniline Derivatives"],cp:[{s:"Paracetamol",st:"650mg"}],u:["Fever","Headache","Body pain","Cold"],alt:[{n:"Dolo 650",m:"Micro Labs",e:true},{n:"Calpol",m:"GSK",e:true},{n:"Pacimol",m:"Ipca",e:true}],se:["Nausea","Liver damage (overdose)"],d:"1-2 tablets every 4-6 hours",rx:false},
+  {n:"Augmentin 625",g:"Amoxicillin+Clavulanic Acid",c:"Antibiotic",sc:["Anti-infectives","Antibacterials","Penicillins","Beta-lactamase Inhibitor Combos"],cp:[{s:"Amoxicillin",st:"500mg"},{s:"Clavulanic Acid",st:"125mg"}],u:["Bacterial infections","Sinusitis","UTI","Pneumonia","Dental infections"],alt:[{n:"Amoxyclav 625",m:"Various",e:true},{n:"Moxikind CV",m:"Mankind",e:true},{n:"Clavam 625",m:"Alkem",e:true}],se:["Diarrhoea","Nausea","Vomiting","Rash"],d:"1 tablet every 12 hours",rx:true},
+  {n:"Combiflam",g:"Ibuprofen+Paracetamol",c:"Analgesic/Anti-inflammatory",sc:["Musculoskeletal","NSAIDs","Combination Analgesics"],cp:[{s:"Ibuprofen",st:"400mg"},{s:"Paracetamol",st:"325mg"}],u:["Pain","Inflammation","Headache","Toothache","Muscle pain","Joint pain"],alt:[{n:"Ibugesic Plus",m:"Cipla",e:true},{n:"Brufen",m:"Abbott",e:false},{n:"Flexon",m:"Aristo",e:true}],se:["Stomach upset","Nausea","Dizziness","Heartburn"],d:"1 tablet 2-3 times daily after food",rx:false},
+  {n:"ORS",g:"Oral Rehydration Salts",c:"Electrolyte Supplement",sc:["GI System","Rehydration","Electrolyte Solutions"],cp:[{s:"Sodium Chloride",st:"2.6g"},{s:"Glucose",st:"13.5g"},{s:"Potassium Chloride",st:"1.5g"},{s:"Sodium Citrate",st:"2.9g"}],u:["Dehydration","Diarrhoea","Vomiting","Heatstroke"],alt:[{n:"Electral",m:"FDC",e:true},{n:"Enerzal",m:"FDC",e:false}],se:["Nausea if taken too fast"],d:"Dissolve in 1L water, sip frequently",rx:false},
+  {n:"Ascoril LS",g:"Ambroxol+Levosalbutamol+Guaifenesin",c:"Cough Expectorant",sc:["Respiratory","Cough Preparations","Mucolytics","Combinations"],cp:[{s:"Ambroxol",st:"30mg"},{s:"Levosalbutamol",st:"1mg"},{s:"Guaifenesin",st:"50mg"}],u:["Productive cough","Bronchitis","Chest congestion","COPD"],alt:[{n:"Ambrodil S",m:"Aristo",e:false},{n:"Benadryl",m:"J&J",e:false},{n:"Cheston Cold",m:"Cipla",e:false}],se:["Nausea","Tremors","Palpitations","Headache"],d:"10ml 2-3 times daily",rx:true},
+  {n:"Becosules",g:"Multivitamin B Complex",c:"Vitamin Supplement",sc:["Nutritional","Vitamins","B Complex","Multivitamin"],cp:[{s:"Thiamine B1",st:"10mg"},{s:"Riboflavin B2",st:"10mg"},{s:"Niacinamide B3",st:"100mg"},{s:"Calcium Pantothenate B5",st:"50mg"},{s:"Pyridoxine B6",st:"3mg"},{s:"Biotin B7",st:"100mcg"},{s:"Folic Acid B9",st:"1.5mg"},{s:"Cyanocobalamin B12",st:"15mcg"},{s:"Ascorbic Acid C",st:"150mg"}],u:["Vitamin deficiency","Mouth ulcers","Weakness","Anaemia","Hair fall"],alt:[{n:"Supradyn",m:"Bayer",e:false},{n:"Zincovit",m:"Apex",e:false},{n:"A to Z NS",m:"Alkem",e:false}],se:["Nausea","Stomach upset"],d:"1 capsule daily",rx:false},
+  {n:"D-Rise 60K",g:"Cholecalciferol",c:"Vitamin D3",sc:["Nutritional","Vitamins","Fat Soluble","Vitamin D"],cp:[{s:"Cholecalciferol",st:"60000 IU"}],u:["Vitamin D deficiency","Bone health","Osteoporosis","Rickets"],alt:[{n:"Uprise D3 60K",m:"Alkem",e:true},{n:"Calcitas D3",m:"Alpha",e:true},{n:"Tayo 60K",m:"Eris",e:true}],se:["Nausea","Constipation","Weakness (overdose)"],d:"1 sachet/cap weekly for 8 weeks",rx:true},
+  {n:"Levoflox 500",g:"Levofloxacin",c:"Antibiotic",sc:["Anti-infectives","Antibacterials","Fluoroquinolones"],cp:[{s:"Levofloxacin",st:"500mg"}],u:["UTI","Respiratory infections","Sinusitis","Pneumonia","Skin infections"],alt:[{n:"Levomac 500",m:"Macleods",e:true},{n:"Levoday",m:"Various",e:true},{n:"Ciprofloxacin",m:"Various",e:false},{n:"Ofloxacin",m:"Various",e:false}],se:["Nausea","Headache","Dizziness","Tendon problems"],d:"500mg once daily for 5-7 days",rx:true},
+  {n:"Nicip Plus",g:"Nimesulide+Paracetamol",c:"Analgesic/Anti-inflammatory",sc:["Musculoskeletal","NSAIDs","Combination"],cp:[{s:"Nimesulide",st:"100mg"},{s:"Paracetamol",st:"325mg"}],u:["Pain","Fever","Inflammation","Dental pain","Headache"],alt:[{n:"Sumo",m:"Alkem",e:true},{n:"Zerodol SP",m:"Ipca",e:false},{n:"Hifenac",m:"Intas",e:false}],se:["Stomach upset","Nausea","Liver risk"],d:"1 tablet twice daily after food",rx:true},
+  {n:"Omnigel",g:"Diclofenac+Menthol+Methyl Salicylate",c:"Topical Pain Relief",sc:["Musculoskeletal","Topical NSAIDs","Gels"],cp:[{s:"Diclofenac Diethylamine",st:"1.16%"},{s:"Methyl Salicylate",st:"10%"},{s:"Menthol",st:"5%"}],u:["Muscle pain","Joint pain","Back pain","Sprains","Sports injuries"],alt:[{n:"Volini Gel",m:"Sun Pharma",e:false},{n:"Moov",m:"Reckitt",e:false},{n:"Iodex",m:"GSK",e:false}],se:["Skin irritation","Redness","Burning sensation"],d:"Apply 2-3 times daily on affected area",rx:false},
+  {n:"Betadine",g:"Povidone Iodine",c:"Antiseptic",sc:["Dermatology","Antiseptics","Iodine Preparations"],cp:[{s:"Povidone Iodine",st:"5%"}],u:["Wound cleaning","Skin disinfection","Gargle for sore throat","Pre-surgical prep"],alt:[{n:"Cipladine",m:"Cipla",e:true},{n:"Wokadine",m:"Wockhardt",e:true},{n:"Savlon",m:"ITC",e:false}],se:["Skin staining","Irritation","Allergic reaction (rare)"],d:"Apply directly or dilute for gargle",rx:false},
+  {n:"Evion 400",g:"Vitamin E",c:"Vitamin Supplement",sc:["Nutritional","Vitamins","Fat Soluble","Vitamin E"],cp:[{s:"Tocopheryl Acetate",st:"400mg"}],u:["Vitamin E deficiency","Skin health","Antioxidant","Hair health"],alt:[{n:"E-Cod",m:"Various",e:false},{n:"Evion 600",m:"P&G",e:true}],se:["Nausea","Diarrhoea","Fatigue (high dose)"],d:"1 capsule daily",rx:false},
+  {n:"Glycomet GP",g:"Glimepiride+Metformin",c:"Antidiabetic",sc:["Endocrine","Antidiabetics","Combination","Sulfonylurea+Biguanide"],cp:[{s:"Glimepiride",st:"1mg"},{s:"Metformin",st:"500mg"}],u:["Type 2 Diabetes"],alt:[{n:"Amaryl M",m:"Sanofi",e:true},{n:"Glimy M",m:"Various",e:true},{n:"Glucoryl M",m:"Various",e:true}],se:["Hypoglycemia","Nausea","Weight gain","Diarrhoea"],d:"1 tablet daily with breakfast",rx:true},
+  {n:"Levipil 500",g:"Levetiracetam",c:"Antiepileptic",sc:["Nervous System","Antiepileptics","Pyrrolidone Derivatives"],cp:[{s:"Levetiracetam",st:"500mg"}],u:["Epilepsy","Seizures","Partial onset seizures"],alt:[{n:"Keppra",m:"UCB",e:true},{n:"Levera",m:"Sun Pharma",e:true},{n:"Torleva",m:"Torrent",e:true}],se:["Drowsiness","Dizziness","Weakness","Mood changes"],d:"500-1500mg twice daily",rx:true},
+  {n:"Movexx Plus",g:"Aceclofenac+Paracetamol",c:"Analgesic/Anti-inflammatory",sc:["Musculoskeletal","NSAIDs","Combination"],cp:[{s:"Aceclofenac",st:"100mg"},{s:"Paracetamol",st:"325mg"}],u:["Joint pain","Arthritis","Back pain","Toothache","Post-surgical pain"],alt:[{n:"Hifenac P",m:"Intas",e:true},{n:"Zerodol P",m:"Ipca",e:true},{n:"Acemove P",m:"Various",e:true}],se:["Stomach pain","Nausea","Dizziness"],d:"1 tablet twice daily after food",rx:true},
+  {n:"Neosporin",g:"Polymyxin B+Bacitracin+Neomycin",c:"Topical Antibiotic",sc:["Dermatology","Anti-infectives","Topical Antibiotics","Combinations"],cp:[{s:"Polymyxin B",st:""},{s:"Bacitracin Zinc",st:""},{s:"Neomycin",st:""}],u:["Wound infection prevention","Cuts","Burns","Skin infections"],alt:[{n:"Soframycin",m:"Sanofi",e:false},{n:"T-Bact",m:"GSK",e:false},{n:"Mupirocin",m:"Various",e:false}],se:["Skin irritation","Allergic reaction"],d:"Apply 1-3 times daily on clean wound",rx:false},
+  {n:"Strepsils",g:"Amylmetacresol+Dichlorobenzyl alcohol",c:"Throat Lozenge",sc:["Respiratory","Throat Preparations","Antiseptic Lozenges"],cp:[{s:"Amylmetacresol",st:"0.6mg"},{s:"2,4-Dichlorobenzyl alcohol",st:"1.2mg"}],u:["Sore throat","Throat irritation","Mouth ulcers"],alt:[{n:"Vicks Cough Drops",m:"P&G",e:false},{n:"Cofsils",m:"Cipla",e:false},{n:"Halls",m:"Mondelez",e:false}],se:["Mild stomach upset"],d:"1 lozenge every 2-3 hours, max 12/day",rx:false},
+  {n:"Dettol Antiseptic",g:"Chloroxylenol",c:"Antiseptic/Disinfectant",sc:["Dermatology","Antiseptics","Phenol Derivatives"],cp:[{s:"Chloroxylenol",st:"4.8%"}],u:["Wound cleaning","Skin disinfection","Bathing antiseptic","Floor cleaning"],alt:[{n:"Savlon",m:"ITC",e:false},{n:"Betadine",m:"Win Medicare",e:false}],se:["Skin irritation if undiluted"],d:"Dilute before use, 1 cap per mug of water",rx:false},
+  {n:"Dulcoflex",g:"Bisacodyl",c:"Laxative",sc:["GI System","Laxatives","Stimulant Laxatives"],cp:[{s:"Bisacodyl",st:"5mg"}],u:["Constipation","Bowel preparation"],alt:[{n:"Cremaffin",m:"Abbott",e:false},{n:"Isabgol",m:"Various",e:false},{n:"Lactulose",m:"Various",e:false}],se:["Abdominal cramps","Diarrhoea"],d:"1-2 tablets at bedtime",rx:false},
+  {n:"Ebexid",g:"Eberconazole",c:"Antifungal",sc:["Dermatology","Antifungals","Topical Imidazoles"],cp:[{s:"Eberconazole",st:"1%"}],u:["Fungal skin infections","Ringworm","Athlete foot","Jock itch"],alt:[{n:"Candid",m:"Glenmark",e:false},{n:"Ring Guard",m:"Reckitt",e:false},{n:"Itchguard",m:"Reckitt",e:false}],se:["Mild burning","Skin irritation"],d:"Apply twice daily for 2-4 weeks",rx:false},
+{n:"Cefixime 200",g:"Cefixime",c:"Antibiotic",sc:["Anti-infectives","Antibacterials","Cephalosporins","Third Generation"],cp:[{s:"Cefixime",st:"200mg"}],u:["UTI","Typhoid","Gonorrhoea","Respiratory infections"],alt:[{n:"Taxim O",m:"Alkem",e:true},{n:"Cefix",m:"Various",e:true},{n:"Zifi",m:"FDC",e:true}],se:["Diarrhoea","Nausea","Stomach pain"],d:"200mg twice daily",rx:true},
+  {n:"Ciprofloxacin 500",g:"Ciprofloxacin",c:"Antibiotic",sc:["Anti-infectives","Antibacterials","Fluoroquinolones"],cp:[{s:"Ciprofloxacin",st:"500mg"}],u:["UTI","GI infections","Bone infections","Typhoid"],alt:[{n:"Ciplox 500",m:"Cipla",e:true},{n:"Cifran",m:"Sun Pharma",e:true}],se:["Nausea","Diarrhoea","Tendon damage","Dizziness"],d:"500mg twice daily",rx:true},
+  {n:"Metronidazole 400",g:"Metronidazole",c:"Antibiotic/Antiprotozoal",sc:["Anti-infectives","Nitroimidazoles"],cp:[{s:"Metronidazole",st:"400mg"}],u:["Amoebic dysentery","Giardiasis","Dental infections","Anaerobic infections"],alt:[{n:"Flagyl",m:"Sanofi",e:true},{n:"Metrogyl",m:"J&J",e:true}],se:["Nausea","Metallic taste","Darkened urine"],d:"400mg thrice daily for 7 days",rx:true},
+  {n:"Ofloxacin 200",g:"Ofloxacin",c:"Antibiotic",sc:["Anti-infectives","Antibacterials","Fluoroquinolones"],cp:[{s:"Ofloxacin",st:"200mg"}],u:["UTI","Diarrhoea","Respiratory infections","Eye infections"],alt:[{n:"Oflox",m:"Cipla",e:true},{n:"Zanocin",m:"Sun Pharma",e:true}],se:["Nausea","Headache","Insomnia"],d:"200mg twice daily",rx:true},
+  {n:"Doxycycline 100",g:"Doxycycline",c:"Antibiotic",sc:["Anti-infectives","Antibacterials","Tetracyclines"],cp:[{s:"Doxycycline",st:"100mg"}],u:["Acne","Malaria prophylaxis","Respiratory infections","STIs","Lyme disease"],alt:[{n:"Doxt SL",m:"Dr Reddy",e:true},{n:"Doxy 1",m:"Cipla",e:true}],se:["Photosensitivity","Nausea","Oesophageal ulcer"],d:"100mg twice daily",rx:true},
+  {n:"Cephalexin 500",g:"Cephalexin",c:"Antibiotic",sc:["Anti-infectives","Antibacterials","Cephalosporins","First Generation"],cp:[{s:"Cephalexin",st:"500mg"}],u:["Skin infections","Bone infections","UTI","Respiratory infections"],alt:[{n:"Sporidex",m:"Sun Pharma",e:true},{n:"Phexin",m:"GSK",e:true}],se:["Nausea","Diarrhoea","Rash"],d:"500mg every 6 hours",rx:true},
+  {n:"Norfloxacin 400",g:"Norfloxacin",c:"Antibiotic",sc:["Anti-infectives","Antibacterials","Fluoroquinolones"],cp:[{s:"Norfloxacin",st:"400mg"}],u:["UTI","Diarrhoea","Prostatitis"],alt:[{n:"Norflox",m:"Cipla",e:true},{n:"Norbactin",m:"Various",e:true}],se:["Nausea","Headache","Dizziness"],d:"400mg twice daily",rx:true},
+  {n:"Omeprazole 20",g:"Omeprazole",c:"Antacid/PPI",sc:["GI System","Acid-related","Proton Pump Inhibitors"],cp:[{s:"Omeprazole",st:"20mg"}],u:["Acidity","GERD","Peptic ulcer","H.pylori"],alt:[{n:"Omez",m:"Dr Reddy",e:true},{n:"Pantoprazole",m:"Various",e:false}],se:["Headache","Nausea","Diarrhoea"],d:"20mg once daily before food",rx:true},
+  {n:"Rabeprazole 20",g:"Rabeprazole",c:"Antacid/PPI",sc:["GI System","Acid-related","Proton Pump Inhibitors"],cp:[{s:"Rabeprazole",st:"20mg"}],u:["GERD","Peptic ulcer","Acidity","Zollinger-Ellison"],alt:[{n:"Razo",m:"Dr Reddy",e:true},{n:"Rablet",m:"Lupin",e:true}],se:["Headache","Diarrhoea","Flatulence"],d:"20mg once daily",rx:true},
+  {n:"Domperidone 10",g:"Domperidone",c:"Antiemetic/Prokinetic",sc:["GI System","Antiemetics","Dopamine Antagonists"],cp:[{s:"Domperidone",st:"10mg"}],u:["Nausea","Vomiting","Bloating","Gastroparesis"],alt:[{n:"Domstal",m:"Torrent",e:true},{n:"Vomistop",m:"Cipla",e:true}],se:["Dry mouth","Headache","Drowsiness"],d:"10mg thrice daily before meals",rx:true},
+  {n:"Ondansetron 4",g:"Ondansetron",c:"Antiemetic",sc:["GI System","Antiemetics","5-HT3 Antagonists"],cp:[{s:"Ondansetron",st:"4mg"}],u:["Nausea","Vomiting","Chemo-induced vomiting","Post-operative nausea"],alt:[{n:"Emeset",m:"Cipla",e:true},{n:"Ondem",m:"Alkem",e:true}],se:["Headache","Constipation","Fatigue"],d:"4-8mg every 8 hours",rx:true},
+  {n:"Ranitidine 150",g:"Ranitidine",c:"Antacid/H2 Blocker",sc:["GI System","Acid-related","H2 Receptor Antagonists"],cp:[{s:"Ranitidine",st:"150mg"}],u:["Acidity","Peptic ulcer","GERD"],alt:[{n:"Zinetac",m:"GSK",e:true},{n:"Rantac",m:"J&J",e:true},{n:"Famotidine",m:"Various",e:false}],se:["Headache","Constipation","Dizziness"],d:"150mg twice daily",rx:true},
+  {n:"Loperamide 2",g:"Loperamide",c:"Antidiarrhoeal",sc:["GI System","Antidiarrhoeals","Opioid Agonists"],cp:[{s:"Loperamide",st:"2mg"}],u:["Acute diarrhoea","Traveller diarrhoea"],alt:[{n:"Imodium",m:"J&J",e:true},{n:"Eldoper",m:"Elder",e:true}],se:["Constipation","Bloating","Dizziness"],d:"4mg initially then 2mg after each loose stool",rx:false},
+  {n:"Telmisartan 40",g:"Telmisartan",c:"Antihypertensive",sc:["Cardiovascular","Antihypertensives","ARBs","Angiotensin II Antagonists"],cp:[{s:"Telmisartan",st:"40mg"}],u:["Hypertension","Heart failure","Diabetic nephropathy"],alt:[{n:"Telma 40",m:"Glenmark",e:true},{n:"Telmikind",m:"Mankind",e:true},{n:"Losartan",m:"Various",e:false}],se:["Dizziness","Back pain","Diarrhoea"],d:"40-80mg once daily",rx:true},
+  {n:"Losartan 50",g:"Losartan",c:"Antihypertensive",sc:["Cardiovascular","Antihypertensives","ARBs","Angiotensin II Antagonists"],cp:[{s:"Losartan",st:"50mg"}],u:["Hypertension","Diabetic nephropathy","Heart failure"],alt:[{n:"Losacar",m:"Cipla",e:true},{n:"Repace",m:"Sun Pharma",e:true},{n:"Telmisartan",m:"Various",e:false}],se:["Dizziness","Fatigue","Hyperkalaemia"],d:"50-100mg once daily",rx:true},
+  {n:"Enalapril 5",g:"Enalapril",c:"Antihypertensive",sc:["Cardiovascular","Antihypertensives","ACE Inhibitors"],cp:[{s:"Enalapril",st:"5mg"}],u:["Hypertension","Heart failure","Diabetic nephropathy"],alt:[{n:"Envas",m:"Cadila",e:true},{n:"Ramipril",m:"Various",e:false}],se:["Dry cough","Dizziness","Hypotension"],d:"5-20mg once daily",rx:true},
+  {n:"Aspirin 75",g:"Aspirin",c:"Antiplatelet/Analgesic",sc:["Cardiovascular","Antithrombotics","Antiplatelet","COX Inhibitors"],cp:[{s:"Aspirin",st:"75mg"}],u:["Heart attack prevention","Stroke prevention","Blood thinning"],alt:[{n:"Ecosprin 75",m:"USV",e:true},{n:"Disprin",m:"Reckitt",e:true},{n:"Clopidogrel",m:"Various",e:false}],se:["Stomach upset","Bleeding risk","Tinnitus"],d:"75mg once daily after food",rx:true},
+  {n:"Clopidogrel 75",g:"Clopidogrel",c:"Antiplatelet",sc:["Cardiovascular","Antithrombotics","Antiplatelet","ADP Receptor Antagonists"],cp:[{s:"Clopidogrel",st:"75mg"}],u:["Heart attack prevention","Stroke prevention","Stent patients"],alt:[{n:"Clopilet",m:"Sun Pharma",e:true},{n:"Plavix",m:"Sanofi",e:true}],se:["Bleeding","Bruising","Diarrhoea"],d:"75mg once daily",rx:true},
+  {n:"Rosuvastatin 10",g:"Rosuvastatin",c:"Lipid Lowering",sc:["Cardiovascular","Lipid Modifying","Statins","HMG-CoA Reductase Inhibitors"],cp:[{s:"Rosuvastatin",st:"10mg"}],u:["High cholesterol","Heart disease prevention"],alt:[{n:"Rozavel",m:"Sun Pharma",e:true},{n:"Crestor",m:"AstraZeneca",e:true},{n:"Atorvastatin",m:"Various",e:false}],se:["Muscle pain","Headache","Nausea"],d:"10-20mg once daily",rx:true},
+  {n:"Levocetirizine 5",g:"Levocetirizine",c:"Antihistamine",sc:["Respiratory","Antihistamines","Third Generation","Piperazine Derivatives"],cp:[{s:"Levocetirizine",st:"5mg"}],u:["Allergies","Urticaria","Allergic rhinitis","Hay fever"],alt:[{n:"Levocet",m:"Sun Pharma",e:true},{n:"Xyzal",m:"UCB",e:true},{n:"Cetirizine",m:"Various",e:false}],se:["Drowsiness","Dry mouth","Headache"],d:"5mg once daily at bedtime",rx:false},
+  {n:"Fexofenadine 120",g:"Fexofenadine",c:"Antihistamine",sc:["Respiratory","Antihistamines","Second Generation"],cp:[{s:"Fexofenadine",st:"120mg"}],u:["Allergic rhinitis","Urticaria","Sneezing"],alt:[{n:"Allegra",m:"Sanofi",e:true},{n:"Fexo",m:"Various",e:true}],se:["Headache","Nausea","Drowsiness (rare)"],d:"120mg once daily",rx:false},
+  {n:"Salbutamol Inhaler",g:"Salbutamol",c:"Bronchodilator",sc:["Respiratory","Bronchodilators","Beta-2 Agonists","Short-Acting"],cp:[{s:"Salbutamol",st:"100mcg/puff"}],u:["Asthma","COPD","Wheezing","Bronchospasm"],alt:[{n:"Asthalin",m:"Cipla",e:true},{n:"Ventolin",m:"GSK",e:true}],se:["Tremor","Palpitations","Headache"],d:"1-2 puffs every 4-6 hours as needed",rx:true},
+  {n:"Budesonide Inhaler",g:"Budesonide",c:"Inhaled Corticosteroid",sc:["Respiratory","Corticosteroids","Inhaled","Glucocorticoids"],cp:[{s:"Budesonide",st:"200mcg/puff"}],u:["Asthma maintenance","COPD","Allergic rhinitis"],alt:[{n:"Budecort",m:"Sun Pharma",e:true},{n:"Pulmicort",m:"AstraZeneca",e:true},{n:"Fluticasone",m:"Various",e:false}],se:["Oral thrush","Hoarseness","Cough"],d:"1-2 puffs twice daily",rx:true},
+  {n:"Deriphyllin",g:"Theophylline+Etofylline",c:"Bronchodilator",sc:["Respiratory","Bronchodilators","Xanthine Derivatives"],cp:[{s:"Theophylline",st:"23mg"},{s:"Etofylline",st:"77mg"}],u:["Asthma","COPD","Bronchospasm"],alt:[{n:"Deriphyllin Retard",m:"Franco Indian",e:true}],se:["Nausea","Palpitations","Insomnia","Tremor"],d:"1 tablet thrice daily",rx:true},
+  {n:"Diclofenac 50",g:"Diclofenac",c:"NSAID/Anti-inflammatory",sc:["Musculoskeletal","NSAIDs","Acetic Acid Derivatives"],cp:[{s:"Diclofenac Sodium",st:"50mg"}],u:["Pain","Inflammation","Arthritis","Post-surgical pain","Migraine"],alt:[{n:"Voveran",m:"Novartis",e:true},{n:"Dynapar",m:"Troikaa",e:true},{n:"Ibuprofen",m:"Various",e:false}],se:["Stomach pain","Nausea","GI bleeding risk"],d:"50mg 2-3 times daily after food",rx:true},
+  {n:"Tramadol 50",g:"Tramadol",c:"Opioid Analgesic",sc:["Nervous System","Analgesics","Opioids","Synthetic"],cp:[{s:"Tramadol",st:"50mg"}],u:["Moderate-severe pain","Post-surgical pain","Chronic pain"],alt:[{n:"Ultracet",m:"J&J",e:false},{n:"Contramal",m:"Abbott",e:true}],se:["Drowsiness","Nausea","Constipation","Dizziness","Dependence risk"],d:"50-100mg every 4-6 hours",rx:true},
+  {n:"Gabapentin 300",g:"Gabapentin",c:"Anticonvulsant/Neuropathic",sc:["Nervous System","Anticonvulsants","Gabapentinoids"],cp:[{s:"Gabapentin",st:"300mg"}],u:["Neuropathic pain","Epilepsy","Postherpetic neuralgia"],alt:[{n:"Gabapin",m:"Intas",e:true},{n:"Neurontin",m:"Pfizer",e:true},{n:"Pregabalin",m:"Various",e:false}],se:["Drowsiness","Dizziness","Weight gain","Fatigue"],d:"300mg thrice daily",rx:true},
+  {n:"Pregabalin 75",g:"Pregabalin",c:"Anticonvulsant/Neuropathic",sc:["Nervous System","Anticonvulsants","Gabapentinoids"],cp:[{s:"Pregabalin",st:"75mg"}],u:["Neuropathic pain","Fibromyalgia","Epilepsy","Anxiety"],alt:[{n:"Pregalin",m:"Torrent",e:true},{n:"Lyrica",m:"Pfizer",e:true}],se:["Drowsiness","Dizziness","Weight gain","Blurred vision"],d:"75mg twice daily",rx:true},
+  {n:"Prednisolone 10",g:"Prednisolone",c:"Corticosteroid",sc:["Endocrine","Corticosteroids","Glucocorticoids"],cp:[{s:"Prednisolone",st:"10mg"}],u:["Inflammation","Asthma","Autoimmune diseases","Allergic reactions"],alt:[{n:"Omnacortil",m:"Macleods",e:true},{n:"Wysolone",m:"Pfizer",e:true},{n:"Dexamethasone",m:"Various",e:false}],se:["Weight gain","Insomnia","Stomach upset","Bone loss"],d:"As prescribed, taper required",rx:true},
+  {n:"Methylprednisolone 8",g:"Methylprednisolone",c:"Corticosteroid",sc:["Endocrine","Corticosteroids","Glucocorticoids"],cp:[{s:"Methylprednisolone",st:"8mg"}],u:["Severe inflammation","Asthma exacerbation","Autoimmune flares"],alt:[{n:"Medrol",m:"Pfizer",e:true},{n:"Prednisolone",m:"Various",e:false}],se:["Insomnia","Stomach upset","Mood changes"],d:"As prescribed, short course",rx:true},
+  {n:"Fluconazole 150",g:"Fluconazole",c:"Antifungal",sc:["Anti-infectives","Antifungals","Systemic","Triazoles"],cp:[{s:"Fluconazole",st:"150mg"}],u:["Vaginal candidiasis","Oral thrush","Fungal infections"],alt:[{n:"Zocon",m:"Sun Pharma",e:true},{n:"Forcan",m:"Cipla",e:true}],se:["Nausea","Headache","Stomach pain"],d:"150mg single dose or as prescribed",rx:true},
+  {n:"Clotrimazole Cream",g:"Clotrimazole",c:"Topical Antifungal",sc:["Dermatology","Antifungals","Topical Imidazoles"],cp:[{s:"Clotrimazole",st:"1%"}],u:["Ringworm","Athlete foot","Jock itch","Vaginal yeast infections"],alt:[{n:"Candid Cream",m:"Glenmark",e:true},{n:"Canesten",m:"Bayer",e:true}],se:["Mild burning","Skin irritation"],d:"Apply twice daily for 2-4 weeks",rx:false},
+  {n:"Acyclovir 400",g:"Acyclovir",c:"Antiviral",sc:["Anti-infectives","Antivirals","Nucleoside Analogues","Herpes"],cp:[{s:"Acyclovir",st:"400mg"}],u:["Herpes simplex","Herpes zoster","Chickenpox"],alt:[{n:"Zovirax",m:"GSK",e:true},{n:"Acivir",m:"Cipla",e:true},{n:"Valacyclovir",m:"Various",e:false}],se:["Nausea","Headache","Diarrhoea"],d:"400mg 5 times daily for 5 days",rx:true},
+  {n:"Albendazole 400",g:"Albendazole",c:"Anthelmintic",sc:["Anti-infectives","Anthelmintics","Benzimidazoles"],cp:[{s:"Albendazole",st:"400mg"}],u:["Worm infestations","Roundworm","Hookworm","Tapeworm"],alt:[{n:"Zentel",m:"GSK",e:true},{n:"Bendex",m:"Mankind",e:true}],se:["Stomach pain","Nausea","Headache"],d:"400mg single dose, repeat after 2 weeks",rx:false},
+  {n:"Ivermectin 12",g:"Ivermectin",c:"Antiparasitic",sc:["Anti-infectives","Anthelmintics","Avermectins"],cp:[{s:"Ivermectin",st:"12mg"}],u:["Scabies","Filariasis","Strongyloides","Head lice"],alt:[{n:"Ivecop",m:"Menarini",e:true},{n:"Bandy Plus",m:"Mankind",e:false}],se:["Dizziness","Nausea","Diarrhoea"],d:"Weight-based dosing, single dose",rx:true},
+  {n:"Insulin Glargine",g:"Insulin Glargine",c:"Antidiabetic Insulin",sc:["Endocrine","Antidiabetics","Insulins","Long-Acting"],cp:[{s:"Insulin Glargine",st:"100 IU/ml"}],u:["Type 1 Diabetes","Type 2 Diabetes"],alt:[{n:"Lantus",m:"Sanofi",e:true},{n:"Basalog",m:"Biocon",e:true}],se:["Hypoglycemia","Weight gain","Injection site reaction"],d:"Once daily at same time, dose as per doctor",rx:true},
+  {n:"Glimepiride 2",g:"Glimepiride",c:"Antidiabetic",sc:["Endocrine","Antidiabetics","Sulfonylureas","Third Generation"],cp:[{s:"Glimepiride",st:"2mg"}],u:["Type 2 Diabetes"],alt:[{n:"Amaryl",m:"Sanofi",e:true},{n:"Glimisave",m:"Glenmark",e:true}],se:["Hypoglycemia","Weight gain","Nausea"],d:"1-2mg once daily with breakfast",rx:true},
+  {n:"Sitagliptin 100",g:"Sitagliptin",c:"Antidiabetic",sc:["Endocrine","Antidiabetics","DPP-4 Inhibitors","Gliptins"],cp:[{s:"Sitagliptin",st:"100mg"}],u:["Type 2 Diabetes"],alt:[{n:"Januvia",m:"MSD",e:true},{n:"Istavel",m:"Sun Pharma",e:true},{n:"Vildagliptin",m:"Various",e:false}],se:["Headache","Nasopharyngitis","Hypoglycemia (rare)"],d:"100mg once daily",rx:true},
+  {n:"Levothyroxine 50",g:"Levothyroxine",c:"Thyroid Hormone",sc:["Endocrine","Thyroid","Thyroid Hormones"],cp:[{s:"Levothyroxine",st:"50mcg"}],u:["Hypothyroidism","Thyroid hormone replacement","Goitre"],alt:[{n:"Thyronorm",m:"Abbott",e:true},{n:"Eltroxin",m:"GSK",e:true},{n:"Thyrox",m:"Macleods",e:true}],se:["Palpitations","Weight loss","Tremor","Insomnia"],d:"50-200mcg once daily on empty stomach",rx:true},
+  {n:"Carbimazole 5",g:"Carbimazole",c:"Antithyroid",sc:["Endocrine","Thyroid","Antithyroid Agents"],cp:[{s:"Carbimazole",st:"5mg"}],u:["Hyperthyroidism","Graves disease","Thyrotoxicosis"],alt:[{n:"Neo Mercazole",m:"Abbott",e:true},{n:"Propylthiouracil",m:"Various",e:false}],se:["Rash","Nausea","Agranulocytosis (rare)"],d:"15-40mg daily in divided doses",rx:true},
+  {n:"Alprazolam 0.5",g:"Alprazolam",c:"Anxiolytic",sc:["Nervous System","Anxiolytics","Benzodiazepines"],cp:[{s:"Alprazolam",st:"0.5mg"}],u:["Anxiety","Panic disorder","Insomnia"],alt:[{n:"Alprax",m:"Torrent",e:true},{n:"Restyl",m:"Cipla",e:true},{n:"Clonazepam",m:"Various",e:false}],se:["Drowsiness","Dependence","Memory impairment","Dizziness"],d:"0.25-0.5mg 2-3 times daily",rx:true},
+  {n:"Clonazepam 0.5",g:"Clonazepam",c:"Anticonvulsant/Anxiolytic",sc:["Nervous System","Anticonvulsants","Benzodiazepines"],cp:[{s:"Clonazepam",st:"0.5mg"}],u:["Epilepsy","Panic disorder","Anxiety","Restless legs"],alt:[{n:"Clonotril",m:"Torrent",e:true},{n:"Rivotril",m:"Roche",e:true}],se:["Drowsiness","Dependence","Dizziness","Fatigue"],d:"0.5mg twice daily",rx:true},
+  {n:"Escitalopram 10",g:"Escitalopram",c:"Antidepressant",sc:["Nervous System","Antidepressants","SSRIs"],cp:[{s:"Escitalopram",st:"10mg"}],u:["Depression","Anxiety disorder","OCD","Panic disorder"],alt:[{n:"Nexito",m:"Sun Pharma",e:true},{n:"Cipralex",m:"Lundbeck",e:true},{n:"Sertraline",m:"Various",e:false}],se:["Nausea","Insomnia","Sexual dysfunction","Weight changes"],d:"10-20mg once daily",rx:true},
+  {n:"Sertraline 50",g:"Sertraline",c:"Antidepressant",sc:["Nervous System","Antidepressants","SSRIs"],cp:[{s:"Sertraline",st:"50mg"}],u:["Depression","Anxiety","OCD","PTSD","Panic disorder"],alt:[{n:"Zosert",m:"Sun Pharma",e:true},{n:"Daxid",m:"Pfizer",e:true}],se:["Nausea","Diarrhoea","Insomnia","Sexual dysfunction"],d:"50-200mg once daily",rx:true},
+  {n:"Amitriptyline 25",g:"Amitriptyline",c:"Antidepressant/Neuropathic",sc:["Nervous System","Antidepressants","Tricyclics"],cp:[{s:"Amitriptyline",st:"25mg"}],u:["Depression","Neuropathic pain","Migraine prevention","Insomnia"],alt:[{n:"Tryptomer",m:"Merind",e:true},{n:"Sarotena",m:"Lundbeck",e:true}],se:["Drowsiness","Dry mouth","Weight gain","Constipation"],d:"25-75mg at bedtime",rx:true},
+  {n:"Zolpidem 10",g:"Zolpidem",c:"Sedative/Hypnotic",sc:["Nervous System","Hypnotics","Non-Benzodiazepine"],cp:[{s:"Zolpidem",st:"10mg"}],u:["Short-term insomnia"],alt:[{n:"Zolfresh",m:"Sun Pharma",e:true},{n:"Stilnoct",m:"Sanofi",e:true}],se:["Drowsiness","Dizziness","Dependence","Headache"],d:"10mg at bedtime, short-term only",rx:true},
+  {n:"Phenytoin 100",g:"Phenytoin",c:"Antiepileptic",sc:["Nervous System","Antiepileptics","Hydantoins"],cp:[{s:"Phenytoin",st:"100mg"}],u:["Epilepsy","Seizure prevention","Status epilepticus"],alt:[{n:"Eptoin",m:"Abbott",e:true},{n:"Dilantin",m:"Pfizer",e:true}],se:["Gum hypertrophy","Nystagmus","Ataxia","Rash"],d:"100mg 2-3 times daily",rx:true},
+  {n:"Carbamazepine 200",g:"Carbamazepine",c:"Antiepileptic",sc:["Nervous System","Antiepileptics","Carboxamides"],cp:[{s:"Carbamazepine",st:"200mg"}],u:["Epilepsy","Trigeminal neuralgia","Bipolar disorder"],alt:[{n:"Tegretal",m:"Novartis",e:true},{n:"Zen Retard",m:"Sun Pharma",e:true}],se:["Drowsiness","Dizziness","Nausea","Rash"],d:"200-400mg twice daily",rx:true},
+  {n:"Tobramycin Eye Drops",g:"Tobramycin",c:"Ophthalmic Antibiotic",sc:["Ophthalmology","Anti-infectives","Aminoglycosides"],cp:[{s:"Tobramycin",st:"0.3%"}],u:["Bacterial conjunctivitis","Eye infections"],alt:[{n:"Tobrex",m:"Alcon",e:true},{n:"Moxifloxacin Drops",m:"Various",e:false}],se:["Eye irritation","Blurred vision"],d:"1-2 drops every 4-6 hours",rx:true},
+  {n:"Moxifloxacin Eye Drops",g:"Moxifloxacin",c:"Ophthalmic Antibiotic",sc:["Ophthalmology","Anti-infectives","Fluoroquinolones"],cp:[{s:"Moxifloxacin",st:"0.5%"}],u:["Bacterial conjunctivitis","Post-surgical eye infection prevention"],alt:[{n:"Moxicip",m:"Cipla",e:true},{n:"Vigamox",m:"Alcon",e:true}],se:["Eye irritation","Dry eyes"],d:"1 drop thrice daily for 7 days",rx:true},
+  {n:"Olopatadine Eye Drops",g:"Olopatadine",c:"Ophthalmic Antiallergic",sc:["Ophthalmology","Antiallergics","Mast Cell Stabilizers"],cp:[{s:"Olopatadine",st:"0.1%"}],u:["Allergic conjunctivitis","Eye itching","Watery eyes"],alt:[{n:"Winolap",m:"Sun Pharma",e:true},{n:"Patanol",m:"Alcon",e:true}],se:["Mild stinging","Headache"],d:"1 drop twice daily",rx:true},
+  {n:"Ciprofloxacin Ear Drops",g:"Ciprofloxacin",c:"Otic Antibiotic",sc:["ENT","Anti-infectives","Fluoroquinolones"],cp:[{s:"Ciprofloxacin",st:"0.3%"}],u:["Ear infections","Otitis media","Otitis externa"],alt:[{n:"Ciplox Ear Drops",m:"Cipla",e:true}],se:["Ear irritation","Itching"],d:"4-5 drops in affected ear twice daily",rx:true},
+  {n:"Shelcal 500",g:"Calcium Carbonate+Vitamin D3",c:"Calcium Supplement",sc:["Nutritional","Minerals","Calcium","Bone Health"],cp:[{s:"Calcium Carbonate",st:"1250mg (500mg Ca)"},{s:"Vitamin D3",st:"250 IU"}],u:["Calcium deficiency","Osteoporosis","Bone health","Pregnancy"],alt:[{n:"Calcimax",m:"Meyer",e:true},{n:"Cipcal",m:"Cipla",e:true},{n:"CCM",m:"Various",e:false}],se:["Constipation","Bloating","Gas"],d:"1 tablet twice daily after food",rx:false},
+  {n:"Limcee",g:"Ascorbic Acid",c:"Vitamin C",sc:["Nutritional","Vitamins","Water Soluble","Vitamin C"],cp:[{s:"Ascorbic Acid",st:"500mg"}],u:["Vitamin C deficiency","Scurvy","Immune support","Wound healing"],alt:[{n:"Celin",m:"GSK",e:true},{n:"Redoxon",m:"Bayer",e:false}],se:["Stomach upset","Kidney stones (high dose)"],d:"1 tablet daily",rx:false},
+  {n:"Folic Acid 5",g:"Folic Acid",c:"Vitamin B9",sc:["Nutritional","Vitamins","Water Soluble","B Vitamins"],cp:[{s:"Folic Acid",st:"5mg"}],u:["Folate deficiency","Pregnancy","Anaemia","Neural tube defect prevention"],alt:[{n:"Folvite",m:"Pfizer",e:true}],se:["Nausea","Bloating"],d:"5mg once daily",rx:false},
+  {n:"Ferrous Sulphate",g:"Ferrous Sulphate",c:"Iron Supplement",sc:["Nutritional","Minerals","Iron","Haematinics"],cp:[{s:"Ferrous Sulphate",st:"200mg"},{s:"Folic Acid",st:"0.5mg"}],u:["Iron deficiency anaemia","Pregnancy anaemia"],alt:[{n:"Autrin",m:"GSK",e:false},{n:"Livogen",m:"Various",e:false},{n:"Dexorange",m:"Various",e:false}],se:["Constipation","Black stools","Nausea"],d:"1 tablet daily after food",rx:false},
+  {n:"Zinc Sulphate 20",g:"Zinc Sulphate",c:"Mineral Supplement",sc:["Nutritional","Minerals","Zinc","Trace Elements"],cp:[{s:"Zinc Sulphate",st:"20mg"}],u:["Zinc deficiency","Diarrhoea in children","Immune support","Wound healing"],alt:[{n:"Zinconia",m:"Various",e:true}],se:["Nausea","Stomach upset"],d:"20mg once daily",rx:false},
+  {n:"Calamine Lotion",g:"Calamine",c:"Topical Soothing Agent",sc:["Dermatology","Protectives","Soothing Agents"],cp:[{s:"Calamine",st:"8%"},{s:"Zinc Oxide",st:"8%"}],u:["Itching","Sunburn","Insect bites","Rashes","Chickenpox"],alt:[{n:"Lacto Calamine",m:"Piramal",e:false}],se:["Mild dryness"],d:"Apply 2-4 times daily on affected area",rx:false},
+  {n:"Permethrin Cream",g:"Permethrin",c:"Antiparasitic Topical",sc:["Dermatology","Antiparasitics","Pyrethroids"],cp:[{s:"Permethrin",st:"5%"}],u:["Scabies","Head lice","Pubic lice"],alt:[{n:"Permite",m:"Various",e:true},{n:"Lyclear",m:"Various",e:true}],se:["Itching","Mild burning","Redness"],d:"Apply all over below neck, wash after 8-14 hours",rx:true},
+  {n:"Silver Sulfadiazine",g:"Silver Sulfadiazine",c:"Topical Antibiotic",sc:["Dermatology","Anti-infectives","Topical","Sulfonamides"],cp:[{s:"Silver Sulfadiazine",st:"1%"}],u:["Burns","Wound infections","Ulcer care"],alt:[{n:"Silverex",m:"Reckitt",e:true},{n:"Burnheal",m:"Various",e:false}],se:["Skin discolouration","Burning sensation"],d:"Apply 1-2 times daily on clean wound",rx:true},
+  {n:"Mupirocin Ointment",g:"Mupirocin",c:"Topical Antibiotic",sc:["Dermatology","Anti-infectives","Topical Antibiotics"],cp:[{s:"Mupirocin",st:"2%"}],u:["Impetigo","Skin infections","MRSA","Folliculitis"],alt:[{n:"T-Bact",m:"GSK",e:true},{n:"Bactroban",m:"GSK",e:true}],se:["Burning","Stinging","Itching"],d:"Apply thrice daily for 5-10 days",rx:true},
+  {n:"Diaper Rash Cream",g:"Zinc Oxide",c:"Barrier Cream",sc:["Dermatology","Protectives","Barrier Creams","Paediatric"],cp:[{s:"Zinc Oxide",st:"15%"}],u:["Diaper rash","Skin irritation","Minor burns","Chafing"],alt:[{n:"Desitin",m:"J&J",e:false},{n:"Sudocrem",m:"Teva",e:false}],se:["None significant"],d:"Apply at each diaper change",rx:false},
+  {n:"Norethisterone 5",g:"Norethisterone",c:"Progesterone",sc:["Endocrine","Hormones","Progestogens"],cp:[{s:"Norethisterone",st:"5mg"}],u:["Period delay","Irregular periods","Endometriosis","Dysfunctional uterine bleeding"],alt:[{n:"Primolut N",m:"Bayer",e:true},{n:"Regestrone",m:"Novartis",e:true}],se:["Bloating","Breast tenderness","Headache","Mood changes"],d:"5mg 3 times daily from day 20 of cycle",rx:true},
+  {n:"Mefenamic Acid 500",g:"Mefenamic Acid",c:"NSAID/Analgesic",sc:["Musculoskeletal","NSAIDs","Anthranilic Acid Derivatives"],cp:[{s:"Mefenamic Acid",st:"500mg"}],u:["Menstrual pain","Headache","Dental pain","Mild-moderate pain"],alt:[{n:"Meftal",m:"Blue Cross",e:true},{n:"Ponstan",m:"Pfizer",e:true}],se:["Stomach pain","Diarrhoea","Nausea"],d:"500mg thrice daily after food",rx:true},
+  {n:"Pantoprazole D",g:"Pantoprazole+Domperidone",c:"Antacid Combination",sc:["GI System","Acid-related","PPI+Prokinetic"],cp:[{s:"Pantoprazole",st:"40mg"},{s:"Domperidone",st:"10mg"}],u:["GERD with nausea","Acidity with bloating","Dyspepsia"],alt:[{n:"Pan D",m:"Alkem",e:true},{n:"Pantocid D",m:"Sun Pharma",e:true}],se:["Headache","Dry mouth","Diarrhoea"],d:"1 capsule daily before breakfast",rx:true},
+  {n:"Sucralfate 1g",g:"Sucralfate",c:"Gastroprotective",sc:["GI System","Mucosal Protectives"],cp:[{s:"Sucralfate",st:"1g"}],u:["Peptic ulcer","Gastric ulcer","GERD","Stress ulcer prevention"],alt:[{n:"Sucrafil O",m:"Dr Reddy",e:true},{n:"Ulgel",m:"Sun Pharma",e:false}],se:["Constipation","Dry mouth"],d:"1g four times daily before meals",rx:true},
+  {n:"Spasmo Proxyvon Plus",g:"Dicyclomine+Paracetamol",c:"Antispasmodic",sc:["GI System","Antispasmodics","Anticholinergics"],cp:[{s:"Dicyclomine",st:"20mg"},{s:"Paracetamol",st:"325mg"}],u:["Abdominal cramps","IBS","Colic pain","Menstrual cramps"],alt:[{n:"Cyclopam",m:"Indoco",e:false},{n:"Mebeverine",m:"Various",e:false}],se:["Dry mouth","Drowsiness","Blurred vision"],d:"1 tablet thrice daily",rx:true},
+  {n:"Warfarin 5",g:"Warfarin",c:"Anticoagulant",sc:["Cardiovascular","Antithrombotics","Anticoagulants","Vitamin K Antagonists"],cp:[{s:"Warfarin Sodium",st:"5mg"}],u:["Deep vein thrombosis","Pulmonary embolism","Atrial fibrillation","Mechanical heart valves"],alt:[{n:"Warf",m:"Cipla",e:true},{n:"Coumadin",m:"Various",e:true}],se:["Bleeding","Bruising","Nausea"],d:"As per INR monitoring",rx:true},
+  {n:"Metoprolol 50",g:"Metoprolol",c:"Beta Blocker",sc:["Cardiovascular","Antihypertensives","Beta Blockers","Cardioselective"],cp:[{s:"Metoprolol",st:"50mg"}],u:["Hypertension","Angina","Heart failure","Arrhythmia","Migraine prevention"],alt:[{n:"Betaloc",m:"AstraZeneca",e:true},{n:"Met XL",m:"Cipla",e:true},{n:"Atenolol",m:"Various",e:false}],se:["Fatigue","Bradycardia","Cold extremities","Dizziness"],d:"50-100mg twice daily",rx:true},
+  {n:"Furosemide 40",g:"Furosemide",c:"Diuretic",sc:["Cardiovascular","Diuretics","Loop Diuretics"],cp:[{s:"Furosemide",st:"40mg"}],u:["Oedema","Heart failure","Hypertension","Kidney disease"],alt:[{n:"Lasix",m:"Sanofi",e:true},{n:"Frusenex",m:"Geno",e:true}],se:["Dehydration","Low potassium","Dizziness","Gout"],d:"20-80mg once daily",rx:true}
+];
 
 // ══════════════════════════════════════════════
 // STYLES
@@ -252,7 +476,7 @@ function Login({ onLogin }) {
 // ══════════════════════════════════════════════
 function Sidebar({ page, setPage, user, onLogout, counts, mob, sideOpen, setSideOpen }) {
   const isO = user.role === "owner";
-  const nav = [{ id: "dash", i: "📊", l: "Dashboard" }, { id: "purch", i: "📦", l: "Purchases" }, { id: "returns", i: "↩️", l: "Returns" }, { id: "inv", i: "💊", l: "Inventory" }, { id: "rack", i: "🗄", l: "Racks" }, { id: "bill", i: "🧾", l: "New Bill" }, ...(isO ? [{ id: "sales", i: "📈", l: "Sales" }, { id: "profit", i: "💹", l: "Profit Margin" }] : []), { id: "stock", i: "📋", l: "Stock" }, { id: "hist", i: "🗂", l: "Bills" }, ...(isO ? [{ id: "users", i: "👥", l: "Users" }, { id: "backup", i: "💾", l: "Backup" }] : [])];
+  const nav = [{ id: "dash", i: "📊", l: "Dashboard" }, { id: "purch", i: "📦", l: "Purchases" }, { id: "returns", i: "↩️", l: "Returns" }, { id: "inv", i: "💊", l: "Inventory" }, { id: "rack", i: "🗄", l: "Racks" }, { id: "bill", i: "🧾", l: "New Bill" }, ...(isO ? [{ id: "sales", i: "📈", l: "Sales" }, { id: "profit", i: "💹", l: "Profit Margin" }] : []), { id: "stock", i: "📋", l: "Stock" }, { id: "hist", i: "🗂", l: "Bills" }, { id: "wiki", i: "📖", l: "Med Wiki" }, ...(isO ? [{ id: "users", i: "👥", l: "Users" }, { id: "backup", i: "💾", l: "Backup" }] : [])];
   if (mob && !sideOpen) return null;
   return (
     <div>
@@ -326,22 +550,43 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm }) {
 
   const doImg = async (e) => {
     const file = e.target.files[0]; if (!file) return;
-    if (!PROXY_READY) { alert("Image AI not configured. See PROXY_SETUP guide to enable."); return; }
+    const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
     setImgP(true);
     try {
-      const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result.split(",")[1]); r.onerror = rej; r.readAsDataURL(file); });
-      const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
-      const contentBlock = isPdf
-        ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 } }
-        : { type: "image", source: { type: "base64", media_type: file.type || "image/jpeg", data: b64 } };
-      const resp = await fetch(PROXY_URL, { method: "POST", headers: CLAUDE_HEADERS,
-        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 4000, messages: [{ role: "user", content: [contentBlock, { type: "text", text: "Extract ALL medicine/product items from this purchase invoice. Return ONLY valid JSON, no markdown. Format: object with keys supplier, invoiceNo, date (YYYY-MM-DD), and items array. Each item needs: name (full product name), manufacturer, hsn (HSN code), batch (batch number), expiry (YYYY-MM format), pack (pack description), mrp (MRP as number), qty (quantity as number), ptr (price to retailer / Rate as number), gstRate (total GST percent = CGST+SGST combined), rack, packQty (units per pack as number), discPct (discount percent), schemePct (scheme discount percent), freeQty (free quantity), amount (total amount as number from Total Amt column)." }] }] }) });
-      const data = await resp.json();
-      if (data.error) { alert("API error: " + (data.error.message || "Check API key/credits")); setImgP(false); return; }
-      let text = (data.content || []).map((c) => c.text || "").join("").trim();
-      if (text.indexOf("{") > 0) text = text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1);
-      setRev({ ...JSON.parse(text), srcType: isPdf ? "pdf" : "image", srcFile: file.name });
-    } catch (err) { console.error(err); alert("Could not read file. Try again."); } setImgP(false); e.target.value = "";
+      if (isPdf) {
+        // FREE: Use pdf.js to extract text, then parse locally
+        const text = await extractPdfText(file);
+        const parsed = parsePdfToItems(text);
+        if (parsed.items.length > 0) {
+          setRev({ ...parsed, srcType: "pdf", srcFile: file.name });
+        } else {
+          // If local parsing failed and API is available, try API
+          if (PROXY_READY) {
+            const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result.split(",")[1]); r.onerror = rej; r.readAsDataURL(file); });
+            const resp = await fetch(PROXY_URL, { method: "POST", headers: CLAUDE_HEADERS,
+              body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 4000, messages: [{ role: "user", content: [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 } }, { type: "text", text: "Extract ALL items from this purchase invoice. Return ONLY valid JSON: {supplier, invoiceNo, date (YYYY-MM-DD), items: [{name, manufacturer, hsn, batch, expiry, pack, mrp, qty, ptr, gstRate, packQty, discPct, schemePct, freeQty, amount}]}" }] }] }) });
+            const data = await resp.json();
+            if (!data.error) {
+              let t = (data.content || []).map((c) => c.text || "").join("").trim();
+              if (t.indexOf("{") > 0) t = t.slice(t.indexOf("{"), t.lastIndexOf("}") + 1);
+              setRev({ ...JSON.parse(t), srcType: "pdf", srcFile: file.name });
+            } else { alert("PDF parsed but no items found. Try CSV format instead."); }
+          } else { alert("PDF parsed but no items detected. Try CSV format."); }
+        }
+      } else {
+        // Images need AI - use proxy if available
+        if (!PROXY_READY) { alert("Image reading requires API proxy setup."); setImgP(false); e.target.value = ""; return; }
+        const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result.split(",")[1]); r.onerror = rej; r.readAsDataURL(file); });
+        const resp = await fetch(PROXY_URL, { method: "POST", headers: CLAUDE_HEADERS,
+          body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 4000, messages: [{ role: "user", content: [{ type: "image", source: { type: "base64", media_type: file.type || "image/jpeg", data: b64 } }, { type: "text", text: "Extract ALL items from this purchase invoice. Return ONLY valid JSON: {supplier, invoiceNo, date (YYYY-MM-DD), items: [{name, manufacturer, hsn, batch, expiry, pack, mrp, qty, ptr, gstRate, packQty, discPct, schemePct, freeQty, amount}]}" }] }] }) });
+        const data = await resp.json();
+        if (data.error) { alert("API error: " + (data.error.message || "Unknown")); setImgP(false); e.target.value = ""; return; }
+        let t = (data.content || []).map((c) => c.text || "").join("").trim();
+        if (t.indexOf("{") > 0) t = t.slice(t.indexOf("{"), t.lastIndexOf("}") + 1);
+        setRev({ ...JSON.parse(t), srcType: "image", srcFile: file.name });
+      }
+    } catch (err) { console.error(err); alert("Could not read file. Try again."); }
+    setImgP(false); e.target.value = "";
   };
 
   const updR = (i, f, v) => { setRev((p) => { const items = p.items.map((it, idx) => { if (idx !== i) return it; const updated = { ...it, [f]: typeof it[f] === "number" ? (Number(v) || 0) : v }; updated.amount = purchCalcAmt(updated); return updated; }); return { ...p, items }; }); };
@@ -464,7 +709,7 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm }) {
           <td style={{ ...tds, fontFamily: "monospace", fontSize: 10, color: "#7C3AED", fontWeight: 600 }}>{m.uid || "-"}</td>
           <td style={{ ...tds, fontWeight: 500, whiteSpace: "nowrap" }}>{m.name}</td>
           <td style={{ ...tds, fontFamily: "monospace", fontSize: 11 }}>{m.batch}</td><td style={tds}>{m.expiry || "-"}</td>
-          <td style={{ ...tds, fontWeight: 600 }}>Rs.{f2(m.mrp)}</td>
+          <td style={{ ...tds, fontWeight: 600 }}><input type="number" step="0.01" defaultValue={m.mrp} onBlur={function(e) { var v = parseFloat(e.target.value) || 0; if (v !== m.mrp) saveInv(inv.map(function(x) { return x.id === m.id ? Object.assign({}, x, { mrp: v }) : x; })); }} style={{ width: 65, border: "1px solid #eee", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "right", background: "#FAFAF7" }} /></td>
           {isO && <td style={{ ...tds, color: "#B45309" }}>Rs.{f2(m.ptr)}</td>}
           <td style={tds}><span style={{ fontWeight: 700, color: m.stock < 3 ? "#DC2626" : m.stock < 5 ? "#D97706" : "#065F46" }}>{fStock(m.stock, m.packQty)}</span></td>
           <td style={tds}>{m.rack || "-"}</td>
@@ -557,7 +802,7 @@ function BillPage({ inv, saveInv, addBill, mob, showBill }) {
       }
     }
     const bill = { billNo: mkBill(), date: new Date().toISOString(), patient: pt, patientContact: pc, patientAddress: pa, doctor: doc, doctorContact: dc, paymentMode: pm, items: items.map((i) => ({ ...i, amount: ca(i) })), totalMRP: tMRP, totalDiscount: tDisc, billDiscount: billDisc, netAmount: net, cgst: tGST / 2, sgst: tGST / 2 };
-    const updInv = inv.map((m) => { const sold = items.filter((i) => i.mid === m.id); if (!sold.length) return m; const totalSold = sold.reduce((s, i) => i.loose ? s + (i.qty / (i.packQty || 10)) : s + i.qty, 0); return { ...m, stock: Math.max(0, Math.round((m.stock - totalSold) * 10000) / 10000) }; });
+    const updInv = inv.map((m) => { const sold = items.filter((i) => i.mid === m.id); if (!sold.length) return m; const totalSold = sold.reduce((s, i) => i.loose ? s + (i.qty / (i.packQty || 10)) : s + i.qty, 0); var newMrp = m.mrp; var fullPack = sold.find(function(i) { return !i.loose && i.unitPrice !== m.mrp; }); if (fullPack) newMrp = fullPack.unitPrice; return { ...m, stock: Math.max(0, Math.round((m.stock - totalSold) * 10000) / 10000), mrp: newMrp }; });
     saveInv(updInv); addBill(bill); showBill(bill); setPt(""); setPc(""); setPa(""); setDoc(""); setDc(""); setItems([]); setPm("Cash"); setBillDisc(0); };
 
   return (
@@ -587,7 +832,7 @@ function BillPage({ inv, saveInv, addBill, mob, showBill }) {
               <td style={tds}>{i + 1}</td><td style={{ ...tds, fontWeight: 500 }}>{it.name}</td>
               <td style={{ ...tds, fontFamily: "monospace", fontSize: 10, color: "#7C3AED" }}>{it.uid || "-"}</td>
               <td style={tds}><button onClick={() => toggleLoose(i)} style={{ padding: "3px 8px", fontSize: 10, borderRadius: 4, border: "none", cursor: "pointer", fontWeight: 600, background: it.loose ? "#FDBA74" : "#E8E4DD", color: it.loose ? "#7C2D12" : "#555" }}>{it.loose ? "LOOSE" : "FULL"}</button></td>
-              <td style={tds}>Rs.{f2(it.unitPrice)}{it.loose && <span style={{ fontSize: 9, color: "#B45309" }}>/pc</span>}</td>
+              <td style={{ padding: "4px" }}><input type="number" min="0" step="0.01" value={it.unitPrice} onChange={(e) => setItems((p) => p.map((x, idx) => idx === i ? { ...x, unitPrice: Math.max(0, parseFloat(e.target.value) || 0) } : x))} style={{ ...smis, width: 70, textAlign: "right" }} />{it.loose && <span style={{ fontSize: 9, color: "#B45309" }}>/pc</span>}</td>
               <td style={{ padding: "4px" }}><input type="number" min="1" value={it.qty} onChange={(e) => setItems((p) => p.map((x, idx) => idx === i ? { ...x, qty: Math.max(1, parseInt(e.target.value) || 1) } : x))} style={{ ...smis, width: 55, textAlign: "center" }} /></td>
               <td style={{ padding: "4px" }}><input type="number" min="0" max="100" value={it.discount} onChange={(e) => setItems((p) => p.map((x, idx) => idx === i ? { ...x, discount: Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)) } : x))} style={{ ...smis, width: 55, textAlign: "center" }} /></td>
               <td style={tds}>{it.gstRate}%</td><td style={{ ...tds, fontWeight: 700, color: "#0D6B5B" }}>Rs.{f2(ca(it))}</td>
@@ -635,7 +880,7 @@ function SalesPage({ bills, mob }) {
 // ══════════════════════════════════════════════
 // STOCK PAGE
 // ══════════════════════════════════════════════
-function StockPage({ inv, isO, mob }) {
+function StockPage({ inv, saveInv, isO, mob }) {
   const [v, setV] = useState("all"); const [q, setQ] = useState("");
   const safeExp = (m) => { if (!m || !m.expiry) return 9999; try { return (new Date(m.expiry + "-01") - new Date()) / 864e5; } catch(e) { return 9999; } };
   const low = inv.filter((m) => m.stock > 0 && m.stock < 3), out = inv.filter((m) => m.stock <= 0);
@@ -657,7 +902,7 @@ function StockPage({ inv, isO, mob }) {
           const sc = { Out: "#DC2626", Low: "#D97706", Expd: "#991B1B", Exp: "#B45309", OK: "#059669" }[st];
           const sb = { Out: "#FEE2E2", Low: "#FEF3C7", Expd: "#FEE2E2", Exp: "#FEF9E7", OK: "#D1FAE5" }[st];
           return (<tr key={m.id}><td style={{ ...tds, fontWeight: 500, whiteSpace: "nowrap" }}>{m.name}</td><td style={{ ...tds, fontFamily: "monospace", fontSize: 11 }}>{m.batch}</td>
-            <td style={{ ...tds, color: isE ? "#DC2626" : isES ? "#B45309" : "inherit" }}>{m.expiry || "-"}</td><td style={{ ...tds, fontWeight: 600 }}>Rs.{f2(m.mrp)}</td>
+            <td style={{ ...tds, color: isE ? "#DC2626" : isES ? "#B45309" : "inherit" }}>{m.expiry || "-"}</td><td style={{ ...tds, fontWeight: 600 }}><input type="number" step="0.01" defaultValue={m.mrp} onBlur={function(e) { var v = parseFloat(e.target.value) || 0; if (v !== m.mrp) saveInv(inv.map(function(x) { return x.id === m.id ? Object.assign({}, x, { mrp: v }) : x; })); }} style={{ width: 65, border: "1px solid #eee", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "right", background: "#FAFAF7" }} /></td>
             {isO && <td style={{ ...tds, color: "#B45309" }}>Rs.{f2(m.ptr)}</td>}
             <td style={{ ...tds, fontWeight: 700, color: sc }}>{fStock(m.stock, m.packQty)}</td><td style={tds}><Tag bg={sb} fg={sc}>{st}</Tag></td></tr>); })}</tbody></table></div>
       {list.length === 0 && <div style={{ padding: 20, textAlign: "center", color: "#aaa", fontSize: 12 }}>No items</div>}</div></div>
@@ -667,8 +912,10 @@ function StockPage({ inv, isO, mob }) {
 // ══════════════════════════════════════════════
 // BILL HISTORY
 // ══════════════════════════════════════════════
-function HistPage({ bills, showBill, saveBills, askConfirm }) {
+function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv }) {
   const [editBill, setEditBill] = useState(null);
+  const [retBill, setRetBill] = useState(null);
+  const [retQtys, setRetQtys] = useState({});
 
   const saveEditedBill = () => {
     if (!editBill) return;
@@ -679,11 +926,91 @@ function HistPage({ bills, showBill, saveBills, askConfirm }) {
     const updated = { ...editBill, totalMRP: tMRP, totalDiscount: tDisc, netAmount: net, cgst: tGST / 2, sgst: tGST / 2, items: editBill.items.map((i) => ({ ...i, amount: (i.unitPrice || i.mrp) * i.qty * (1 - (i.discount || 0) / 100) })) };
     const next = bills.map((b) => b.billNo === updated.billNo ? updated : b);
     saveBills(next);
+    if (inv && saveInv) {
+      var changed = false;
+      var updInv = inv.map(function(m) {
+        var match = editBill.items.find(function(i) { return i.mid === m.id && !i.loose && (i.unitPrice || i.mrp) !== m.mrp; });
+        if (match) { changed = true; return Object.assign({}, m, { mrp: match.unitPrice || match.mrp }); }
+        return m;
+      });
+      if (changed) saveInv(updInv);
+    }
     setEditBill(null);
+  };
+
+  const startBillReturn = function(bill) {
+    setRetBill(bill);
+    var qtys = {};
+    bill.items.forEach(function(it, i) { qtys[i] = 0; });
+    setRetQtys(qtys);
+  };
+
+  const processBillReturn = function() {
+    if (!retBill) return;
+    var returnItems = [];
+    retBill.items.forEach(function(it, i) {
+      var rq = retQtys[i] || 0;
+      if (rq > 0) returnItems.push(Object.assign({}, it, { returnQty: rq }));
+    });
+    if (returnItems.length === 0) { alert("Set return quantities"); return; }
+
+    askConfirm("Return " + returnItems.length + " item(s) from bill " + retBill.billNo + "?", function() {
+      var refundAmt = returnItems.reduce(function(s, it) {
+        var price = (it.unitPrice || it.mrp) * (1 - (it.discount || 0) / 100);
+        return s + price * it.returnQty;
+      }, 0);
+      var ret = { id: mkId(), billNo: retBill.billNo, patient: retBill.patient, date: new Date().toISOString(), items: returnItems, refundAmount: Math.round(refundAmt * 100) / 100 };
+      // Save to Firebase
+      db.ref("billReturns/" + ret.id).set(ret);
+
+      // Add stock back to inventory
+      var updInv = inv.map(function(m) {
+        var retItem = returnItems.find(function(ri) { return ri.mid === m.id; });
+        if (!retItem) return m;
+        var addBack = retItem.loose ? retItem.returnQty / (retItem.packQty || 10) : retItem.returnQty;
+        return Object.assign({}, m, { stock: Math.round((m.stock + addBack) * 10000) / 10000 });
+      });
+      saveInv(updInv);
+      setRetBill(null);
+      setRetQtys({});
+    });
+  };
+
+  const returnAll = function() {
+    if (!retBill) return;
+    var qtys = {};
+    retBill.items.forEach(function(it, i) { qtys[i] = it.qty; });
+    setRetQtys(qtys);
   };
 
   return (
     <div><h2 style={hds}>Bills ({bills.length})</h2>
+
+      {retBill && (
+        <div style={{ ...cds, border: "2px solid #DC2626", marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div><b style={{ color: "#DC2626" }}>Return Bill: {retBill.billNo}</b><div style={{ fontSize: 12, color: "#888" }}>Patient: {retBill.patient} | Date: {fD(retBill.date)}</div></div>
+            <div style={{ display: "flex", gap: 6 }}><button onClick={returnAll} style={{ ...bts(false), padding: "5px 12px", fontSize: 11, color: "#DC2626" }}>Return All</button><button onClick={processBillReturn} style={{ border: "none", borderRadius: 7, padding: "9px 18px", fontWeight: 600, cursor: "pointer", fontSize: 13, background: "#DC2626", color: "#fff" }}>Process Return</button><button onClick={function() { setRetBill(null); }} style={bts(false)}>Cancel</button></div>
+          </div>
+          <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
+            {["Medicine","Type","Sold Qty","Return Qty","Price","Refund Amt"].map(function(h) { return <th key={h} style={ths}>{h}</th>; })}</tr></thead><tbody>
+            {retBill.items.map(function(it, i) {
+              var price = (it.unitPrice || it.mrp) * (1 - (it.discount || 0) / 100);
+              return (<tr key={i}>
+                <td style={{ ...tds, fontWeight: 500 }}>{it.name}</td>
+                <td style={tds}>{it.loose ? <Tag bg="#FEF3C7" fg="#92400E">Loose</Tag> : <Tag bg="#DBEAFE" fg="#1E40AF">Pack</Tag>}</td>
+                <td style={tds}>{it.qty}{it.loose ? " pcs" : ""}</td>
+                <td style={{ padding: "4px" }}><input type="number" min="0" max={it.qty} value={retQtys[i] || 0} onChange={function(e) { setRetQtys(function(p) { var n = Object.assign({}, p); n[i] = Math.min(it.qty, Math.max(0, parseInt(e.target.value) || 0)); return n; }); }} style={{ ...smis, width: 65, textAlign: "center" }} /></td>
+                <td style={tds}>Rs.{f2(price)}</td>
+                <td style={{ ...tds, fontWeight: 700, color: "#DC2626" }}>Rs.{f2(price * (retQtys[i] || 0))}</td>
+              </tr>);
+            })}</tbody></table></div>
+          <div style={{ textAlign: "right", marginTop: 8, fontSize: 14, fontWeight: 700, color: "#DC2626" }}>
+            Total Refund: Rs.{f2(retBill.items.reduce(function(s, it, i) { return s + (it.unitPrice || it.mrp) * (1 - (it.discount || 0) / 100) * (retQtys[i] || 0); }, 0))}
+          </div>
+        </div>
+      )}
+
       {editBill && (
         <div style={{ ...cds, border: "2px solid #2563EB", marginBottom: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
@@ -712,13 +1039,14 @@ function HistPage({ bills, showBill, saveBills, askConfirm }) {
         </div>
       )}
       {bills.length === 0 ? <div style={{ ...cds, padding: 30, textAlign: "center", color: "#aaa" }}>None</div> :
-      <div style={{ ...cds, padding: 0, overflow: "hidden" }}><div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: 500 }}><thead><tr>
-        {["Bill","Date","Patient","Amount","Pay","",""].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
+      <div style={{ ...cds, padding: 0, overflow: "hidden" }}><div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: 600 }}><thead><tr>
+        {["Bill","Date","Patient","Amount","Pay","","",""].map((h, i) => <th key={i} style={ths}>{h}</th>)}</tr></thead><tbody>
         {[...bills].reverse().map((b) => (<tr key={b.billNo}><td style={{ ...tds, fontFamily: "monospace", fontWeight: 600, color: "#0D6B5B" }}>{b.billNo}</td><td style={tds}>{fD(b.date)}</td>
           <td style={{ ...tds, fontWeight: 500 }}>{b.patient}</td><td style={{ ...tds, fontWeight: 700 }}>Rs.{f2(b.netAmount)}</td>
           <td style={tds}><Tag bg={b.paymentMode === "Cash" ? "#D1FAE5" : "#DBEAFE"} fg={b.paymentMode === "Cash" ? "#065F46" : "#1E40AF"}>{b.paymentMode}</Tag></td>
           <td style={tds}><button onClick={() => showBill(b, true)} style={{ ...bts(true), padding: "5px 12px", fontSize: 11 }}>View</button></td>
-          <td style={tds}><button onClick={() => setEditBill({ ...b, items: b.items.map((i) => ({ ...i })) })} style={{ ...bts(false), padding: "5px 12px", fontSize: 11 }}>Edit</button></td></tr>))}</tbody></table></div></div>}</div>
+          <td style={tds}><button onClick={() => setEditBill({ ...b, items: b.items.map((i) => ({ ...i })) })} style={{ ...bts(false), padding: "5px 12px", fontSize: 11 }}>Edit</button></td>
+          <td style={tds}><button onClick={function() { startBillReturn(b); }} style={{ border: "none", borderRadius: 7, padding: "5px 12px", fontWeight: 600, cursor: "pointer", fontSize: 11, background: "#DC2626", color: "#fff" }}>Return</button></td></tr>))}</tbody></table></div></div>}</div>
   );
 }
 
@@ -746,14 +1074,25 @@ function UsersPage({ sessions, mob }) {
 function BackupPage({ inv, bills, purch, saveAll, askConfirm }) {
   const [backupLink, setBackupLink] = useState(null);
   const [returns, setReturns] = useState([]);
+  const [billReturns, setBillReturns] = useState([]);
+  const [racks, setRacks] = useState(null);
   const fr = useRef(null);
-  useEffect(() => { fbListen("returns", (data) => { setReturns(data ? Object.values(data) : []); }); }, []);
-  const doBackup = () => { const data = JSON.stringify({ inv, bills, purch, returns, v: "fb2", date: new Date().toISOString() }); setBackupLink(URL.createObjectURL(new Blob([data], { type: "application/json" }))); };
+  useEffect(() => {
+    fbListen("returns", (data) => { setReturns(data ? Object.values(data) : []); });
+    fbListen("billReturns", (data) => { setBillReturns(data ? Object.values(data) : []); });
+    db.ref("racks").once("value").then(function(s) { setRacks(s.val()); });
+  }, []);
+  const doBackup = () => {
+    const data = JSON.stringify({ inv, bills, purch, returns, billReturns, racks, v: "fb3", date: new Date().toISOString() });
+    setBackupLink(URL.createObjectURL(new Blob([data], { type: "application/json" })));
+  };
   const doRestore = (e) => { const file = e.target.files[0]; if (!file) return; const r = new FileReader();
     r.onload = (ev) => { try { const d = JSON.parse(ev.target.result);
-      askConfirm("Restore from " + (d.date ? fD(d.date) : "unknown") + "?", () => {
+      askConfirm("Restore from " + (d.date ? fD(d.date) : "unknown") + "?\n" + (d.inv ? d.inv.length : 0) + " medicines, " + (d.bills ? d.bills.length : 0) + " bills, " + (d.purch ? d.purch.length : 0) + " purchases", () => {
         saveAll(d.inv || [], d.bills || [], d.purch || []);
-        if (d.returns && d.returns.length) { const ro = {}; d.returns.forEach((r) => { ro[r.id] = r; }); fbSet("returns", ro); } else { fbSet("returns", null); }
+        if (d.returns && d.returns.length) { var ro = {}; d.returns.forEach(function(r) { ro[r.id] = r; }); fbSet("returns", ro); } else { fbSet("returns", null); }
+        if (d.billReturns && d.billReturns.length) { var bro = {}; d.billReturns.forEach(function(r) { bro[r.id] = r; }); fbSet("billReturns", bro); } else { fbSet("billReturns", null); }
+        if (d.racks) { fbSet("racks", d.racks); } else { fbSet("racks", null); }
         alert("Restored!");
       });
     } catch(err) { alert("Invalid file"); } }; r.readAsText(file); e.target.value = ""; };
@@ -761,6 +1100,9 @@ function BackupPage({ inv, bills, purch, saveAll, askConfirm }) {
 
   return (
     <div><h2 style={hds}>Backup, Restore, Reset</h2>
+      <div style={{ ...cds, marginBottom: 14, fontSize: 12, color: "#555" }}>
+        <b>Data Summary:</b> {inv.length} medicines, {bills.length} bills, {purch.length} purchases, {returns.length} purchase returns, {billReturns.length} bill returns
+      </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
         <div style={{ ...cds, textAlign: "center", padding: 24 }}><div style={{ fontSize: 36, marginBottom: 8 }}>💾</div><b>Backup</b>
           <p style={{ fontSize: 12, color: "#888", margin: "8px 0" }}>Download all data</p>
@@ -939,11 +1281,13 @@ function RackPage({ inv, saveInv, mob }) {
             <div style={{ maxHeight: 400, overflowY: "auto" }}>
               {filteredMeds.length === 0 && <p style={{ color: "#aaa", fontSize: 12, textAlign: "center", padding: 16 }}>{medSearch ? "No matches" : "All assigned"}</p>}
               {filteredMeds.map(function(m) {
+                var isSel = selected.indexOf(m.id) >= 0;
                 return (
                   <div key={m.id} draggable onDragStart={function() { setDragMed(m.id); }} onClick={function() { toggleSelect(m.id); }}
-                    style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", marginBottom: 4, borderRadius: 8, cursor: "pointer", border: selected.indexOf(m.id) >= 0 ? "2px solid #0D6B5B" : "1px solid #eee", background: selected.indexOf(m.id) >= 0 ? "#D1FAE5" : "#FAFAF7", fontSize: 12.5 }}>
-                    <div><b>{m.name}</b><span style={{ color: "#888", marginLeft: 6 }}>{m.batch}</span></div>
-                    <span style={{ color: "#888", fontSize: 11 }}>Stock: {fStock(m.stock, m.packQty)}</span>
+                    style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", marginBottom: 4, borderRadius: 8, cursor: "pointer", border: isSel ? "2px solid #0D6B5B" : "1px solid #eee", background: isSel ? "#D1FAE5" : "#FAFAF7", fontSize: 12.5 }}>
+                    <div style={{ width: 18, height: 18, borderRadius: 4, border: isSel ? "2px solid #0D6B5B" : "2px solid #ccc", background: isSel ? "#0D6B5B" : "#fff", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, color: "#fff", fontSize: 12, fontWeight: 700 }}>{isSel ? "✓" : ""}</div>
+                    <div style={{ flex: 1 }}><b>{m.name}</b><span style={{ color: "#888", marginLeft: 6 }}>{m.batch}</span></div>
+                    <span style={{ color: "#888", fontSize: 11, whiteSpace: "nowrap" }}>Stock: {fStock(m.stock, m.packQty)}</span>
                   </div>
                 );
               })}
@@ -993,9 +1337,11 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm }) {
   const [retPurch, setRetPurch] = useState(null);
   const [retQtys, setRetQtys] = useState({});
   const [returns, setReturns] = useState([]);
+  const [billReturns, setBillReturns] = useState([]);
 
   useEffect(() => {
     fbListen("returns", (data) => { setReturns(data ? Object.values(data) : []); });
+    fbListen("billReturns", (data) => { setBillReturns(data ? Object.values(data) : []); });
   }, []);
 
   const saveReturns = (data) => {
@@ -1075,13 +1421,232 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm }) {
         </div>
       )}
 
-      {returns.length > 0 && <div style={cds}><b>Return History ({returns.length})</b>
+      {returns.length > 0 && <div style={cds}><b>Purchase Return History ({returns.length})</b>
         <div style={{ overflowX: "auto", marginTop: 10 }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
           {["Date","Supplier","Invoice","Items","Amount"].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
           {[...returns].reverse().map((r) => (<tr key={r.id}>
             <td style={tds}>{fD(r.date)}</td><td style={tds}>{r.supplier}</td><td style={tds}>{r.invoiceNo || "-"}</td>
             <td style={tds}>{r.items.length}</td><td style={{ ...tds, fontWeight: 700, color: "#DC2626" }}>Rs.{f2(r.totalAmount)}</td>
           </tr>))}</tbody></table></div></div>}
+
+      {billReturns.length > 0 && <div style={{ ...cds, borderLeft: "4px solid #DC2626" }}><b>Customer / Bill Return History ({billReturns.length})</b>
+        <div style={{ overflowX: "auto", marginTop: 10 }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
+          {["Date","Bill No","Patient","Items","Refund"].map(function(h) { return <th key={h} style={ths}>{h}</th>; })}</tr></thead><tbody>
+          {[...billReturns].reverse().map(function(r) { return (<tr key={r.id}>
+            <td style={tds}>{fD(r.date)}</td><td style={{ ...tds, fontFamily: "monospace", fontWeight: 600 }}>{r.billNo}</td><td style={tds}>{r.patient}</td>
+            <td style={tds}>{r.items.length} ({r.items.map(function(i) { return i.name.split(" ")[0] + "x" + i.returnQty; }).join(", ")})</td>
+            <td style={{ ...tds, fontWeight: 700, color: "#DC2626" }}>Rs.{f2(r.refundAmount)}</td>
+          </tr>); })}</tbody></table></div></div>}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════
+// MEDICINE WIKI (Hybrid: Local DB + Free APIs)
+// ══════════════════════════════════════════════
+// Indian Brand → Generic mapping for API fallback
+var BRAND_MAP = {"dolo":"paracetamol","crocin":"paracetamol","calpol":"paracetamol","pacimol":"paracetamol","metacin":"paracetamol","combiflam":"ibuprofen+paracetamol","sumo":"nimesulide+paracetamol","saridon":"propyphenazone+paracetamol+caffeine","disprin":"aspirin","ecosprin":"aspirin","brufen":"ibuprofen","voveran":"diclofenac","flexon":"ibuprofen+paracetamol","hifenac":"aceclofenac","zerodol":"aceclofenac","movexx":"aceclofenac+paracetamol","nicip":"nimesulide","meftal":"mefenamic acid","azee":"azithromycin","azicip":"azithromycin","zithromax":"azithromycin","mox":"amoxicillin","novamox":"amoxicillin","augmentin":"amoxicillin+clavulanic acid","clavam":"amoxicillin+clavulanic acid","moxikind":"amoxicillin+clavulanic acid","taxim":"cefixime","cefix":"cefixime","zifi":"cefixime","ciplox":"ciprofloxacin","cifran":"ciprofloxacin","levoflox":"levofloxacin","levomac":"levofloxacin","oflox":"ofloxacin","zanocin":"ofloxacin","norflox":"norfloxacin","norbactin":"norfloxacin","flagyl":"metronidazole","metrogyl":"metronidazole","sporidex":"cephalexin","phexin":"cephalexin","doxt":"doxycycline","pan":"pantoprazole","pantocid":"pantoprazole","pantop":"pantoprazole","omez":"omeprazole","razo":"rabeprazole","rablet":"rabeprazole","zinetac":"ranitidine","rantac":"ranitidine","domstal":"domperidone","vomistop":"domperidone","emeset":"ondansetron","ondem":"ondansetron","imodium":"loperamide","glycomet":"metformin","glucophage":"metformin","obimet":"metformin","amaryl":"glimepiride","januvia":"sitagliptin","thyronorm":"levothyroxine","eltroxin":"levothyroxine","thyrox":"levothyroxine","telma":"telmisartan","telmikind":"telmisartan","losacar":"losartan","repace":"losartan","envas":"enalapril","amlong":"amlodipine","stamlo":"amlodipine","norvasc":"amlodipine","betaloc":"metoprolol","met xl":"metoprolol","atorva":"atorvastatin","lipitor":"atorvastatin","tonact":"atorvastatin","rozavel":"rosuvastatin","crestor":"rosuvastatin","clopilet":"clopidogrel","plavix":"clopidogrel","lasix":"furosemide","warf":"warfarin","cetzine":"cetirizine","alerid":"cetirizine","zyrtec":"cetirizine","levocet":"levocetirizine","xyzal":"levocetirizine","allegra":"fexofenadine","montair":"montelukast","montek":"montelukast","singulair":"montelukast","asthalin":"salbutamol","ventolin":"salbutamol","budecort":"budesonide","deriphyllin":"theophylline+etofylline","alprax":"alprazolam","restyl":"alprazolam","clonotril":"clonazepam","rivotril":"clonazepam","nexito":"escitalopram","cipralex":"escitalopram","zosert":"sertraline","daxid":"sertraline","tryptomer":"amitriptyline","zolfresh":"zolpidem","eptoin":"phenytoin","dilantin":"phenytoin","tegretal":"carbamazepine","gabapin":"gabapentin","neurontin":"gabapentin","pregalin":"pregabalin","lyrica":"pregabalin","keppra":"levetiracetam","levera":"levetiracetam","levipil":"levetiracetam","omnacortil":"prednisolone","wysolone":"prednisolone","medrol":"methylprednisolone","zocon":"fluconazole","forcan":"fluconazole","candid":"clotrimazole","canesten":"clotrimazole","zovirax":"acyclovir","acivir":"acyclovir","zentel":"albendazole","bendex":"albendazole","becosules":"multivitamin b","supradyn":"multivitamin","zincovit":"multivitamin+zinc","shelcal":"calcium+vitamin d3","cipcal":"calcium+vitamin d3","limcee":"ascorbic acid","celin":"ascorbic acid","folvite":"folic acid","evion":"tocopherol","electral":"oral rehydration salts","ascoril":"ambroxol+levosalbutamol+guaifenesin","benadryl":"diphenhydramine","betadine":"povidone iodine","cipladine":"povidone iodine","dettol":"chloroxylenol","savlon":"chlorhexidine","omnigel":"diclofenac topical","volini":"diclofenac topical","moov":"diclofenac topical","neosporin":"neomycin+polymyxin b","soframycin":"framycetin","t-bact":"mupirocin","bactroban":"mupirocin","ring guard":"tolnaftate+menthol","itchguard":"clotrimazole+menthol","strepsils":"amylmetacresol","dulcoflex":"bisacodyl","cremaffin":"liquid paraffin+milk of magnesia","cyclopam":"dicyclomine","primolut":"norethisterone","regestrone":"norethisterone","uprise":"cholecalciferol","calcitas":"cholecalciferol","tayo":"cholecalciferol","d-rise":"cholecalciferol","pan d":"pantoprazole+domperidone","pantocid d":"pantoprazole+domperidone","sucrafil":"sucralfate","silverex":"silver sulfadiazine","permite":"permethrin","ivecop":"ivermectin","lantus":"insulin glargine","basalog":"insulin glargine","neo mercazole":"carbimazole","tobrex":"tobramycin","moxicip":"moxifloxacin","vigamox":"moxifloxacin","winolap":"olopatadine","patanol":"olopatadine"};
+
+function WikiPage({ inv, mob }) {
+  const [query, setQuery] = useState("");
+  const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [cache, setCache] = useState({});
+
+  var doSearch = function() {
+    var q = query.trim();
+    if (!q) return;
+    var ql = q.toLowerCase();
+
+    // Check cache
+    if (cache[ql]) { setResult(cache[ql]); return; }
+
+    // Step 1: Search local MED_DB
+    var found = MED_DB.filter(function(m) {
+      return m.n.toLowerCase().indexOf(ql) >= 0 || m.g.toLowerCase().indexOf(ql) >= 0 || m.c.toLowerCase().indexOf(ql) >= 0 ||
+        m.cp.some(function(c) { return c.s.toLowerCase().indexOf(ql) >= 0; }) ||
+        m.u.some(function(u) { return u.toLowerCase().indexOf(ql) >= 0; });
+    });
+
+    if (found.length > 0) {
+      var m = found[0];
+      var inInv = inv.filter(function(im) { return im.name.toLowerCase().indexOf(m.g.toLowerCase()) >= 0 || im.name.toLowerCase().indexOf(m.n.split(" ")[0].toLowerCase()) >= 0; });
+      var alts = (m.alt || []).map(function(a) {
+        return Object.assign({}, a, { inStock: inv.some(function(im) { return im.name.toLowerCase().indexOf(a.n.split(" ")[0].toLowerCase()) >= 0; }) });
+      });
+      var res = { source: "local", med: m, allMatches: found, inInventory: inInv, altsChecked: alts };
+      setResult(res);
+      setCache(function(p) { var n = Object.assign({}, p); n[ql] = res; return n; });
+      return;
+    }
+
+    // Step 2: Lookup brand mapping
+    var genericName = "";
+    var searchWords = ql.replace(/\d+\s*(mg|ml|gm|g|mcg|iu)\s*/gi, "").trim();
+    Object.keys(BRAND_MAP).forEach(function(brand) {
+      if (searchWords.indexOf(brand) >= 0 || brand.indexOf(searchWords) >= 0) genericName = BRAND_MAP[brand];
+    });
+
+    // Step 3: Free API lookup
+    setLoading(true);
+    var apiQuery = genericName || q;
+
+    // Try OpenFDA first (free, no key)
+    fetch("https://api.fda.gov/drug/label.json?search=openfda.generic_name:%22" + encodeURIComponent(apiQuery) + "%22&limit=1")
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.results && data.results.length > 0) {
+        var drug = data.results[0];
+        var gn = (drug.openfda && drug.openfda.generic_name) ? drug.openfda.generic_name[0] : apiQuery;
+        var bn = (drug.openfda && drug.openfda.brand_name) ? drug.openfda.brand_name[0] : q;
+        var cat = (drug.openfda && drug.openfda.pharm_class_epc) ? drug.openfda.pharm_class_epc[0] : "";
+        var moa = (drug.openfda && drug.openfda.pharm_class_moa) ? drug.openfda.pharm_class_moa : [];
+        var cs = (drug.openfda && drug.openfda.pharm_class_cs) ? drug.openfda.pharm_class_cs : [];
+        var uses = drug.indications_and_usage ? drug.indications_and_usage[0].split(/[.;]/).filter(function(s) { return s.trim().length > 5; }).slice(0, 6).map(function(s) { return s.trim().substring(0, 80); }) : [];
+        var se = drug.adverse_reactions ? drug.adverse_reactions[0].split(/[,;.]/).filter(function(s) { return s.trim().length > 3 && s.trim().length < 40; }).slice(0, 8).map(function(s) { return s.trim(); }) : [];
+        var warn = drug.warnings ? drug.warnings[0].split(/[.;]/).filter(function(s) { return s.trim().length > 10; }).slice(0, 5).map(function(s) { return s.trim().substring(0, 100); }) : [];
+        var dosage = drug.dosage_and_administration ? drug.dosage_and_administration[0].substring(0, 300) : "";
+        var rx = drug.openfda && drug.openfda.product_type ? drug.openfda.product_type[0] === "HUMAN PRESCRIPTION DRUG" : true;
+
+        var subCats = [];
+        if (cs.length) subCats = subCats.concat(cs);
+        if (moa.length) subCats = subCats.concat(moa);
+        if (cat) subCats.push(cat);
+
+        var inInv = inv.filter(function(im) { return im.name.toLowerCase().indexOf(gn.toLowerCase().split(" ")[0]) >= 0 || im.name.toLowerCase().indexOf(ql) >= 0; });
+
+        var apiRes = {
+          source: "api", med: {
+            n: bn, g: gn, c: cat || "Medicine",
+            sc: subCats.length > 0 ? subCats : [cat || "General"],
+            cp: [{ s: gn, st: "" }],
+            u: uses.length > 0 ? uses : ["See prescribing information"],
+            alt: [], se: se, d: dosage, rx: rx
+          }, allMatches: [], inInventory: inInv, altsChecked: []
+        };
+        setResult(apiRes);
+        setCache(function(p) { var n = Object.assign({}, p); n[ql] = apiRes; return n; });
+      } else {
+        // Not found in OpenFDA either
+        setResult({ source: "none", empty: true, q: q, generic: genericName });
+      }
+      setLoading(false);
+    })
+    .catch(function() {
+      setResult({ source: "none", empty: true, q: q, generic: genericName });
+      setLoading(false);
+    });
+  };
+
+  return (
+    <div><h2 style={hds}>Medicine Wiki</h2>
+      <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+        <input value={query} onChange={function(e) { setQuery(e.target.value); }} onKeyDown={function(e) { if (e.key === "Enter") doSearch(); }} placeholder="Search any medicine (brand name, generic name, or use...)" style={{ ...inps, flex: 1, fontSize: 16, padding: "14px 16px" }} />
+        <button onClick={doSearch} disabled={loading} style={{ ...bts(true), padding: "14px 24px", fontSize: 14, opacity: loading ? 0.6 : 1 }}>{loading ? "Searching..." : "Search"}</button>
+      </div>
+
+      {loading && <div style={{ ...cds, textAlign: "center", padding: 30 }}><div style={{ fontSize: 36, marginBottom: 8 }}>🔍</div><div style={{ color: "#888", fontSize: 14 }}>Searching free medical databases...</div></div>}
+
+      {result && result.empty && <div style={{ ...cds, textAlign: "center", padding: 30 }}>
+        <div style={{ fontSize: 36, marginBottom: 8, opacity: 0.4 }}>🔍</div>
+        <div style={{ fontSize: 14, color: "#888" }}>No results for "<b>{result.q}</b>"</div>
+        {result.generic && <div style={{ fontSize: 12, color: "#aaa", marginTop: 6 }}>Mapped to generic: <b>{result.generic}</b> but no data found</div>}
+        <div style={{ fontSize: 12, color: "#aaa", marginTop: 6 }}>Try searching by generic/salt name (e.g. "paracetamol" instead of brand name)</div>
+      </div>}
+
+      {result && result.med && <div>
+        <div style={{ ...cds, borderLeft: "4px solid #0D6B5B", background: "#F0FDF4" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+            <div>
+              <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "'Playfair Display',serif", color: "#0C2E24" }}>{result.med.n}</div>
+              <div style={{ fontSize: 13, color: "#888", marginTop: 4 }}>Generic: <b>{result.med.g}</b></div>
+            </div>
+            <Tag bg={result.source === "local" ? "#D1FAE5" : "#DBEAFE"} fg={result.source === "local" ? "#065F46" : "#1E40AF"}>{result.source === "local" ? "Local DB" : "OpenFDA"}</Tag>
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+            <Tag bg="#D1FAE5" fg="#065F46">{result.med.c}</Tag>
+            {result.med.rx ? <Tag bg="#FEE2E2" fg="#991B1B">Rx Required</Tag> : <Tag bg="#DBEAFE" fg="#1E40AF">OTC</Tag>}
+            {result.inInventory.length > 0 && <Tag bg="#D1FAE5" fg="#065F46">In Inventory</Tag>}
+          </div>
+        </div>
+
+        {result.med.sc && result.med.sc.length > 0 && <div style={cds}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}><span style={{ fontSize: 18 }}>🏷</span><b style={{ fontSize: 14 }}>Classification</b></div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }}>
+            {result.med.sc.map(function(cat, i) {
+              return React.createElement(React.Fragment, { key: i },
+                React.createElement("span", { style: { padding: "4px 12px", background: i === result.med.sc.length - 1 ? "#0D6B5B" : "#E8E4DD", color: i === result.med.sc.length - 1 ? "#fff" : "#555", borderRadius: 20, fontSize: 11, fontWeight: 600 } }, cat),
+                i < result.med.sc.length - 1 && React.createElement("span", { style: { color: "#ccc", fontSize: 14 } }, "\u2192")
+              );
+            })}
+          </div>
+        </div>}
+
+        <div style={cds}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}><span style={{ fontSize: 18 }}>🧪</span><b style={{ fontSize: 14 }}>Composition</b></div>
+          <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 8 }}>
+            {result.med.cp.map(function(c, i) { return <div key={i} style={{ padding: "8px 12px", background: "#FAFAF7", borderRadius: 8, border: "1px solid #eee", fontSize: 13 }}><b style={{ color: "#0D6B5B" }}>{c.s}</b>{c.st && <span style={{ color: "#888", marginLeft: 6 }}>{c.st}</span>}</div>; })}
+          </div>
+        </div>
+
+        <div style={cds}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}><span style={{ fontSize: 18 }}>💊</span><b style={{ fontSize: 14 }}>Uses</b></div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {result.med.u.map(function(u, i) { return <span key={i} style={{ padding: "4px 12px", background: "#EFF6FF", borderRadius: 20, fontSize: 12, color: "#1E40AF" }}>{u}</span>; })}
+          </div>
+        </div>
+
+        {result.altsChecked && result.altsChecked.length > 0 && <div style={cds}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}><span style={{ fontSize: 18 }}>🔄</span><b style={{ fontSize: 14 }}>Alternatives</b></div>
+          <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
+            {["Medicine","Manufacturer","Type","In Stock"].map(function(h) { return <th key={h} style={ths}>{h}</th>; })}</tr></thead><tbody>
+            {result.altsChecked.map(function(a, i) {
+              return <tr key={i}><td style={{ ...tds, fontWeight: 600 }}>{a.n}</td><td style={{ ...tds, fontSize: 12, color: "#888" }}>{a.m || "-"}</td>
+                <td style={tds}><Tag bg={a.e ? "#D1FAE5" : "#FEF3C7"} fg={a.e ? "#065F46" : "#92400E"}>{a.e ? "Same Salt" : "Similar"}</Tag></td>
+                <td style={tds}>{a.inStock ? <Tag bg="#D1FAE5" fg="#065F46">Yes</Tag> : <span style={{ color: "#aaa", fontSize: 12 }}>No</span>}</td></tr>;
+            })}</tbody></table></div>
+        </div>}
+
+        {result.med.se && result.med.se.length > 0 && <div style={cds}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}><span style={{ fontSize: 18 }}>⚠️</span><b style={{ fontSize: 14 }}>Side Effects</b></div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {result.med.se.map(function(s, i) { return <span key={i} style={{ padding: "4px 12px", background: "#FEF3C7", borderRadius: 20, fontSize: 12, color: "#92400E" }}>{s}</span>; })}
+          </div>
+        </div>}
+
+        {result.med.d && <div style={cds}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}><span style={{ fontSize: 18 }}>📋</span><b style={{ fontSize: 14 }}>Dosage</b></div>
+          <div style={{ fontSize: 13, color: "#555", lineHeight: 1.6 }}>{result.med.d.substring(0, 400)}</div>
+        </div>}
+
+        {result.inInventory && result.inInventory.length > 0 && <div style={{ ...cds, border: "2px solid #0D6B5B" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}><span style={{ fontSize: 18 }}>📦</span><b style={{ fontSize: 14 }}>Your Inventory</b></div>
+          <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
+            {["Name","Batch","Expiry","Stock","MRP"].map(function(h) { return <th key={h} style={ths}>{h}</th>; })}</tr></thead><tbody>
+            {result.inInventory.map(function(m) {
+              return <tr key={m.id}><td style={{ ...tds, fontWeight: 600 }}>{m.name}</td><td style={{ ...tds, fontFamily: "monospace", fontSize: 11 }}>{m.batch}</td><td style={tds}>{m.expiry || "-"}</td><td style={{ ...tds, fontWeight: 700, color: "#0D6B5B" }}>{fStock(m.stock, m.packQty)}</td><td style={tds}>Rs.{f2(m.mrp)}</td></tr>;
+            })}</tbody></table></div>
+        </div>}
+
+        {result.allMatches && result.allMatches.length > 1 && <div style={cds}>
+          <b style={{ fontSize: 13 }}>Other matches ({result.allMatches.length - 1})</b>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+            {result.allMatches.slice(1, 8).map(function(m, i) { return <button key={i} onClick={function() { setQuery(m.n); }} style={{ padding: "6px 14px", background: "#FAFAF7", border: "1px solid #ddd", borderRadius: 20, fontSize: 12, cursor: "pointer" }}>{m.n}</button>; })}
+          </div>
+        </div>}
+      </div>}
+
+      {!result && !loading && <div style={{ textAlign: "center", padding: 40, color: "#888" }}>
+        <div style={{ fontSize: 48, marginBottom: 12, opacity: 0.4 }}>📖</div>
+        <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>Search any medicine</div>
+        <div style={{ fontSize: 12, marginBottom: 4 }}>100+ Indian brands in local database (instant, offline)</div>
+        <div style={{ fontSize: 12, marginBottom: 16, color: "#aaa" }}>200+ brand-to-generic mappings + OpenFDA free API for everything else</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center" }}>
+          {["Dolo 650","Azithromycin","Crocin","Pan 40","Metformin","Cetirizine","Montair LC","Combiflam","Becosules","Omnigel","Betadine","Losartan","Gabapentin","Escitalopram"].map(function(s) {
+            return <button key={s} onClick={function() { setQuery(s); }} style={{ padding: "6px 14px", background: "#FAFAF7", border: "1px solid #ddd", borderRadius: 20, fontSize: 12, cursor: "pointer", color: "#555" }}>{s}</button>;
+          })}
+        </div>
+      </div>}
     </div>
   );
 }
@@ -1152,7 +1717,7 @@ function App() {
     const io = {}; i.forEach((m) => { io[m.id] = m; });
     const bo = {}; b.forEach((x) => { bo[x.billNo] = x; });
     const po = {}; p.forEach((x) => { po[x.id] = x; });
-    fbSet("inventory", io); fbSet("bills", bo); fbSet("purchases", po); fbSet("returns", null); fbSet("racks", null);
+    fbSet("inventory", io); fbSet("bills", bo); fbSet("purchases", po); fbSet("returns", null); fbSet("racks", null); fbSet("billReturns", null);
   }, []);
 
   const askConfirm = useCallback((msg, cb) => { setConfirmMsg(msg); confirmCb.current = cb; }, []);
@@ -1214,8 +1779,9 @@ function App() {
           {page === "bill" && <BillPage inv={inv} saveInv={saveInv} addBill={addBill} mob={mob} showBill={showBill} />}
           {page === "sales" && isO && <SalesPage bills={bills} mob={mob} />}
           {page === "profit" && isO && <ProfitPage bills={bills} inv={inv} mob={mob} />}
-          {page === "stock" && <StockPage inv={inv} isO={isO} mob={mob} />}
-          {page === "hist" && <HistPage bills={bills} showBill={showBill} saveBills={saveBills} askConfirm={askConfirm} />}
+          {page === "stock" && <StockPage inv={inv} saveInv={saveInv} isO={isO} mob={mob} />}
+          {page === "hist" && <HistPage bills={bills} showBill={showBill} saveBills={saveBills} askConfirm={askConfirm} inv={inv} saveInv={saveInv} />}
+          {page === "wiki" && <WikiPage inv={inv} mob={mob} />}
           {page === "users" && isO && <UsersPage sessions={sessions} mob={mob} />}
           {page === "backup" && isO && <BackupPage inv={inv} bills={bills} purch={purch} saveAll={saveAll} askConfirm={askConfirm} />}
         </div></div></div>
