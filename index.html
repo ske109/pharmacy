@@ -1026,7 +1026,7 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv }) {
               <tr key={i}>
                 <td style={{ ...tds, fontWeight: 500 }}>{it.name}</td>
                 <td style={{ padding: "4px" }}><input type="number" min="1" value={it.qty} onChange={(e) => { const items = [...editBill.items]; items[i] = { ...items[i], qty: Math.max(1, parseInt(e.target.value) || 1) }; setEditBill((p) => ({ ...p, items })); }} style={{ ...smis, width: 55 }} /></td>
-                <td style={tds}>Rs.{f2(it.unitPrice || it.mrp)}</td>
+                <td style={{ padding: "4px" }}><input type="number" min="0" step="0.01" value={it.unitPrice || it.mrp} onChange={(e) => { const items = [...editBill.items]; items[i] = { ...items[i], unitPrice: Math.max(0, parseFloat(e.target.value) || 0), mrp: Math.max(0, parseFloat(e.target.value) || 0) }; setEditBill((p) => ({ ...p, items })); }} style={{ ...smis, width: 70, textAlign: "right" }} /></td>
                 <td style={{ padding: "4px" }}><input type="number" min="0" max="100" value={it.discount || 0} onChange={(e) => { const items = [...editBill.items]; items[i] = { ...items[i], discount: parseFloat(e.target.value) || 0 }; setEditBill((p) => ({ ...p, items })); }} style={{ ...smis, width: 55 }} /></td>
                 <td style={tds}>{it.gstRate}%</td>
                 <td style={{ ...tds, fontWeight: 700 }}>Rs.{f2((it.unitPrice || it.mrp) * it.qty * (1 - (it.discount || 0) / 100))}</td>
