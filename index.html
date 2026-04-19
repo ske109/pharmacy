@@ -1858,8 +1858,34 @@ function App() {
   }, [saveInv, savePurch]);
 
   const deletePurchase = useCallback((id) => {
+    // Find the purchase to get its items before deleting
+    var delPurch = purch.find(function(p) { return p.id === id; });
     setPurch((p) => { const next = p.filter((x) => x.id !== id); savePurch(next); return next; });
-  }, [savePurch]);
+    // Reverse inventory: subtract stock added by this purchase
+    if (delPurch && delPurch.items) {
+      setInv(function(prevInv) {
+        var next = prevInv.map(function(m) { return Object.assign({}, m); });
+        delPurch.items.forEach(function(it) {
+          var ex = -1;
+          for (var i = 0; i < next.length; i++) {
+            if (next[i].name.toLowerCase() === it.name.toLowerCase() && next[i].batch === (it.batch || "")) { ex = i; break; }
+          }
+          if (ex >= 0) {
+            var addedQty = (it.qty || 0) + (it.freeQty || 0);
+            var newStock = next[ex].stock - addedQty;
+            if (newStock <= 0) {
+              // Remove item entirely if stock goes to 0 or below
+              next.splice(ex, 1);
+            } else {
+              next[ex] = Object.assign({}, next[ex], { stock: newStock });
+            }
+          }
+        });
+        saveInv(next);
+        return next;
+      });
+    }
+  }, [purch, saveInv, savePurch]);
 
   if (loading) return (<div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#EFECE5", fontFamily: "'Playfair Display',serif", fontSize: 18, color: "#0C2E24" }}>Loading...</div>);
   if (!user) return (<Login onLogin={login} />);
