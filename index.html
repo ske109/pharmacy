@@ -460,6 +460,48 @@ function Tag({ bg, fg, children }) { return <span style={{ background: bg, color
 function Stat({ icon, label, value, sub, color }) { return (<div style={{ ...cds, borderLeft: "4px solid " + color, padding: "14px 16px" }}><div style={{ fontSize: 22 }}>{icon}</div><div style={{ fontSize: 18, fontWeight: 800, fontFamily: "'Playfair Display',serif" }}>{value}</div><div style={{ fontSize: 11, color: "#888" }}>{label}</div>{sub && <div style={{ fontSize: 10, color: color, marginTop: 3, fontWeight: 600 }}>{sub}</div>}</div>); }
 
 // ══════════════════════════════════════════════
+// COLUMN VISIBILITY TOGGLE
+// ══════════════════════════════════════════════
+function ColToggle({ cols, visible, setVisible }) {
+  const [open, setOpen] = React.useState(false);
+  const ref = React.useRef(null);
+  React.useEffect(() => {
+    if (!open) return;
+    const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [open]);
+  const shown = cols.filter((c) => visible[c.key] !== false).length;
+  return (
+    <div ref={ref} style={{ position: "relative", display: "inline-block" }}>
+      <button onClick={() => setOpen((o) => !o)} style={{ ...bts(false), padding: "7px 13px", fontSize: 12, display: "flex", alignItems: "center", gap: 5, border: open ? "1px solid #0D6B5B" : "1px solid #D4D0C8" }}>
+        <span>⊞</span> Columns <span style={{ background: "#0D6B5B", color: "#fff", borderRadius: 10, padding: "0 6px", fontSize: 10, fontWeight: 700 }}>{shown}</span>
+      </button>
+      {open && (
+        <div style={{ position: "absolute", top: "110%", right: 0, background: "#fff", border: "1px solid #E5E2DB", borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,.12)", zIndex: 200, minWidth: 180, padding: "8px 0" }}>
+          <div style={{ padding: "4px 14px 8px", fontSize: 10, color: "#888", fontWeight: 700, textTransform: "uppercase", borderBottom: "1px solid #f0ede8", marginBottom: 4 }}>Show / Hide Columns</div>
+          {cols.map((c) => {
+            const on = visible[c.key] !== false;
+            return (
+              <label key={c.key} style={{ display: "flex", alignItems: "center", gap: 9, padding: "6px 14px", cursor: "pointer", fontSize: 13, userSelect: "none" }}
+                onMouseEnter={(e) => e.currentTarget.style.background = "#F5F3FF"}
+                onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}>
+                <span style={{ width: 16, height: 16, borderRadius: 4, border: on ? "none" : "2px solid #ccc", background: on ? "#0D6B5B" : "#fff", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 11, color: "#fff", fontWeight: 700 }}>{on ? "✓" : ""}</span>
+                <input type="checkbox" checked={on} onChange={() => setVisible((p) => ({ ...p, [c.key]: !on }))} style={{ display: "none" }} />
+                {c.label}
+              </label>
+            );
+          })}
+          <div style={{ borderTop: "1px solid #f0ede8", margin: "6px 0 2px", padding: "4px 14px" }}>
+            <button onClick={() => setVisible(Object.fromEntries(cols.map((c) => [c.key, true])))} style={{ fontSize: 11, color: "#0D6B5B", background: "none", border: "none", cursor: "pointer", fontWeight: 600 }}>Show all</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════
 // CONFIRM MODAL
 // ══════════════════════════════════════════════
 function ConfirmModal({ msg, onYes, onNo }) {
@@ -700,6 +742,13 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm }) {
   const confirmP = () => { if (!rev || !rev.items.length) return; addPurchase(rev); setRev(null); };
   const delPurch = (id) => { askConfirm("Delete this purchase?", () => deletePurchase(id)); };
 
+  const PURCH_COLS = [
+    { key: "invoice", label: "Invoice" }, { key: "supplier", label: "Supplier" }, { key: "date", label: "Date" },
+    { key: "items", label: "Items" }, { key: "amt", label: "Amount" }, { key: "src", label: "Source" },
+  ];
+  const [purchColVis, setPurchColVis] = useState({ invoice: true, supplier: true, date: true, items: true, amt: true, src: true });
+  const shP = (k) => purchColVis[k] !== false;
+
   return (
     <div><h2 style={hds}>Purchase Entry</h2>
       {rev ? (<div style={{ ...cds, border: "2px solid #0D6B5B" }}>
@@ -738,14 +787,32 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm }) {
             <button onClick={() => setMf((p) => ({ ...p, items: [...p.items, { ...empty }] }))} style={bts(false)}>+ Row</button>
             <button onClick={() => { if (!mf.sup || (mf.items[0] && !mf.items[0].name)) { alert("Fill supplier and name"); return; } const items = mf.items.filter((i) => i.name).map((i) => ({ ...i, amount: purchCalcAmt(i) })); setRev({ supplier: mf.sup, invoiceNo: mf.inv, date: mf.date, items, srcType: "manual", srcFile: "" }); }} style={bts(true)}>Preview</button></div></div>}
       </div>)}
-      <div style={cds}><b>Purchase History ({purch.length})</b>
+      <div style={cds}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <b>Purchase History ({purch.length})</b>
+          <ColToggle cols={PURCH_COLS} visible={purchColVis} setVisible={setPurchColVis} />
+        </div>
         {purch.length === 0 ? <p style={{ color: "#aaa", fontSize: 12, textAlign: "center", padding: 16 }}>None</p> :
-        <div style={{ overflowX: "auto", marginTop: 10 }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: 500 }}><thead><tr>
-          {["Invoice","Supplier","Date","Items","Amt","Src",""].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
-          {[...purch].reverse().map((p) => (<tr key={p.id}><td style={{ ...tds, fontWeight: 600 }}>{p.invoiceNo || "-"}</td><td style={tds}>{p.supplier}</td><td style={tds}>{fD(p.date)}</td>
-            <td style={tds}>{p.items.length}</td><td style={{ ...tds, fontWeight: 600 }}>Rs.{f2(p.netAmount)}</td>
-            <td style={tds}><Tag bg={p.sourceType === "csv" ? "#DBEAFE" : p.sourceType === "image" ? "#FEE2E2" : "#F3E8FF"} fg={p.sourceType === "csv" ? "#1E40AF" : p.sourceType === "image" ? "#991B1B" : "#6B21A8"}>{(p.sourceType || "?").toUpperCase()}</Tag></td>
-            <td style={tds}><button onClick={() => delPurch(p.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#DC2626", fontSize: 11, fontWeight: 600 }}>Delete</button></td></tr>))}</tbody></table></div>}</div></div>
+        <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: 200 }}><thead><tr>
+          {shP("invoice") && <th style={ths}>Invoice</th>}
+          {shP("supplier") && <th style={ths}>Supplier</th>}
+          {shP("date") && <th style={ths}>Date</th>}
+          {shP("items") && <th style={ths}>Items</th>}
+          {shP("amt") && <th style={ths}>Amount</th>}
+          {shP("src") && <th style={ths}>Src</th>}
+          <th style={ths}></th>
+        </tr></thead><tbody>
+          {[...purch].reverse().map((p) => (<tr key={p.id}>
+            {shP("invoice") && <td style={{ ...tds, fontWeight: 600 }}>{p.invoiceNo || "-"}</td>}
+            {shP("supplier") && <td style={tds}>{p.supplier}</td>}
+            {shP("date") && <td style={tds}>{fD(p.date)}</td>}
+            {shP("items") && <td style={tds}>{p.items.length}</td>}
+            {shP("amt") && <td style={{ ...tds, fontWeight: 600 }}>Rs.{f2(p.netAmount)}</td>}
+            {shP("src") && <td style={tds}><Tag bg={p.sourceType === "csv" ? "#DBEAFE" : p.sourceType === "image" ? "#FEE2E2" : "#F3E8FF"} fg={p.sourceType === "csv" ? "#1E40AF" : p.sourceType === "image" ? "#991B1B" : "#6B21A8"}>{(p.sourceType || "?").toUpperCase()}</Tag></td>}
+            <td style={tds}><button onClick={() => delPurch(p.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#DC2626", fontSize: 11, fontWeight: 600 }}>Delete</button></td>
+          </tr>))}</tbody></table></div>}
+      </div>
+    </div>
   );
 }
 
@@ -758,6 +825,16 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm }) {
   const bulkRef = useRef(null);
   const blank = { name: "", manufacturer: "", hsn: "300490", batch: "", expiry: "", pack: "", mrp: 0, ptr: 0, stock: 0, gstRate: 5, rack: "", distributor: "", packQty: 0 };
   const [fm, setFm] = useState(blank);
+
+  const INV_COLS = [
+    { key: "uid", label: "UID" }, { key: "name", label: "Name" }, { key: "batch", label: "Batch" },
+    { key: "exp", label: "Expiry" }, { key: "mrp", label: "MRP" }, { key: "ptr", label: "PTR" },
+    { key: "stock", label: "Stock" }, { key: "rack", label: "Rack" },
+    { key: "purchaseBill", label: "Purchase Bill" }, { key: "distributor", label: "Distributor" },
+    { key: "purchaseDate", label: "Pur. Date" }, { key: "src", label: "Src" },
+  ];
+  const [colVis, setColVis] = useState({ uid: true, name: true, batch: true, exp: true, mrp: true, ptr: true, stock: true, rack: true, purchaseBill: true, distributor: true, purchaseDate: true, src: true });
+  const sh = (k) => colVis[k] !== false;
   const list = inv.filter((m) => { const s = q.toLowerCase(); return m.name.toLowerCase().includes(s) || m.batch.toLowerCase().includes(s) || (m.distributor || "").toLowerCase().includes(s) || (m.uid || "").toLowerCase().includes(s); });
 
   const prepareTemplate = () => {
@@ -792,7 +869,8 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm }) {
   return (
     <div><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
       <h2 style={{ ...hds, marginBottom: 0 }}>Inventory ({inv.length})</h2>
-      <div style={{ display: "flex", gap: 6 }}>
+      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+        <ColToggle cols={INV_COLS.filter((c) => c.key !== "ptr" || isO)} visible={colVis} setVisible={setColVis} />
         <button onClick={() => setShowBulk(!showBulk)} style={{ ...bts(false), fontSize: 12 }}>CSV Import</button>
         <button onClick={() => { setFm(blank); setEd(null); setSf(!sf); }} style={bts(true)}>+ Add</button></div></div>
       {showBulk && <div style={{ ...cds, border: "2px solid #2563EB" }}>
@@ -809,20 +887,34 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm }) {
           {[["name","Name*"],["manufacturer","Mfg"],["batch","Batch*"],["expiry","Expiry"],["pack","Pack"],["rack","Rack"],["distributor","Distributor"],["hsn","HSN"]].map(([k, l]) => <div key={k}><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>{l}</label><input value={fm[k] || ""} onChange={(e) => setFm((f) => ({ ...f, [k]: e.target.value }))} style={inps} /></div>)}
           {[["mrp","MRP"],["ptr","PTR"],["stock","Stock"],["gstRate","GST%"],["packQty","Pack Qty"]].map(([k, l]) => <div key={k}><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>{l}</label><input type="number" value={fm[k] || 0} onChange={(e) => setFm((f) => ({ ...f, [k]: Number(e.target.value) }))} style={inps} /></div>)}
         </div><div style={{ display: "flex", gap: 8, marginTop: 12 }}><button onClick={doSave} style={bts(true)}>Save</button><button onClick={() => setSf(false)} style={bts(false)}>Cancel</button></div></div>}
-      <div style={{ ...cds, padding: 0, overflow: "hidden" }}><div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1050 }}><thead><tr>
-        {["UID","Name","Batch","Exp","MRP",...(isO ? ["PTR"] : []),"Stock","Rack","Purchase Bill","Distributor","Pur. Date","Src",""].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
+      <div style={{ ...cds, padding: 0, overflow: "hidden" }}><div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: 400 }}><thead><tr>
+        {sh("uid") && <th style={ths}>UID</th>}
+        {sh("name") && <th style={ths}>Name</th>}
+        {sh("batch") && <th style={ths}>Batch</th>}
+        {sh("exp") && <th style={ths}>Exp</th>}
+        {sh("mrp") && <th style={ths}>MRP</th>}
+        {isO && sh("ptr") && <th style={ths}>PTR</th>}
+        {sh("stock") && <th style={ths}>Stock</th>}
+        {sh("rack") && <th style={ths}>Rack</th>}
+        {sh("purchaseBill") && <th style={ths}>Purchase Bill</th>}
+        {sh("distributor") && <th style={ths}>Distributor</th>}
+        {sh("purchaseDate") && <th style={ths}>Pur. Date</th>}
+        {sh("src") && <th style={ths}>Src</th>}
+        <th style={ths}></th>
+      </tr></thead><tbody>
         {list.map((m) => (<tr key={m.id}>
-          <td style={{ ...tds, fontFamily: "monospace", fontSize: 10, color: "#7C3AED", fontWeight: 600 }}>{m.uid || "-"}</td>
-          <td style={{ ...tds, fontWeight: 500, whiteSpace: "nowrap" }}>{m.name}</td>
-          <td style={{ ...tds, fontFamily: "monospace", fontSize: 11 }}>{m.batch}</td><td style={tds}>{m.expiry || "-"}</td>
-          <td style={{ ...tds, fontWeight: 600 }}><input type="number" step="0.01" defaultValue={m.mrp} onBlur={function(e) { var v = parseFloat(e.target.value) || 0; if (v !== m.mrp) saveInv(inv.map(function(x) { return x.id === m.id ? Object.assign({}, x, { mrp: v }) : x; })); }} style={{ width: 65, border: "1px solid #eee", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "right", background: "#FAFAF7" }} /></td>
-          {isO && <td style={{ ...tds, color: "#B45309" }}>Rs.{f2(m.ptr)}</td>}
-          <td style={tds}><span style={{ fontWeight: 700, color: m.stock < 3 ? "#DC2626" : m.stock < 5 ? "#D97706" : "#065F46" }}>{fStock(m.stock, m.packQty)}</span></td>
-          <td style={tds}>{m.rack || "-"}</td>
-          <td style={{ ...tds, fontFamily: "monospace", fontSize: 11, color: "#0D6B5B", fontWeight: 600 }}>{m.purchaseBillNo || "-"}</td>
-          <td style={{ ...tds, fontSize: 11, color: "#555" }}>{m.purchaseDistributor || m.distributor || "-"}</td>
-          <td style={{ ...tds, fontSize: 11, color: "#888" }}>{m.purchaseDate ? fD(m.purchaseDate) : "-"}</td>
-          <td style={tds}><Tag bg={m.addedFrom === "csv" ? "#DBEAFE" : m.addedFrom === "image" ? "#FEE2E2" : "#E8E4DD"} fg={m.addedFrom === "csv" ? "#1E40AF" : m.addedFrom === "image" ? "#991B1B" : "#555"}>{(m.addedFrom || "M").slice(0, 3).toUpperCase()}</Tag></td>
+          {sh("uid") && <td style={{ ...tds, fontFamily: "monospace", fontSize: 10, color: "#7C3AED", fontWeight: 600 }}>{m.uid || "-"}</td>}
+          {sh("name") && <td style={{ ...tds, fontWeight: 500, whiteSpace: "nowrap" }}>{m.name}</td>}
+          {sh("batch") && <td style={{ ...tds, fontFamily: "monospace", fontSize: 11 }}>{m.batch}</td>}
+          {sh("exp") && <td style={tds}>{m.expiry || "-"}</td>}
+          {sh("mrp") && <td style={{ ...tds, fontWeight: 600 }}><input type="number" step="0.01" defaultValue={m.mrp} onBlur={function(e) { var v = parseFloat(e.target.value) || 0; if (v !== m.mrp) saveInv(inv.map(function(x) { return x.id === m.id ? Object.assign({}, x, { mrp: v }) : x; })); }} style={{ width: 65, border: "1px solid #eee", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "right", background: "#FAFAF7" }} /></td>}
+          {isO && sh("ptr") && <td style={{ ...tds, color: "#B45309" }}>Rs.{f2(m.ptr)}</td>}
+          {sh("stock") && <td style={tds}><span style={{ fontWeight: 700, color: m.stock < 3 ? "#DC2626" : m.stock < 5 ? "#D97706" : "#065F46" }}>{fStock(m.stock, m.packQty)}</span></td>}
+          {sh("rack") && <td style={tds}>{m.rack || "-"}</td>}
+          {sh("purchaseBill") && <td style={{ ...tds, fontFamily: "monospace", fontSize: 11, color: "#0D6B5B", fontWeight: 600 }}>{m.purchaseBillNo || "-"}</td>}
+          {sh("distributor") && <td style={{ ...tds, fontSize: 11, color: "#555" }}>{m.purchaseDistributor || m.distributor || "-"}</td>}
+          {sh("purchaseDate") && <td style={{ ...tds, fontSize: 11, color: "#888" }}>{m.purchaseDate ? fD(m.purchaseDate) : "-"}</td>}
+          {sh("src") && <td style={tds}><Tag bg={m.addedFrom === "csv" ? "#DBEAFE" : m.addedFrom === "image" ? "#FEE2E2" : "#E8E4DD"} fg={m.addedFrom === "csv" ? "#1E40AF" : m.addedFrom === "image" ? "#991B1B" : "#555"}>{(m.addedFrom || "M").slice(0, 3).toUpperCase()}</Tag></td>}
           <td style={{ ...tds, whiteSpace: "nowrap" }}>
             <button onClick={() => { setFm(m); setEd(m.id); setSf(true); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#2563EB", fontSize: 11 }}>Edit</button>
             {isO && <button onClick={() => doDelete(m.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#DC2626", fontSize: 11, marginLeft: 4 }}>Del</button>}</td></tr>))}</tbody></table></div>
@@ -996,23 +1088,46 @@ function StockPage({ inv, saveInv, isO, mob }) {
   const expD = inv.filter((m) => safeExp(m) <= 0 && m.expiry);
   let list = v === "low" ? low : v === "out" ? out : v === "exp" ? expS : v === "expd" ? expD : inv;
   if (q) list = list.filter((m) => m.name.toLowerCase().includes(q.toLowerCase()));
+
+  const STOCK_COLS = [
+    { key: "name", label: "Medicine" }, { key: "batch", label: "Batch" }, { key: "exp", label: "Expiry" },
+    { key: "mrp", label: "MRP" }, { key: "ptr", label: "PTR" }, { key: "stock", label: "Stock" }, { key: "status", label: "Status" },
+  ];
+  const [colVis, setColVis] = useState({ name: true, batch: true, exp: true, mrp: true, ptr: true, stock: true, status: true });
+  const sh = (k) => colVis[k] !== false;
+
   return (
-    <div><h2 style={hds}>Stock</h2>
+    <div><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
+      <h2 style={{ ...hds, marginBottom: 0 }}>Stock</h2>
+      <ColToggle cols={STOCK_COLS.filter((c) => c.key !== "ptr" || isO)} visible={colVis} setVisible={setColVis} />
+    </div>
       <div style={{ display: "grid", gridTemplateColumns: mob ? "repeat(3,1fr)" : "repeat(5,1fr)", gap: 10, marginBottom: 16 }}>
         {[{ id: "all", l: "All", n: inv.length, i: "📦", c: "#0D6B5B" }, { id: "low", l: "Low", n: low.length, i: "⚠️", c: "#D97706" }, { id: "out", l: "Out", n: out.length, i: "🚫", c: "#DC2626" }, { id: "exp", l: "Expiring", n: expS.length, i: "⏰", c: "#B45309" }, { id: "expd", l: "Expired", n: expD.length, i: "❌", c: "#991B1B" }].map((s) =>
           <button key={s.id} onClick={() => setV(s.id)} style={{ background: v === s.id ? "#FAFAF7" : "#fff", borderRadius: 10, padding: 12, border: v === s.id ? "2px solid " + s.c : "1px solid #eee", cursor: "pointer", textAlign: "left", borderLeft: "4px solid " + s.c, boxShadow: "0 1px 3px rgba(0,0,0,.04)" }}>
             <div style={{ fontSize: 18 }}>{s.i}</div><div style={{ fontSize: 18, fontWeight: 800, fontFamily: "'Playfair Display',serif" }}>{s.n}</div><div style={{ fontSize: 10, color: "#888" }}>{s.l}</div></button>)}</div>
       <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search..." style={{ ...inps, marginBottom: 14 }} />
-      <div style={{ ...cds, padding: 0, overflow: "hidden" }}><div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: 500 }}><thead><tr>
-        {["Medicine","Batch","Exp","MRP",...(isO ? ["PTR"] : []),"Stock","Status"].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
+      <div style={{ ...cds, padding: 0, overflow: "hidden" }}><div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: 300 }}><thead><tr>
+        {sh("name") && <th style={ths}>Medicine</th>}
+        {sh("batch") && <th style={ths}>Batch</th>}
+        {sh("exp") && <th style={ths}>Exp</th>}
+        {sh("mrp") && <th style={ths}>MRP</th>}
+        {isO && sh("ptr") && <th style={ths}>PTR</th>}
+        {sh("stock") && <th style={ths}>Stock</th>}
+        {sh("status") && <th style={ths}>Status</th>}
+      </tr></thead><tbody>
         {list.map((m) => { const d = safeExp(m); const isE = d <= 0 && m.expiry; const isES = d > 0 && d < 90;
           const st = m.stock <= 0 ? "Out" : m.stock < 3 ? "Low" : isE ? "Expd" : isES ? "Exp" : "OK";
           const sc = { Out: "#DC2626", Low: "#D97706", Expd: "#991B1B", Exp: "#B45309", OK: "#059669" }[st];
           const sb = { Out: "#FEE2E2", Low: "#FEF3C7", Expd: "#FEE2E2", Exp: "#FEF9E7", OK: "#D1FAE5" }[st];
-          return (<tr key={m.id}><td style={{ ...tds, fontWeight: 500, whiteSpace: "nowrap" }}>{m.name}</td><td style={{ ...tds, fontFamily: "monospace", fontSize: 11 }}>{m.batch}</td>
-            <td style={{ ...tds, color: isE ? "#DC2626" : isES ? "#B45309" : "inherit" }}>{m.expiry || "-"}</td><td style={{ ...tds, fontWeight: 600 }}><input type="number" step="0.01" defaultValue={m.mrp} onBlur={function(e) { var v = parseFloat(e.target.value) || 0; if (v !== m.mrp) saveInv(inv.map(function(x) { return x.id === m.id ? Object.assign({}, x, { mrp: v }) : x; })); }} style={{ width: 65, border: "1px solid #eee", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "right", background: "#FAFAF7" }} /></td>
-            {isO && <td style={{ ...tds, color: "#B45309" }}>Rs.{f2(m.ptr)}</td>}
-            <td style={{ ...tds, fontWeight: 700, color: sc }}>{fStock(m.stock, m.packQty)}</td><td style={tds}><Tag bg={sb} fg={sc}>{st}</Tag></td></tr>); })}</tbody></table></div>
+          return (<tr key={m.id}>
+            {sh("name") && <td style={{ ...tds, fontWeight: 500, whiteSpace: "nowrap" }}>{m.name}</td>}
+            {sh("batch") && <td style={{ ...tds, fontFamily: "monospace", fontSize: 11 }}>{m.batch}</td>}
+            {sh("exp") && <td style={{ ...tds, color: isE ? "#DC2626" : isES ? "#B45309" : "inherit" }}>{m.expiry || "-"}</td>}
+            {sh("mrp") && <td style={{ ...tds, fontWeight: 600 }}><input type="number" step="0.01" defaultValue={m.mrp} onBlur={function(e) { var v = parseFloat(e.target.value) || 0; if (v !== m.mrp) saveInv(inv.map(function(x) { return x.id === m.id ? Object.assign({}, x, { mrp: v }) : x; })); }} style={{ width: 65, border: "1px solid #eee", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "right", background: "#FAFAF7" }} /></td>}
+            {isO && sh("ptr") && <td style={{ ...tds, color: "#B45309" }}>Rs.{f2(m.ptr)}</td>}
+            {sh("stock") && <td style={{ ...tds, fontWeight: 700, color: sc }}>{fStock(m.stock, m.packQty)}</td>}
+            {sh("status") && <td style={tds}><Tag bg={sb} fg={sc}>{st}</Tag></td>}
+          </tr>); })}</tbody></table></div>
       {list.length === 0 && <div style={{ padding: 20, textAlign: "center", color: "#aaa", fontSize: 12 }}>No items</div>}</div></div>
   );
 }
@@ -1158,6 +1273,13 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, askConfi
   const [expanded, setExpanded] = React.useState(null);
   const [q, setQ] = React.useState("");
 
+  const BILL_COLS = [
+    { key: "bill", label: "Bill No" }, { key: "date", label: "Date" }, { key: "patient", label: "Patient" },
+    { key: "amount", label: "Amount" }, { key: "pay", label: "Payment" },
+  ];
+  const [colVis, setColVis] = React.useState({ bill: true, date: true, patient: true, amount: true, pay: true });
+  const sh = (k) => colVis[k] !== false;
+
   const toggleSort = (col) => {
     if (sortCol === col) setSortDir((d) => d === "asc" ? "desc" : "asc");
     else { setSortCol(col); setSortDir("desc"); }
@@ -1165,11 +1287,11 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, askConfi
 
   const SortTh = ({ col, label }) => {
     const active = sortCol === col;
-    return (
+    return sh(col) ? (
       <th onClick={() => toggleSort(col)} style={{ ...ths, cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}>
         {label} {active ? (sortDir === "asc" ? "▲" : "▼") : <span style={{ opacity: 0.3 }}>⇅</span>}
       </th>
-    );
+    ) : null;
   };
 
   let filtered = q ? bills.filter((b) => b.billNo.toLowerCase().includes(q.toLowerCase()) || b.patient.toLowerCase().includes(q.toLowerCase()) || (b.paymentMode || "").toLowerCase().includes(q.toLowerCase())) : bills;
@@ -1187,12 +1309,17 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, askConfi
     return 0;
   });
 
+  const visibleColCount = BILL_COLS.filter((c) => sh(c.key)).length + 2; // +2 for items-expand + actions
+
   return (
     <div>
-      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search bill no, patient, payment..." style={{ ...inps, marginBottom: 12 }} />
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search bill no, patient, payment..." style={{ ...inps, flex: 1, minWidth: 180 }} />
+        <ColToggle cols={BILL_COLS} visible={colVis} setVisible={setColVis} />
+      </div>
       <div style={{ ...cds, padding: 0, overflow: "hidden" }}>
         <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 640 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 300 }}>
             <thead><tr>
               <SortTh col="bill" label="Bill" />
               <SortTh col="date" label="Date" />
@@ -1210,11 +1337,11 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, askConfi
                 return (
                   <React.Fragment key={b.billNo}>
                     <tr style={{ background: isOpen ? "#F0FDF4" : "transparent" }}>
-                      <td style={{ ...tds, fontFamily: "monospace", fontWeight: 600, color: "#0D6B5B" }}>{b.billNo}</td>
-                      <td style={tds}>{fD(b.date)}</td>
-                      <td style={{ ...tds, fontWeight: 500 }}>{b.patient}</td>
-                      <td style={{ ...tds, fontWeight: 700 }}>Rs.{f2(b.netAmount)}</td>
-                      <td style={tds}><Tag bg={b.paymentMode === "Cash" ? "#D1FAE5" : "#DBEAFE"} fg={b.paymentMode === "Cash" ? "#065F46" : "#1E40AF"}>{b.paymentMode}</Tag></td>
+                      {sh("bill") && <td style={{ ...tds, fontFamily: "monospace", fontWeight: 600, color: "#0D6B5B" }}>{b.billNo}</td>}
+                      {sh("date") && <td style={tds}>{fD(b.date)}</td>}
+                      {sh("patient") && <td style={{ ...tds, fontWeight: 500 }}>{b.patient}</td>}
+                      {sh("amount") && <td style={{ ...tds, fontWeight: 700 }}>Rs.{f2(b.netAmount)}</td>}
+                      {sh("pay") && <td style={tds}><Tag bg={b.paymentMode === "Cash" ? "#D1FAE5" : "#DBEAFE"} fg={b.paymentMode === "Cash" ? "#065F46" : "#1E40AF"}>{b.paymentMode}</Tag></td>}
                       <td style={tds}><button onClick={() => setExpanded(isOpen ? null : b.billNo)} style={{ ...bts(false), padding: "4px 10px", fontSize: 11, background: isOpen ? "#D1FAE5" : undefined, color: isOpen ? "#065F46" : undefined }}>{isOpen ? "▲ Hide" : "▼ " + b.items.length + " items"}</button></td>
                       <td style={tds}><button onClick={() => showBill(b, true)} style={{ ...bts(true), padding: "5px 12px", fontSize: 11 }}>View</button></td>
                       <td style={tds}><button onClick={() => setEditBill({ ...b, items: b.items.map((i) => ({ ...i })) })} style={{ ...bts(false), padding: "5px 12px", fontSize: 11 }}>Edit</button></td>
@@ -1222,7 +1349,7 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, askConfi
                     </tr>
                     {isOpen && (
                       <tr>
-                        <td colSpan={9} style={{ padding: "0 0 10px 0", background: "#F0FDF4" }}>
+                        <td colSpan={visibleColCount + 3} style={{ padding: "0 0 10px 0", background: "#F0FDF4" }}>
                           <div style={{ overflowX: "auto", padding: "8px 12px" }}>
                             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                               <thead><tr>
