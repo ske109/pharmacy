@@ -773,7 +773,7 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm }) {
           <b style={{ color: "#0D6B5B", fontSize: 14 }}>Total: Rs.{f2(rev.items.reduce((s, i) => s + (i.amount || purchCalcAmt(i)), 0))}</b></div>
       </div>) : (<div style={cds}>
         <div style={{ display: "flex", gap: 3, background: "#E8E4DD", borderRadius: 8, padding: 3, marginBottom: 16 }}>
-          {[["csv","CSV"],["image","Image AI"],["manual","Manual"]].map(([id, l]) => <button key={id} onClick={() => setTab(id)} style={{ flex: 1, padding: 8, border: "none", borderRadius: 6, fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: tab === id ? "#fff" : "transparent", color: tab === id ? "#0D6B5B" : "#888", boxShadow: tab === id ? "0 1px 3px rgba(0,0,0,.1)" : "none" }}>{l}</button>)}</div>
+          {[["csv","CSV"],["image","Photo/PDF"],["manual","Manual"],["dist","Distributors"]].map(([id, l]) => <button key={id} onClick={() => setTab(id)} style={{ flex: 1, padding: 8, border: "none", borderRadius: 6, fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: tab === id ? "#fff" : "transparent", color: tab === id ? "#0D6B5B" : "#888", boxShadow: tab === id ? "0 1px 3px rgba(0,0,0,.1)" : "none" }}>{l}</button>)}</div>
         {tab === "csv" && <div style={{ border: "2px dashed #bbb", borderRadius: 10, padding: 36, textAlign: "center", cursor: "pointer", background: "#FAFAF7" }} onClick={() => csvR.current && csvR.current.click()}><input ref={csvR} type="file" accept=".csv" onChange={doCSV} style={{ display: "none" }} /><div style={{ fontSize: 36 }}>📄</div><div style={{ fontSize: 14, fontWeight: 600, color: "#555", marginTop: 8 }}>Upload CSV</div></div>}
         {tab === "image" && <div style={{ border: "2px dashed #bbb", borderRadius: 10, padding: 36, textAlign: "center", cursor: "pointer", background: "#FAFAF7" }} onClick={() => !imgP && imgR.current && imgR.current.click()}><input ref={imgR} type="file" accept="image/*,.pdf,application/pdf" onChange={doImg} style={{ display: "none" }} />{imgP ? <div><div style={{ fontSize: 36 }}>🔄</div><div style={{ fontSize: 14, fontWeight: 600, color: "#0D6B5B", marginTop: 8 }}>AI reading...</div></div> : <div><div style={{ fontSize: 36 }}>📸</div><div style={{ fontSize: 14, fontWeight: 600, color: "#555", marginTop: 8 }}>Upload Invoice (Photo or PDF)</div></div>}</div>}
         {tab === "manual" && <div>
@@ -788,6 +788,37 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm }) {
           <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
             <button onClick={() => setMf((p) => ({ ...p, items: [...p.items, { ...empty }] }))} style={bts(false)}>+ Row</button>
             <button onClick={() => { if (!mf.sup || (mf.items[0] && !mf.items[0].name)) { alert("Fill supplier and name"); return; } const items = mf.items.filter((i) => i.name).map((i) => ({ ...i, amount: purchCalcAmt(i) })); setRev({ supplier: mf.sup, invoiceNo: mf.inv, date: mf.date, items, srcType: "manual", srcFile: "" }); }} style={bts(true)}>Preview</button></div></div>}
+        {tab === "dist" && <div>
+          <div style={{ fontSize: 13, color: "#555", marginBottom: 14 }}>Login to your distributor portal, place orders, and download invoices. Then upload the CSV/PDF here to add to inventory.</div>
+          <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 12 }}>
+            <div style={{ ...cds, border: "2px solid #D4D0C8", textAlign: "center" }}>
+              <div style={{ fontSize: 32, marginBottom: 8 }}>🏪</div>
+              <b style={{ fontSize: 14 }}>Focus Online Order</b>
+              <div style={{ fontSize: 11, color: "#888", margin: "6px 0" }}>Whitefield Distributor Portal</div>
+              <a href="http://whitefield.float-zone.com:8080/FocusOnlineOrder/Default.aspx" target="_blank" rel="noopener noreferrer" style={{ display: "inline-block", padding: "10px 24px", background: "#0D6B5B", color: "#fff", borderRadius: 8, textDecoration: "none", fontWeight: 600, fontSize: 13 }}>Open Portal</a>
+              <div style={{ fontSize: 10, color: "#aaa", marginTop: 6 }}>Opens in new tab. Must be on local network.</div>
+            </div>
+            <div style={{ ...cds, border: "2px solid #D4D0C8", textAlign: "center" }}>
+              <div style={{ fontSize: 32, marginBottom: 8 }}>🏪</div>
+              <b style={{ fontSize: 14 }}>FGT Banas Order</b>
+              <div style={{ fontSize: 11, color: "#888", margin: "6px 0" }}>Banas Distributor Portal</div>
+              <a href="http://fgtbanas.fortiddns.com:8080/OnlineOrder/Default.aspx" target="_blank" rel="noopener noreferrer" style={{ display: "inline-block", padding: "10px 24px", background: "#0D6B5B", color: "#fff", borderRadius: 8, textDecoration: "none", fontWeight: 600, fontSize: 13 }}>Open Portal</a>
+              <div style={{ fontSize: 10, color: "#aaa", marginTop: 6 }}>Opens in new tab. Must be on local network.</div>
+            </div>
+            <div style={{ ...cds, border: "2px solid #2563EB", textAlign: "center" }}>
+              <div style={{ fontSize: 32, marginBottom: 8 }}>🛒</div>
+              <b style={{ fontSize: 14 }}>Udaan</b>
+              <div style={{ fontSize: 11, color: "#888", margin: "6px 0" }}>B2B Pharma Marketplace</div>
+              <a href="https://udaan.com/main?selectedTabId=Pharma&navId=pharma" target="_blank" rel="noopener noreferrer" style={{ display: "inline-block", padding: "10px 24px", background: "#2563EB", color: "#fff", borderRadius: 8, textDecoration: "none", fontWeight: 600, fontSize: 13 }}>Open Udaan</a>
+              <div style={{ fontSize: 10, color: "#aaa", marginTop: 6 }}>Login with your Udaan account</div>
+            </div>
+            <div style={{ ...cds, border: "2px dashed #bbb", textAlign: "center", cursor: "pointer" }} onClick={function() { setTab("csv"); }}>
+              <div style={{ fontSize: 32, marginBottom: 8 }}>📥</div>
+              <b style={{ fontSize: 14, color: "#0D6B5B" }}>Upload Downloaded Invoice</b>
+              <div style={{ fontSize: 11, color: "#888", margin: "6px 0" }}>After downloading CSV/PDF from distributor, upload here to add to inventory</div>
+            </div>
+          </div>
+        </div>}
       </div>)}
       <div style={cds}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
@@ -1898,7 +1929,7 @@ function RackPage({ inv, saveInv, mob }) {
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: meds.length > 0 ? 8 : 0 }}>
                   <b style={{ fontSize: 15, color: "#0D6B5B" }}>{r}</b>
                   <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                    {meds.length > 0 && <Tag bg="#D1FAE5" fg="#065F46">{meds.length} items</Tag>}
+                    {meds.length > 0 && <Tag bg="#D1FAE5" fg="#065F46">{meds.length} items | {meds.reduce(function(s,m){return s + (m.stock||0);},0)} units</Tag>}
                     {selected.length > 0 && <button onClick={function() { assignToRack(r, selected); }} style={{ ...bts(true), padding: "4px 10px", fontSize: 11 }}>Assign {selected.length}</button>}
                   </div>
                 </div>
@@ -1907,6 +1938,7 @@ function RackPage({ inv, saveInv, mob }) {
                     return (
                       <div key={m.id} style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 8px", background: "#EFF6FF", borderRadius: 6, fontSize: 11 }}>
                         <span>{m.name}</span>
+                        <span style={{ color: "#0D6B5B", fontWeight: 600, fontSize: 10 }}>({fStock(m.stock, m.packQty)})</span>
                         <button onClick={function() { removeFromRack(m.id); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#DC2626", fontSize: 12, padding: 0 }}>x</button>
                       </div>
                     );
@@ -2237,306 +2269,132 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm }) {
 }
 
 // ══════════════════════════════════════════════
-// ENCYCLOPEDIA (Local DB + MedGuide India LIVE + OpenFDA)
+// ENCYCLOPEDIA (MedGuide India Live)
 // ══════════════════════════════════════════════
-function parseMedGuideHTML(html) {
-  var results = [];
-  // Create a temporary DOM to parse HTML
-  var parser = new DOMParser();
-  var doc = parser.parseFromString(html, "text/html");
-  var tables = doc.querySelectorAll("table");
-  var currentMfg = "";
-
-  tables.forEach(function(table) {
-    var rows = table.querySelectorAll("tr");
-    rows.forEach(function(row) {
-      var cells = row.querySelectorAll("td");
-      if (cells.length === 0) return;
-      var text = row.textContent.trim();
-
-      // Manufacturer row: "Manufacturer : Company Name"
-      if (text.indexOf("Manufacturer") >= 0 && text.indexOf(":") >= 0) {
-        var mfgMatch = text.match(/Manufacturer\s*:\s*(.+)/i);
-        if (mfgMatch) currentMfg = mfgMatch[1].trim().replace(/\s+/g, " ");
-        return;
-      }
-
-      // Data row: S/N | Name | Type | Unit | Constituent | Package | Price | PricePerUnit
-      if (cells.length >= 7) {
-        var sn = cells[0] ? cells[0].textContent.trim() : "";
-        if (!sn.match(/^\d+$/)) return;
-
-        var name = cells[1] ? cells[1].textContent.trim() : "";
-        var type = cells[2] ? cells[2].textContent.trim() : "";
-        var unit = cells[3] ? cells[3].textContent.trim() : "";
-        var constituent = cells[4] ? cells[4].textContent.trim() : "";
-        var packageUnit = cells[5] ? cells[5].textContent.trim() : "";
-        var price = cells[6] ? cells[6].textContent.trim() : "";
-        var pricePerUnit = cells.length > 7 ? cells[7].textContent.trim() : "";
-
-        if (name && name.length > 1) {
-          results.push({
-            sn: parseInt(sn),
-            name: name,
-            type: type,
-            unit: unit,
-            constituents: constituent.replace(/\s+/g, " ").trim(),
-            packageUnit: packageUnit,
-            price: price,
-            pricePerUnit: pricePerUnit,
-            manufacturer: currentMfg
-          });
-        }
-      }
-    });
-  });
-  return results;
-}
-
 function EncyclopediaPage({ inv, mob }) {
   const [query, setQuery] = useState("");
-  const [tab, setTab] = useState("all");
-  const [localResults, setLocalResults] = useState(null);
-  const [mgResults, setMgResults] = useState(null);
-  const [mgAlts, setMgAlts] = useState(null);
-  const [mgAltsLoading, setMgAltsLoading] = useState(false);
-  const [fdaResults, setFdaResults] = useState(null);
-  const [mgLoading, setMgLoading] = useState(false);
-  const [fdaLoading, setFdaLoading] = useState(false);
-  const [mgError, setMgError] = useState("");
+  const [results, setResults] = useState(null);
+  const [alts, setAlts] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [altsLoading, setAltsLoading] = useState(false);
+  const [error, setError] = useState("");
 
-  // Search MedGuide for alternatives by generic/constituent name
-  var searchAlternatives = function(constituents) {
-    if (!constituents) return;
-    // Extract first generic name from constituents like "Paracetamol-650mg Caffeine-50mg"
+  var searchBrand = function(q) {
+    if (!q.trim()) return;
+    setLoading(true); setResults(null); setAlts(null); setError("");
+    var url = "https://www.medguideindia.info/show_brand.php?search_type=brand&brandname=" + encodeURIComponent(q.trim()) + "&submit=FIND";
+    fetch(PROXY_URL + "/medguide?url=" + encodeURIComponent(url))
+    .then(function(r) { if (!r.ok) throw new Error("Status " + r.status); return r.text(); })
+    .then(function(html) {
+      var parsed = parseMedGuideHTML(html);
+      setResults(parsed);
+      setLoading(false);
+      if (parsed.length > 0 && parsed[0].constituents) searchAlts(parsed[0].constituents);
+    })
+    .catch(function(err) { setError("Could not reach MedGuide India. Please update Cloudflare Worker with /medguide route."); setLoading(false); });
+  };
+
+  var searchAlts = function(constituents) {
     var parts = constituents.split(/[,;+&]/).map(function(p) { return p.trim(); });
-    var mainGeneric = "";
+    var main = "";
     for (var i = 0; i < parts.length; i++) {
-      var cleaned = parts[i].replace(/[-]\s*[\d.]+\s*(%|mg|ml|gm|mcg|iu|g|w\/v|w\/w)/gi, "").trim();
-      if (cleaned.length > 2 && cleaned.match(/[a-zA-Z]/)) { mainGeneric = cleaned; break; }
+      var c = parts[i].replace(/[-]\s*[\d.]+\s*(%|mg|ml|gm|mcg|iu|g|w\/v|w\/w)/gi, "").trim();
+      if (c.length > 2 && c.match(/[a-zA-Z]/)) { main = c; break; }
     }
-    if (!mainGeneric) return;
-
-    setMgAltsLoading(true);
-    var altUrl = "https://www.medguideindia.info/show_brand.php?search_type=generic&genericname=" + encodeURIComponent(mainGeneric) + "&submit=FIND";
-    fetch(PROXY_URL + "/medguide?url=" + encodeURIComponent(altUrl))
+    if (!main) return;
+    setAltsLoading(true);
+    var url = "https://www.medguideindia.info/show_brand.php?search_type=generic&genericname=" + encodeURIComponent(main) + "&submit=FIND";
+    fetch(PROXY_URL + "/medguide?url=" + encodeURIComponent(url))
     .then(function(r) { return r.text(); })
-    .then(function(html) {
-      var parsed = parseMedGuideHTML(html);
-      setMgAlts({ generic: mainGeneric, items: parsed });
-      setMgAltsLoading(false);
-    })
-    .catch(function() { setMgAltsLoading(false); });
+    .then(function(html) { setAlts({ generic: main, items: parseMedGuideHTML(html) }); setAltsLoading(false); })
+    .catch(function() { setAltsLoading(false); });
   };
 
-  var doSearch = function() {
-    var q = query.trim();
-    if (!q) return;
-    setMgError("");
-    setTab("all");
-    setMgAlts(null);
-
-    // 1. Local MED_DB search (instant)
-    var ql = q.toLowerCase();
-    var local = MED_DB.filter(function(m) {
-      return m.n.toLowerCase().indexOf(ql) >= 0 || m.g.toLowerCase().indexOf(ql) >= 0 || m.c.toLowerCase().indexOf(ql) >= 0 ||
-        m.cp.some(function(c) { return c.s.toLowerCase().indexOf(ql) >= 0; }) ||
-        m.u.some(function(u) { return u.toLowerCase().indexOf(ql) >= 0; });
-    });
-    setLocalResults(local.length > 0 ? local : null);
-
-    // 2. MedGuide India LIVE search (via worker proxy)
-    setMgLoading(true); setMgResults(null);
-    var mgUrl = "https://www.medguideindia.info/show_brand.php?search_type=brand&brandname=" + encodeURIComponent(q) + "&submit=FIND";
-    fetch(PROXY_URL + "/medguide?url=" + encodeURIComponent(mgUrl))
-    .then(function(r) {
-      if (!r.ok) throw new Error("Proxy returned " + r.status);
-      return r.text();
-    })
-    .then(function(html) {
-      var parsed = parseMedGuideHTML(html);
-      setMgResults(parsed);
-      setMgLoading(false);
-      // Auto-search alternatives using first result's constituents
-      if (parsed.length > 0 && parsed[0].constituents) {
-        searchAlternatives(parsed[0].constituents);
-      }
-    })
-    .catch(function(err) {
-      setMgError("MedGuide India: " + err.message + ". Update worker.js with the new /medguide route.");
-      setMgLoading(false);
-    });
-
-    // 3. OpenFDA search (free API)
-    setFdaLoading(true); setFdaResults(null);
-    var genericName = "";
-    var searchWords = ql.replace(/\d+\s*(mg|ml|gm|g|mcg|iu)\s*/gi, "").trim();
-    Object.keys(BRAND_MAP).forEach(function(brand) {
-      if (searchWords.indexOf(brand) >= 0 || brand.indexOf(searchWords) >= 0) genericName = BRAND_MAP[brand];
-    });
-    var fdaQ = genericName || q;
-    fetch("https://api.fda.gov/drug/label.json?search=openfda.generic_name:%22" + encodeURIComponent(fdaQ) + "%22+openfda.brand_name:%22" + encodeURIComponent(q) + "%22&limit=3")
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      if (data.results && data.results.length > 0) {
-        setFdaResults(data.results.map(function(drug) {
-          return {
-            brand: (drug.openfda && drug.openfda.brand_name) ? drug.openfda.brand_name[0] : q,
-            generic: (drug.openfda && drug.openfda.generic_name) ? drug.openfda.generic_name[0] : fdaQ,
-            category: (drug.openfda && drug.openfda.pharm_class_epc) ? drug.openfda.pharm_class_epc[0] : "",
-            manufacturer: (drug.openfda && drug.openfda.manufacturer_name) ? drug.openfda.manufacturer_name[0] : "",
-            route: (drug.openfda && drug.openfda.route) ? drug.openfda.route[0] : "",
-            uses: drug.indications_and_usage ? drug.indications_and_usage[0].split(/[.;]/).filter(function(s){return s.trim().length>5;}).slice(0,4).map(function(s){return s.trim().substring(0,100);}) : [],
-            sideEffects: drug.adverse_reactions ? drug.adverse_reactions[0].split(/[,;.]/).filter(function(s){return s.trim().length>3&&s.trim().length<50;}).slice(0,6).map(function(s){return s.trim();}) : [],
-            dosage: drug.dosage_and_administration ? drug.dosage_and_administration[0].substring(0,250) : "",
-            rx: drug.openfda && drug.openfda.product_type ? drug.openfda.product_type[0]==="HUMAN PRESCRIPTION DRUG" : true
-          };
-        }));
-      } else { setFdaResults([]); }
-      setFdaLoading(false);
-    }).catch(function() { setFdaResults([]); setFdaLoading(false); });
-  };
-
-  var totalResults = (localResults ? localResults.length : 0) + (mgResults ? mgResults.length : 0) + (fdaResults ? fdaResults.length : 0);
-  var anyLoading = mgLoading || fdaLoading;
+  var doSearch = function() { searchBrand(query); };
 
   return (
     <div><h2 style={hds}>Medicine Encyclopedia</h2>
-      <div style={{ fontSize: 12, color: "#888", marginBottom: 12 }}>Search across 50,000+ Indian brands (MedGuide India) + local database + OpenFDA global</div>
+      <div style={{ fontSize: 12, color: "#888", marginBottom: 14 }}>Search 50,000+ Indian medicine brands — powered by MedGuide India</div>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
-        <input value={query} onChange={function(e){setQuery(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter")doSearch();}} placeholder="Search any medicine — brand, generic, salt, or use..." style={{ ...inps, flex: 1, fontSize: 16, padding: "14px 18px" }} />
-        <button onClick={doSearch} disabled={anyLoading} style={{ ...bts(true), padding: "14px 28px", fontSize: 14, opacity: anyLoading ? 0.6 : 1 }}>{anyLoading ? "Searching..." : "Search"}</button>
+        <input value={query} onChange={function(e){setQuery(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter")doSearch();}} placeholder="Type brand or medicine name..." style={{ ...inps, flex: 1, fontSize: 16, padding: "14px 18px" }} />
+        <button onClick={doSearch} disabled={loading} style={{ ...bts(true), padding: "14px 28px", fontSize: 14, opacity: loading ? 0.6 : 1 }}>{loading ? "Searching..." : "Search"}</button>
       </div>
 
-      {/* Source tabs */}
-      {(localResults || mgResults || fdaResults) && <div style={{ display: "flex", gap: 3, background: "#E8E4DD", borderRadius: 8, padding: 3, marginBottom: 16 }}>
-        <button onClick={function(){setTab("all");}} style={{ padding: "8px 16px", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: tab==="all"?"#fff":"transparent", color: tab==="all"?"#0D6B5B":"#888" }}>All Results{totalResults > 0 ? " (" + totalResults + ")" : ""}</button>
-        {localResults && <button onClick={function(){setTab("local");}} style={{ padding: "8px 16px", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: tab==="local"?"#fff":"transparent", color: tab==="local"?"#059669":"#888" }}>Local ({localResults.length})</button>}
-        <button onClick={function(){setTab("mg");}} style={{ padding: "8px 16px", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: tab==="mg"?"#fff":"transparent", color: tab==="mg"?"#B45309":"#888" }}>MedGuide India{mgLoading?" ...":mgResults?" ("+mgResults.length+")":""}</button>
-        <button onClick={function(){setTab("fda");}} style={{ padding: "8px 16px", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: tab==="fda"?"#fff":"transparent", color: tab==="fda"?"#2563EB":"#888" }}>OpenFDA{fdaLoading?" ...":fdaResults?" ("+fdaResults.length+")":""}</button>
-      </div>}
+      {error && <div style={{ padding: "12px 16px", background: "#FEF3C7", border: "1px solid #D97706", borderRadius: 10, fontSize: 13, color: "#92400E", marginBottom: 16 }}>{error}</div>}
 
-      {mgError && <div style={{ padding: "10px 14px", background: "#FEF3C7", border: "1px solid #D97706", borderRadius: 8, fontSize: 12, color: "#92400E", marginBottom: 12 }}>{mgError}</div>}
+      {loading && <div style={{ ...cds, textAlign: "center", padding: 40 }}><div style={{ fontSize: 32, marginBottom: 8 }}>🔍</div><div style={{ color: "#888", fontSize: 14 }}>Searching MedGuide India...</div></div>}
 
-      {/* LOCAL RESULTS */}
-      {(tab === "all" || tab === "local") && localResults && localResults.map(function(m, idx) {
-        var inInv = inv.filter(function(im){return im.name.toLowerCase().indexOf(m.g.toLowerCase())>=0||im.name.toLowerCase().indexOf(m.n.split(" ")[0].toLowerCase())>=0;});
-        var alts = (m.alt||[]).map(function(a){return Object.assign({},a,{inStock:inv.some(function(im){return im.name.toLowerCase().indexOf(a.n.split(" ")[0].toLowerCase())>=0;})});});
-        return <div key={"l"+idx} style={{ ...cds, borderLeft: "4px solid #059669", marginBottom: 12 }}>
+      {/* Results as cards */}
+      {results && results.length > 0 && results.map(function(r, i) {
+        var isInv = inv.some(function(im) { return im.name.toLowerCase().indexOf(r.name.split("(")[0].trim().toLowerCase()) >= 0; });
+        var invItems = inv.filter(function(im) { return im.name.toLowerCase().indexOf(r.name.split("(")[0].trim().toLowerCase()) >= 0; });
+        return <div key={i} style={{ ...cds, borderLeft: "4px solid #0D6B5B", marginBottom: 12 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
             <div>
-              <div style={{ fontSize: 20, fontWeight: 800, color: "#0C2E24" }}>{m.n}</div>
-              <div style={{ fontSize: 12, color: "#888" }}>Generic: <b>{m.g}</b></div>
+              <div style={{ fontSize: 20, fontWeight: 800, color: "#0C2E24" }}>{r.name}</div>
+              <div style={{ fontSize: 13, color: "#888", marginTop: 2 }}>{r.manufacturer}</div>
             </div>
-            <Tag bg="#D1FAE5" fg="#065F46">Local DB</Tag>
+            <div style={{ display: "flex", gap: 5 }}>
+              {r.type && <Tag bg="#F3E8FF" fg="#6B21A8">{r.type}</Tag>}
+              {isInv && <Tag bg="#D1FAE5" fg="#065F46">IN STOCK</Tag>}
+            </div>
           </div>
-          <div style={{ display: "flex", gap: 5, marginTop: 8, flexWrap: "wrap" }}>
-            <Tag bg="#D1FAE5" fg="#065F46">{m.c}</Tag>
-            {m.rx?<Tag bg="#FEE2E2" fg="#991B1B">Rx</Tag>:<Tag bg="#DBEAFE" fg="#1E40AF">OTC</Tag>}
-            {inInv.length>0&&<Tag bg="#D1FAE5" fg="#065F46">In Stock</Tag>}
+          <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr 1fr", gap: 12, marginTop: 14 }}>
+            <div style={{ padding: "10px 14px", background: "#F5F3EE", borderRadius: 10 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#888", marginBottom: 4 }}>CONSTITUENTS</div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#0D6B5B" }}>{r.constituents || "-"}</div>
+            </div>
+            <div style={{ padding: "10px 14px", background: "#F5F3EE", borderRadius: 10 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#888", marginBottom: 4 }}>UNIT / PACKAGE</div>
+              <div style={{ fontSize: 13 }}>{r.unit || "-"} / {r.packageUnit || "-"}</div>
+            </div>
+            <div style={{ padding: "10px 14px", background: "#F0FDF4", borderRadius: 10, border: "1px solid #D1FAE5" }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#888", marginBottom: 4 }}>PRICE</div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: "#0D6B5B" }}>Rs. {r.price || "-"}</div>
+              {r.pricePerUnit && <div style={{ fontSize: 11, color: "#888" }}>{r.pricePerUnit}/unit</div>}
+            </div>
           </div>
-          {m.sc&&m.sc.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:4,alignItems:"center",marginTop:10}}>
-            {m.sc.map(function(cat,i){return React.createElement(React.Fragment,{key:i},React.createElement("span",{style:{padding:"4px 12px",background:i===m.sc.length-1?"#0D6B5B":"#F5F3EE",color:i===m.sc.length-1?"#fff":"#555",borderRadius:20,fontSize:11,fontWeight:600}},cat),i<m.sc.length-1&&React.createElement("span",{style:{color:"#ccc",fontSize:14}},"\u2192"));})}
+          {isInv && invItems.length > 0 && <div style={{ marginTop: 10, padding: "8px 12px", background: "#F0FDF4", borderRadius: 8, border: "1px solid #059669" }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#059669", marginBottom: 4 }}>Your Inventory</div>
+            {invItems.map(function(im) { return <div key={im.id} style={{ fontSize: 12 }}>{im.name} | Batch: {im.batch || "-"} | Stock: {fStock(im.stock, im.packQty)} | MRP: Rs.{f2(im.mrp)}</div>; })}
           </div>}
-          <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:10,marginTop:10}}>
-            <div><div style={{fontSize:12,fontWeight:700,color:"#888",marginBottom:4}}>Composition</div>
-              {m.cp.map(function(c,i){return <div key={i} style={{padding:"6px 10px",background:"#F5F3EE",borderRadius:6,marginBottom:3,fontSize:12}}><b style={{color:"#0D6B5B"}}>{c.s}</b>{c.st&&<span style={{color:"#888",marginLeft:6}}>{c.st}</span>}</div>;})}</div>
-            <div><div style={{fontSize:12,fontWeight:700,color:"#888",marginBottom:4}}>Uses</div>
-              <div style={{display:"flex",flexWrap:"wrap",gap:4}}>{m.u.map(function(u,i){return <span key={i} style={{padding:"3px 10px",background:"#EFF6FF",borderRadius:16,fontSize:11,color:"#1E40AF"}}>{u}</span>;})}</div></div>
-          </div>
-          {alts.length>0&&<div style={{marginTop:10}}><div style={{fontSize:12,fontWeight:700,color:"#888",marginBottom:4}}>Alternatives</div>
-            <div style={{display:"flex",flexWrap:"wrap",gap:4}}>{alts.map(function(a,i){return <span key={i} style={{padding:"4px 10px",background:a.inStock?"#D1FAE5":"#F5F3EE",border:a.inStock?"1px solid #059669":"1px solid #eee",borderRadius:16,fontSize:11,color:a.inStock?"#065F46":"#555"}}>{a.n} <span style={{color:"#aaa"}}>({a.m})</span>{a.inStock?" ✓":""}</span>;})}</div></div>}
-          <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:10,marginTop:10}}>
-            <div><div style={{fontSize:12,fontWeight:700,color:"#888",marginBottom:4}}>Side Effects</div>
-              <div style={{display:"flex",flexWrap:"wrap",gap:3}}>{m.se.map(function(s,i){return <span key={i} style={{padding:"3px 10px",background:"#FEF3C7",borderRadius:16,fontSize:11,color:"#92400E"}}>{s}</span>;})}</div></div>
-            <div><div style={{fontSize:12,fontWeight:700,color:"#888",marginBottom:4}}>Dosage</div><div style={{fontSize:12,color:"#555"}}>{m.d}</div></div>
-          </div>
-          {inInv.length>0&&<div style={{marginTop:10,padding:"8px 12px",background:"#F0FDF4",borderRadius:8,border:"1px solid #059669"}}>
-            <div style={{fontSize:11,fontWeight:700,color:"#059669",marginBottom:4}}>In Your Inventory</div>
-            {inInv.map(function(im){return <div key={im.id} style={{fontSize:12}}>{im.name} — Batch: {im.batch||"-"} — Stock: {fStock(im.stock,im.packQty)} — MRP: Rs.{f2(im.mrp)}</div>;})}</div>}
+          {r.constituents && i === 0 && !alts && !altsLoading && <button onClick={function() { searchAlts(r.constituents); }} style={{ marginTop: 10, border: "none", borderRadius: 8, padding: "8px 18px", fontWeight: 600, cursor: "pointer", fontSize: 12, background: "#7C3AED", color: "#fff" }}>Find Alternatives</button>}
         </div>;
       })}
 
-      {/* MEDGUIDE INDIA RESULTS */}
-      {(tab === "all" || tab === "mg") && mgLoading && <div style={{...cds,textAlign:"center",padding:24}}><div style={{fontSize:24,marginBottom:8}}>🔍</div><div style={{color:"#888",fontSize:13}}>Searching MedGuide India (50,000+ brands)...</div></div>}
-      {(tab === "all" || tab === "mg") && mgResults && mgResults.length > 0 && <div style={{...cds,borderLeft:"4px solid #B45309"}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-          <b style={{fontSize:14,color:"#B45309"}}>MedGuide India Results ({mgResults.length})</b>
-          <Tag bg="#FEF3C7" fg="#92400E">Live Data</Tag>
+      {results && results.length === 0 && !loading && <div style={{ ...cds, textAlign: "center", padding: 30, color: "#888" }}>No brands found for "<b>{query}</b>"</div>}
+
+      {/* Alternatives */}
+      {altsLoading && <div style={{ ...cds, textAlign: "center", padding: 24, borderLeft: "4px solid #7C3AED" }}><div style={{ color: "#888", fontSize: 13 }}>Finding alternative brands...</div></div>}
+      {alts && alts.items && alts.items.length > 0 && <div style={{ ...cds, borderLeft: "4px solid #7C3AED" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div><b style={{ fontSize: 15, color: "#7C3AED" }}>Alternatives for "{alts.generic}"</b><div style={{ fontSize: 11, color: "#888" }}>{alts.items.length} brand(s) found with same salt</div></div>
         </div>
-        <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr>
-          {["#","Brand Name","Type","Unit","Constituents","Package","Price","Manufacturer",""].map(function(h){return <th key={h} style={ths}>{h}</th>;})}</tr></thead><tbody>
-          {mgResults.map(function(r,i){
-            var isInv = inv.some(function(im){return im.name.toLowerCase().indexOf(r.name.split("(")[0].trim().toLowerCase())>=0;});
-            return <tr key={i} style={{background:isInv?"#F0FDF4":"transparent"}}>
-              <td style={{...tds,color:"#888"}}>{r.sn}</td>
-              <td style={{...tds,fontWeight:600}}>{r.name}{isInv&&<span style={{color:"#059669",marginLeft:4,fontSize:10}}>IN STOCK</span>}</td>
-              <td style={tds}><Tag bg="#F3E8FF" fg="#6B21A8">{r.type||"-"}</Tag></td>
-              <td style={{...tds,fontSize:11}}>{r.unit||"-"}</td>
-              <td style={{...tds,fontSize:11,maxWidth:200}}>{r.constituents||"-"}</td>
-              <td style={{...tds,fontSize:11}}>{r.packageUnit||"-"}</td>
-              <td style={{...tds,fontWeight:600,color:"#0D6B5B"}}>Rs.{r.price||"-"}</td>
-              <td style={{...tds,fontSize:11,color:"#888"}}>{r.manufacturer||"-"}</td>
-              <td style={tds}>{r.constituents && <button onClick={function(){searchAlternatives(r.constituents);}} style={{border:"none",borderRadius:6,padding:"4px 8px",fontWeight:600,cursor:"pointer",fontSize:10,background:"#7C3AED",color:"#fff",whiteSpace:"nowrap"}}>Alternatives</button>}</td>
+        <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
+          {["#","Brand","Type","Constituents","Price","Manufacturer","Stock"].map(function(h) { return <th key={h} style={ths}>{h}</th>; })}</tr></thead><tbody>
+          {alts.items.map(function(r, i) {
+            var isInv = inv.some(function(im) { return im.name.toLowerCase().indexOf(r.name.split("(")[0].trim().toLowerCase()) >= 0; });
+            return <tr key={i} style={{ background: isInv ? "#F0FDF4" : i % 2 === 0 ? "transparent" : "#FAFAF7" }}>
+              <td style={{ ...tds, color: "#888" }}>{i + 1}</td>
+              <td style={{ ...tds, fontWeight: 600 }}>{r.name}</td>
+              <td style={tds}>{r.type || "-"}</td>
+              <td style={{ ...tds, fontSize: 11 }}>{r.constituents || "-"}</td>
+              <td style={{ ...tds, fontWeight: 600, color: "#0D6B5B" }}>Rs.{r.price || "-"}</td>
+              <td style={{ ...tds, fontSize: 11, color: "#888" }}>{r.manufacturer || "-"}</td>
+              <td style={tds}>{isInv ? <Tag bg="#D1FAE5" fg="#065F46">Yes</Tag> : ""}</td>
             </tr>;
           })}</tbody></table></div>
       </div>}
-      {(tab === "all" || tab === "mg") && mgResults && mgResults.length === 0 && !mgLoading && <div style={{...cds,textAlign:"center",padding:16,color:"#888",fontSize:12,borderLeft:"4px solid #B45309"}}>No results from MedGuide India for this search</div>}
-
-      {/* MEDGUIDE ALTERNATIVES */}
-      {(tab === "all" || tab === "mg") && mgAltsLoading && <div style={{...cds,textAlign:"center",padding:20,borderLeft:"4px solid #7C3AED"}}><div style={{color:"#888",fontSize:13}}>Finding alternative medicines...</div></div>}
-      {(tab === "all" || tab === "mg") && mgAlts && mgAlts.items && mgAlts.items.length > 0 && <div style={{...cds,borderLeft:"4px solid #7C3AED",marginBottom:12}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-          <div><b style={{fontSize:14,color:"#7C3AED"}}>Alternative Brands</b><div style={{fontSize:11,color:"#888"}}>Same composition: <b>{mgAlts.generic}</b> — {mgAlts.items.length} brand(s) found</div></div>
-          <Tag bg="#F3E8FF" fg="#6B21A8">Alternatives</Tag>
-        </div>
-        <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr>
-          {["#","Alternative Brand","Type","Unit","Constituents","Price","Manufacturer"].map(function(h){return <th key={h} style={ths}>{h}</th>;})}</tr></thead><tbody>
-          {mgAlts.items.map(function(r,i){
-            var isInv = inv.some(function(im){return im.name.toLowerCase().indexOf(r.name.split("(")[0].trim().toLowerCase())>=0;});
-            return <tr key={i} style={{background:isInv?"#F0FDF4":i%2===0?"transparent":"#FAFAF7"}}>
-              <td style={{...tds,color:"#888"}}>{i+1}</td>
-              <td style={{...tds,fontWeight:600}}>{r.name}{isInv&&<span style={{color:"#059669",marginLeft:4,fontSize:10}}>IN STOCK</span>}</td>
-              <td style={tds}><Tag bg="#F3E8FF" fg="#6B21A8">{r.type||"-"}</Tag></td>
-              <td style={{...tds,fontSize:11}}>{r.unit||"-"}</td>
-              <td style={{...tds,fontSize:11,maxWidth:200}}>{r.constituents||"-"}</td>
-              <td style={{...tds,fontWeight:600,color:"#0D6B5B"}}>Rs.{r.price||"-"}</td>
-              <td style={{...tds,fontSize:11,color:"#888"}}>{r.manufacturer||"-"}</td>
-            </tr>;
-          })}</tbody></table></div>
-      </div>}
-
-      {/* OPENFDA RESULTS */}
-      {(tab === "all" || tab === "fda") && fdaLoading && <div style={{...cds,textAlign:"center",padding:24}}><div style={{fontSize:24,marginBottom:8}}>🌐</div><div style={{color:"#888",fontSize:13}}>Searching OpenFDA global database...</div></div>}
-      {(tab === "all" || tab === "fda") && fdaResults && fdaResults.length > 0 && fdaResults.map(function(drug,i){
-        return <div key={"f"+i} style={{...cds,borderLeft:"4px solid #2563EB",marginBottom:12}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-            <div><div style={{fontSize:18,fontWeight:800,color:"#0C2E24"}}>{drug.brand}</div><div style={{fontSize:12,color:"#888"}}>Generic: <b>{drug.generic}</b></div></div>
-            <div style={{display:"flex",gap:4}}><Tag bg="#DBEAFE" fg="#1E40AF">OpenFDA</Tag>{drug.rx?<Tag bg="#FEE2E2" fg="#991B1B">Rx</Tag>:<Tag bg="#DBEAFE" fg="#1E40AF">OTC</Tag>}</div>
-          </div>
-          {drug.manufacturer&&<div style={{fontSize:11,color:"#888",marginTop:4}}>Manufacturer: <b>{drug.manufacturer}</b></div>}
-          {drug.category&&<div style={{marginTop:6}}><Tag bg="#E8E4DD" fg="#555">{drug.category}</Tag>{drug.route&&<span style={{marginLeft:4}}><Tag bg="#F3E8FF" fg="#6B21A8">{drug.route}</Tag></span>}</div>}
-          {drug.uses.length>0&&<div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:3}}>Uses</div><div style={{display:"flex",flexWrap:"wrap",gap:3}}>{drug.uses.map(function(u,j){return <span key={j} style={{padding:"3px 10px",background:"#EFF6FF",borderRadius:16,fontSize:11,color:"#1E40AF"}}>{u}</span>;})}</div></div>}
-          {drug.sideEffects.length>0&&<div style={{marginTop:6}}><div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:3}}>Side Effects</div><div style={{display:"flex",flexWrap:"wrap",gap:3}}>{drug.sideEffects.map(function(s,j){return <span key={j} style={{padding:"3px 10px",background:"#FEF3C7",borderRadius:16,fontSize:11,color:"#92400E"}}>{s}</span>;})}</div></div>}
-          {drug.dosage&&<div style={{marginTop:6}}><div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:3}}>Dosage</div><div style={{fontSize:12,color:"#555",lineHeight:1.5}}>{drug.dosage}</div></div>}
-        </div>;
-      })}
-      {(tab === "all" || tab === "fda") && fdaResults && fdaResults.length === 0 && !fdaLoading && <div style={{...cds,textAlign:"center",padding:16,color:"#888",fontSize:12,borderLeft:"4px solid #2563EB"}}>No results from OpenFDA</div>}
 
       {/* Empty state */}
-      {!localResults && !mgResults && !fdaResults && !anyLoading && <div style={{textAlign:"center",padding:50,color:"#888"}}>
-        <div style={{fontSize:56,marginBottom:16,opacity:0.3}}>📚</div>
-        <div style={{fontSize:18,fontWeight:700,color:"#555",marginBottom:8}}>Medicine Encyclopedia</div>
-        <div style={{fontSize:13,marginBottom:4,color:"#888"}}>Search across <b>3 databases simultaneously</b></div>
-        <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr 1fr",gap:10,maxWidth:500,margin:"16px auto"}}>
-          <div style={{padding:12,background:"#F0FDF4",borderRadius:10,border:"1px solid #D1FAE5"}}><div style={{fontSize:20,marginBottom:4}}>💊</div><div style={{fontSize:12,fontWeight:700,color:"#059669"}}>Local DB</div><div style={{fontSize:11,color:"#888"}}>100+ brands, instant</div></div>
-          <div style={{padding:12,background:"#FFFBEB",borderRadius:10,border:"1px solid #FEF3C7"}}><div style={{fontSize:20,marginBottom:4}}>🇮🇳</div><div style={{fontSize:12,fontWeight:700,color:"#B45309"}}>MedGuide India</div><div style={{fontSize:11,color:"#888"}}>50,000+ brands, live</div></div>
-          <div style={{padding:12,background:"#EFF6FF",borderRadius:10,border:"1px solid #DBEAFE"}}><div style={{fontSize:20,marginBottom:4}}>🌐</div><div style={{fontSize:12,fontWeight:700,color:"#2563EB"}}>OpenFDA</div><div style={{fontSize:11,color:"#888"}}>Global drug data</div></div>
-        </div>
-        <div style={{display:"flex",flexWrap:"wrap",gap:6,justifyContent:"center",marginTop:20,maxWidth:550,margin:"20px auto 0"}}>
-          {["Dolo 650","Crocin","Azithromycin","Pan 40","Augmentin","Metformin","Combiflam","Cetirizine","Betadine","Montair LC","Diclofenac","Omeprazole","Losartan","Becosules","Amoxicillin","Atorvastatin","Gabapentin","Clopidogrel"].map(function(s){
-            return <button key={s} onClick={function(){setQuery(s);}} style={{padding:"7px 16px",background:"#F5F3EE",border:"1px solid #E8E4DD",borderRadius:20,fontSize:12,cursor:"pointer",color:"#555"}}>{s}</button>;
+      {!results && !loading && <div style={{ textAlign: "center", padding: 50, color: "#888" }}>
+        <div style={{ fontSize: 56, marginBottom: 16, opacity: 0.3 }}>📚</div>
+        <div style={{ fontSize: 18, fontWeight: 700, color: "#555", marginBottom: 8 }}>Medicine Encyclopedia</div>
+        <div style={{ fontSize: 13, marginBottom: 20, color: "#888" }}>Search across 50,000+ Indian medicine brands with live data from MedGuide India</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center", maxWidth: 550, margin: "0 auto" }}>
+          {["Dolo 650","Crocin","Azithromycin","Pan 40","Augmentin","Metformin","Combiflam","Cetirizine","Betadine","Montair LC","Diclofenac","Omeprazole","Losartan","Amoxicillin","Atorvastatin","Clopidogrel","Shelcal","Becosules"].map(function(s) {
+            return <button key={s} onClick={function() { setQuery(s); searchBrand(s); }} style={{ padding: "7px 16px", background: "#F5F3EE", border: "1px solid #E8E4DD", borderRadius: 20, fontSize: 12, cursor: "pointer", color: "#555" }}>{s}</button>;
           })}
         </div>
       </div>}
