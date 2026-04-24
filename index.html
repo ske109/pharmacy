@@ -77,6 +77,8 @@ const ROLE_NAMES = { "owner@atozpharmacy.com": "Pharmacy Owner", "staff@atozphar
 const { useState, useEffect, useCallback, useRef } = React;
 const f2 = (n) => Number(n || 0).toFixed(2);
 const fD = (d) => { try { return d ? new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "-"; } catch(e) { return "-"; } };
+const fDT = (d) => { try { return d ? new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "Asia/Kolkata" }) : "-"; } catch(e) { return "-"; } };
+const getIST = () => { return new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }); };
 const mkId = () => "id" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const mkBill = () => "ATZ" + String(Date.now()).slice(-5) + String(Math.floor(Math.random() * 90) + 10);
 const mkUID = () => "AZ-" + String(Date.now()).slice(-4) + Math.random().toString(36).slice(2, 5).toUpperCase();
@@ -546,7 +548,7 @@ function BillView({ bill, onClose, fromHistory }) {
             <div style={{ fontSize: 9 }}>Ph: {PH.mob} | DL: {PH.dl} | GSTIN: {PH.gstin}</div>
             <div style={{ fontWeight: "bold", marginTop: 3 }}>TAX INVOICE</div></div>
           <div style={{ display: "flex", justifyContent: "space-between", borderBottom: "1px solid #000", padding: "4px 0", fontSize: 9.5 }}>
-            <div><b>Bill:</b> {bill.billNo}<br/><b>Date:</b> {fD(bill.date)}</div>
+            <div><b>Bill:</b> {bill.billNo}<br/><b>Date:</b> {bill.dateIST || fDT(bill.date)}</div>
             <div><b>Payment:</b> {bill.paymentMode}</div></div>
           <div style={{ borderBottom: "1px solid #000", padding: "4px 0", fontSize: 9.5 }}>
             <b>Patient:</b> {bill.patient} | <b>Contact:</b> {bill.patientContact || "-"}<br/><b>Doctor:</b> {bill.doctor || "-"}</div>
@@ -624,7 +626,7 @@ function Login({ onLogin }) {
 // ══════════════════════════════════════════════
 function Sidebar({ page, setPage, user, onLogout, counts, mob, sideOpen, setSideOpen }) {
   const isO = user.role === "owner";
-  const nav = [{ id: "dash", i: "📊", l: "Dashboard" }, { id: "purch", i: "📦", l: "Purchases" }, { id: "returns", i: "↩️", l: "Returns" }, { id: "inv", i: "💊", l: "Inventory" }, { id: "rack", i: "🗄", l: "Racks" }, { id: "bill", i: "🧾", l: "New Bill" }, ...(isO ? [{ id: "sales", i: "📈", l: "Sales" }, { id: "profit", i: "💹", l: "Profit Margin" }] : []), { id: "stock", i: "📋", l: "Stock" }, { id: "hist", i: "🗂", l: "Bills" }, { id: "wiki", i: "📖", l: "Med Wiki" }, ...(isO ? [{ id: "users", i: "👥", l: "Users" }, { id: "backup", i: "💾", l: "Backup" }] : [])];
+  const nav = [{ id: "dash", i: "📊", l: "Dashboard" }, { id: "purch", i: "📦", l: "Purchases" }, { id: "returns", i: "↩️", l: "Returns" }, { id: "inv", i: "💊", l: "Inventory" }, { id: "rack", i: "🗄", l: "Racks" }, { id: "audit", i: "📝", l: "Audit" }, { id: "bill", i: "🧾", l: "New Bill" }, ...(isO ? [{ id: "sales", i: "📈", l: "Sales" }, { id: "profit", i: "💹", l: "Profit Margin" }] : []), { id: "stock", i: "📋", l: "Stock" }, { id: "hist", i: "🗂", l: "Bills" }, { id: "wiki", i: "📖", l: "Med Wiki" }, ...(isO ? [{ id: "users", i: "👥", l: "Users" }, { id: "backup", i: "💾", l: "Backup" }] : [])];
   if (mob && !sideOpen) return null;
   return (
     <div>
@@ -1015,7 +1017,7 @@ function BillPage({ inv, saveInv, addBill, mob, showBill }) {
         }
       }
     }
-    const bill = { billNo: mkBill(), date: new Date().toISOString(), patient: pt, patientContact: pc, patientAddress: pa, doctor: doc, doctorContact: dc, paymentMode: pm, items: items.map((i) => ({ ...i, amount: ca(i) })), totalMRP: tMRP, totalDiscount: tDisc, billDiscount: billDisc, netAmount: net, cgst: tGST / 2, sgst: tGST / 2 };
+    const bill = { billNo: mkBill(), date: new Date(getIST()).toISOString(), dateIST: new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true }), patient: pt, patientContact: pc, patientAddress: pa, doctor: doc, doctorContact: dc, paymentMode: pm, items: items.map((i) => ({ ...i, amount: ca(i) })), totalMRP: tMRP, totalDiscount: tDisc, billDiscount: billDisc, netAmount: net, cgst: tGST / 2, sgst: tGST / 2 };
     const updInv = inv.map((m) => { const sold = items.filter((i) => i.mid === m.id); if (!sold.length) return m; const totalSold = sold.reduce((s, i) => i.loose ? s + (i.qty / (i.packQty || 10)) : s + i.qty, 0); var newMrp = m.mrp; var fullPack = sold.find(function(i) { return !i.loose && i.unitPrice !== m.mrp; }); if (fullPack) newMrp = fullPack.unitPrice; return { ...m, stock: Math.max(0, Math.round((m.stock - totalSold) * 10000) / 10000), mrp: newMrp }; });
     saveInv(updInv); addBill(bill); showBill(bill); setPt(""); setPc(""); setPa(""); setDoc(""); setDc(""); setItems([]); setPm("Cash"); setBillDisc(0); setBillDiscPct(0); };
 
@@ -1113,7 +1115,7 @@ function SalesPage({ bills, mob }) {
         <div style={{ overflowX: "auto", marginTop: 10 }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: 500 }}><thead><tr>
           {["Bill","Date","Patient","Revenue","Cost","Profit"].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
           {[...fl].reverse().map((b) => { const r = b.netAmount, c = b.items.reduce((s, i) => s + (i.unitPtr || i.ptr || 0) * i.qty, 0), p = r - c;
-            return (<tr key={b.billNo}><td style={{ ...tds, fontFamily: "monospace", fontWeight: 600, color: "#0D6B5B" }}>{b.billNo}</td><td style={tds}>{fD(b.date)}</td><td style={tds}>{b.patient}</td>
+            return (<tr key={b.billNo}><td style={{ ...tds, fontFamily: "monospace", fontWeight: 600, color: "#0D6B5B" }}>{b.billNo}</td><td style={tds}>{b.dateIST || fDT(b.date)}</td><td style={tds}>{b.patient}</td>
               <td style={{ ...tds, fontWeight: 600 }}>Rs.{f2(r)}</td><td style={{ ...tds, color: "#B45309" }}>Rs.{f2(c)}</td>
               <td style={{ ...tds, fontWeight: 700, color: p >= 0 ? "#059669" : "#DC2626" }}>Rs.{f2(p)}</td></tr>); })}</tbody></table></div>}</div></div>
   );
@@ -1409,7 +1411,7 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, askConfi
                   <React.Fragment key={b.billNo}>
                     <tr style={{ background: isOpen ? "#F0FDF4" : "transparent" }}>
                       {sh("bill") && <td style={{ ...tds, fontFamily: "monospace", fontWeight: 600, color: "#0D6B5B" }}>{b.billNo}</td>}
-                      {sh("date") && <td style={tds}>{fD(b.date)}</td>}
+                      {sh("date") && <td style={tds}>{b.dateIST || fDT(b.date)}</td>}
                       {sh("patient") && <td style={{ ...tds, fontWeight: 500 }}>{b.patient}</td>}
                       {sh("amount") && <td style={{ ...tds, fontWeight: 700 }}>Rs.{f2(b.netAmount)}</td>}
                       {sh("pay") && <td style={tds}><Tag bg={b.paymentMode === "Cash" ? "#D1FAE5" : "#DBEAFE"} fg={b.paymentMode === "Cash" ? "#065F46" : "#1E40AF"}>{b.paymentMode}</Tag></td>}
@@ -1542,6 +1544,7 @@ function BackupPage({ inv, bills, purch, saveAll, askConfirm }) {
   const [returns, setReturns] = useState([]);
   const [billReturns, setBillReturns] = useState([]);
   const [racks, setRacks] = useState(null);
+  const [audits, setAudits] = useState(null);
   const fr = useRef(null);
   const migRef = useRef(null);
 
@@ -1555,10 +1558,11 @@ function BackupPage({ inv, bills, purch, saveAll, askConfirm }) {
     fbListen("returns", (data) => { setReturns(data ? Object.values(data) : []); });
     fbListen("billReturns", (data) => { setBillReturns(data ? Object.values(data) : []); });
     db.ref("racks").once("value").then(function(s) { setRacks(s.val()); });
+    db.ref("audits").once("value").then(function(s) { setAudits(s.val()); });
   }, []);
 
   const doBackup = () => {
-    const data = JSON.stringify({ inv, bills, purch, returns, billReturns, racks, v: "fb3", date: new Date().toISOString() });
+    const data = JSON.stringify({ inv, bills, purch, returns, billReturns, racks, audits, v: "fb4", date: new Date().toISOString() });
     setBackupLink(URL.createObjectURL(new Blob([data], { type: "application/json" })));
   };
 
@@ -1569,6 +1573,7 @@ function BackupPage({ inv, bills, purch, saveAll, askConfirm }) {
         if (d.returns && d.returns.length) { var ro = {}; d.returns.forEach(function(r) { ro[r.id] = r; }); fbSet("returns", ro); } else { fbSet("returns", null); }
         if (d.billReturns && d.billReturns.length) { var bro = {}; d.billReturns.forEach(function(r) { bro[r.id] = r; }); fbSet("billReturns", bro); } else { fbSet("billReturns", null); }
         if (d.racks) { fbSet("racks", d.racks); } else { fbSet("racks", null); }
+        if (d.audits) { fbSet("audits", d.audits); } else { fbSet("audits", null); }
         alert("Restored!");
       });
     } catch(err) { alert("Invalid file"); } }; r.readAsText(file); e.target.value = ""; };
@@ -1912,6 +1917,210 @@ function RackPage({ inv, saveInv, mob }) {
           })}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════
+// AUDIT PAGE
+// ══════════════════════════════════════════════
+function AuditPage({ inv, mob }) {
+  const [checked, setChecked] = useState({});
+  const [auditStarted, setAuditStarted] = useState(false);
+  const [auditReport, setAuditReport] = useState(null);
+  const [pastAudits, setPastAudits] = useState([]);
+  const [viewReport, setViewReport] = useState(null);
+  const [clock, setClock] = useState(new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true }));
+
+  useEffect(function() {
+    var t = setInterval(function() { setClock(new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true })); }, 1000);
+    fbListen("audits", function(data) { setPastAudits(data ? Object.values(data) : []); });
+    return function() { clearInterval(t); };
+  }, []);
+
+  // Group medicines by rack
+  var rackGroups = {};
+  var noRack = [];
+  inv.forEach(function(m) {
+    if (m.rack) {
+      if (!rackGroups[m.rack]) rackGroups[m.rack] = [];
+      rackGroups[m.rack].push(m);
+    } else {
+      noRack.push(m);
+    }
+  });
+  var sortedRacks = Object.keys(rackGroups).sort();
+
+  var startAudit = function() {
+    setAuditStarted(true);
+    setChecked({});
+    setAuditReport(null);
+  };
+
+  var toggleCheck = function(id) {
+    setChecked(function(p) { var n = Object.assign({}, p); n[id] = !n[id]; return n; });
+  };
+
+  var checkAll = function() {
+    var all = {};
+    inv.forEach(function(m) { all[m.id] = true; });
+    setChecked(all);
+  };
+
+  var uncheckAll = function() { setChecked({}); };
+
+  var completeAudit = function() {
+    var valid = [];
+    var invalid = [];
+    inv.forEach(function(m) {
+      var item = { id: m.id, name: m.name, batch: m.batch, rack: m.rack || "Unassigned", stock: m.stock, packQty: m.packQty, mrp: m.mrp, expiry: m.expiry || "" };
+      if (checked[m.id]) valid.push(item);
+      else invalid.push(item);
+    });
+
+    var report = {
+      id: mkId(),
+      date: new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true }),
+      totalItems: inv.length,
+      validCount: valid.length,
+      invalidCount: invalid.length,
+      validItems: valid,
+      invalidItems: invalid,
+      auditedBy: "Staff"
+    };
+
+    // Save to Firebase
+    db.ref("audits/" + report.id).set(report);
+    setAuditReport(report);
+    setAuditStarted(false);
+  };
+
+  var renderMedRow = function(m) {
+    return (
+      <div key={m.id} onClick={function() { if (auditStarted) toggleCheck(m.id); }}
+        style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", marginBottom: 3, borderRadius: 8, border: checked[m.id] ? "2px solid #059669" : "1px solid #eee", background: checked[m.id] ? "#D1FAE5" : "#FAFAF7", cursor: auditStarted ? "pointer" : "default", fontSize: 12.5 }}>
+        {auditStarted && <div style={{ width: 20, height: 20, borderRadius: 4, border: checked[m.id] ? "2px solid #059669" : "2px solid #ccc", background: checked[m.id] ? "#059669" : "#fff", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, color: "#fff", fontSize: 13, fontWeight: 700 }}>{checked[m.id] ? "\u2713" : ""}</div>}
+        <div style={{ flex: 1 }}><b>{m.name}</b><span style={{ color: "#888", marginLeft: 6, fontSize: 11 }}>{m.batch}</span></div>
+        <span style={{ color: "#0D6B5B", fontWeight: 600, fontSize: 11, whiteSpace: "nowrap" }}>{fStock(m.stock, m.packQty)}</span>
+        <span style={{ color: "#888", fontSize: 10, whiteSpace: "nowrap" }}>{m.expiry || ""}</span>
+      </div>
+    );
+  };
+
+  var totalChecked = Object.keys(checked).filter(function(k) { return checked[k]; }).length;
+
+  return (
+    <div><h2 style={hds}>Inventory Audit</h2>
+
+      {/* Live clock */}
+      <div style={{ ...cds, display: "flex", justifyContent: "space-between", alignItems: "center", background: "#F0FDF4", borderLeft: "4px solid #0D6B5B" }}>
+        <div><span style={{ fontSize: 18, marginRight: 8 }}>🕐</span><b style={{ fontSize: 16, color: "#0C2E24" }}>{clock}</b><span style={{ fontSize: 11, color: "#888", marginLeft: 8 }}>IST</span></div>
+        <div style={{ fontSize: 12, color: "#555" }}>Total: <b>{inv.length}</b> items | In Racks: <b>{inv.length - noRack.length}</b> | Unassigned: <b>{noRack.length}</b></div>
+      </div>
+
+      {/* Action buttons */}
+      {!auditStarted && !auditReport && <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        <button onClick={startAudit} style={{ ...bts(true), padding: "12px 28px", fontSize: 14 }}>Start New Audit</button>
+      </div>}
+
+      {auditStarted && <div style={{ ...cds, background: "#FFFBEB", border: "2px solid #F59E0B", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <div><b style={{ color: "#B45309" }}>Audit in Progress</b><span style={{ fontSize: 12, color: "#888", marginLeft: 8 }}>{totalChecked}/{inv.length} verified</span></div>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button onClick={checkAll} style={{ ...bts(false), padding: "5px 12px", fontSize: 11 }}>Check All</button>
+          <button onClick={uncheckAll} style={{ ...bts(false), padding: "5px 12px", fontSize: 11 }}>Uncheck All</button>
+          <button onClick={completeAudit} style={{ border: "none", borderRadius: 7, padding: "8px 20px", fontWeight: 600, cursor: "pointer", fontSize: 13, background: "#059669", color: "#fff" }}>Complete Audit</button>
+          <button onClick={function() { setAuditStarted(false); setChecked({}); }} style={bts(false)}>Cancel</button>
+        </div>
+      </div>}
+
+      {/* Progress bar during audit */}
+      {auditStarted && <div style={{ background: "#E5E7EB", borderRadius: 8, height: 8, marginBottom: 16, overflow: "hidden" }}>
+        <div style={{ background: "#059669", height: "100%", width: (totalChecked / Math.max(inv.length, 1) * 100) + "%", borderRadius: 8, transition: "width 0.3s" }}></div>
+      </div>}
+
+      {/* Audit Report */}
+      {(auditReport || viewReport) && (function() {
+        var rpt = viewReport || auditReport;
+        return <div style={{ ...cds, border: "2px solid #0D6B5B", marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div><b style={{ fontSize: 16, color: "#0D6B5B" }}>Audit Report</b><div style={{ fontSize: 12, color: "#888" }}>{rpt.date}</div></div>
+            <button onClick={function() { setAuditReport(null); setViewReport(null); }} style={bts(false)}>Close</button>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(4, 1fr)", gap: 10, marginBottom: 16 }}>
+            <Stat icon="📦" label="Total Items" value={rpt.totalItems} color="#0D6B5B" />
+            <Stat icon="✅" label="Verified" value={rpt.validCount} color="#059669" />
+            <Stat icon="❌" label="Not Verified" value={rpt.invalidCount} color="#DC2626" />
+            <Stat icon="📊" label="Accuracy" value={Math.round(rpt.validCount / Math.max(rpt.totalItems, 1) * 100) + "%"} color={rpt.validCount === rpt.totalItems ? "#059669" : "#B45309"} />
+          </div>
+
+          {rpt.invalidCount > 0 && <div style={{ marginBottom: 12 }}>
+            <b style={{ color: "#DC2626", fontSize: 13 }}>Not Verified ({rpt.invalidCount})</b>
+            <div style={{ overflowX: "auto", marginTop: 6 }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
+              {["Medicine","Batch","Rack","Stock","MRP","Expiry"].map(function(h) { return <th key={h} style={ths}>{h}</th>; })}</tr></thead><tbody>
+              {rpt.invalidItems.map(function(m) { return <tr key={m.id} style={{ background: "#FEF2F2" }}>
+                <td style={{ ...tds, fontWeight: 600, color: "#DC2626" }}>{m.name}</td>
+                <td style={{ ...tds, fontFamily: "monospace", fontSize: 11 }}>{m.batch || "-"}</td>
+                <td style={tds}>{m.rack}</td>
+                <td style={{ ...tds, fontWeight: 600 }}>{fStock(m.stock, m.packQty)}</td>
+                <td style={tds}>Rs.{f2(m.mrp)}</td>
+                <td style={tds}>{m.expiry || "-"}</td></tr>; })}
+            </tbody></table></div>
+          </div>}
+
+          {rpt.validCount > 0 && <div>
+            <b style={{ color: "#059669", fontSize: 13 }}>Verified ({rpt.validCount})</b>
+            <div style={{ overflowX: "auto", marginTop: 6 }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
+              {["Medicine","Batch","Rack","Stock","MRP","Expiry"].map(function(h) { return <th key={h} style={ths}>{h}</th>; })}</tr></thead><tbody>
+              {rpt.validItems.map(function(m) { return <tr key={m.id}>
+                <td style={{ ...tds, fontWeight: 500 }}>{m.name}</td>
+                <td style={{ ...tds, fontFamily: "monospace", fontSize: 11 }}>{m.batch || "-"}</td>
+                <td style={tds}>{m.rack}</td>
+                <td style={{ ...tds, fontWeight: 600, color: "#059669" }}>{fStock(m.stock, m.packQty)}</td>
+                <td style={tds}>Rs.{f2(m.mrp)}</td>
+                <td style={tds}>{m.expiry || "-"}</td></tr>; })}
+            </tbody></table></div>
+          </div>}
+        </div>;
+      })()}
+
+      {/* Rack-wise inventory list (audit mode or view mode) */}
+      {!auditReport && !viewReport && <div>
+        {sortedRacks.map(function(rack) {
+          var meds = rackGroups[rack];
+          return <div key={rack} style={{ ...cds, borderLeft: "4px solid #0D6B5B" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <b style={{ fontSize: 15, color: "#0D6B5B" }}>{rack}</b>
+              <Tag bg="#D1FAE5" fg="#065F46">{meds.length} items</Tag>
+            </div>
+            {meds.map(renderMedRow)}
+          </div>;
+        })}
+
+        {noRack.length > 0 && <div style={{ ...cds, borderLeft: "4px solid #B45309" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <b style={{ fontSize: 15, color: "#B45309" }}>Unassigned (No Rack)</b>
+            <Tag bg="#FEF3C7" fg="#92400E">{noRack.length} items</Tag>
+          </div>
+          {noRack.map(renderMedRow)}
+        </div>}
+      </div>}
+
+      {/* Past Audit Reports */}
+      {pastAudits.length > 0 && !auditStarted && !auditReport && !viewReport && <div style={{ ...cds, marginTop: 16 }}>
+        <b style={{ fontSize: 14 }}>Past Audit Reports ({pastAudits.length})</b>
+        <div style={{ overflowX: "auto", marginTop: 10 }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
+          {["Date","Total","Verified","Not Verified","Accuracy",""].map(function(h) { return <th key={h} style={ths}>{h}</th>; })}</tr></thead><tbody>
+          {[].concat(pastAudits).reverse().map(function(a) {
+            return <tr key={a.id}>
+              <td style={tds}>{a.date}</td>
+              <td style={tds}>{a.totalItems}</td>
+              <td style={{ ...tds, color: "#059669", fontWeight: 600 }}>{a.validCount}</td>
+              <td style={{ ...tds, color: a.invalidCount > 0 ? "#DC2626" : "#059669", fontWeight: 600 }}>{a.invalidCount}</td>
+              <td style={tds}><Tag bg={a.validCount === a.totalItems ? "#D1FAE5" : "#FEF3C7"} fg={a.validCount === a.totalItems ? "#065F46" : "#92400E"}>{Math.round(a.validCount / Math.max(a.totalItems, 1) * 100)}%</Tag></td>
+              <td style={tds}><button onClick={function() { setViewReport(a); }} style={{ ...bts(true), padding: "4px 10px", fontSize: 11 }}>View</button></td>
+            </tr>;
+          })}</tbody></table></div>
+      </div>}
     </div>
   );
 }
@@ -2303,7 +2512,7 @@ function App() {
     const io = {}; i.forEach((m) => { io[m.id] = m; });
     const bo = {}; b.forEach((x) => { bo[x.billNo] = x; });
     const po = {}; p.forEach((x) => { po[x.id] = x; });
-    fbSet("inventory", io); fbSet("bills", bo); fbSet("purchases", po); fbSet("returns", null); fbSet("racks", null); fbSet("billReturns", null);
+    fbSet("inventory", io); fbSet("bills", bo); fbSet("purchases", po); fbSet("returns", null); fbSet("racks", null); fbSet("billReturns", null); fbSet("audits", null);
   }, []);
 
   const askConfirm = useCallback((msg, cb) => { setConfirmMsg(msg); confirmCb.current = cb; }, []);
@@ -2388,6 +2597,7 @@ function App() {
           {page === "returns" && <ReturnsPage purch={purch} inv={inv} saveInv={saveInv} savePurch={savePurch} mob={mob} askConfirm={askConfirm} />}
           {page === "inv" && <InvPage inv={inv} saveInv={saveInv} isO={isO} mob={mob} askConfirm={askConfirm} />}
           {page === "rack" && <RackPage inv={inv} saveInv={saveInv} mob={mob} />}
+          {page === "audit" && <AuditPage inv={inv} mob={mob} />}
           {page === "bill" && <BillPage inv={inv} saveInv={saveInv} addBill={addBill} mob={mob} showBill={showBill} />}
           {page === "sales" && isO && <SalesPage bills={bills} mob={mob} />}
           {page === "profit" && isO && <ProfitPage bills={bills} inv={inv} mob={mob} />}
