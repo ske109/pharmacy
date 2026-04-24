@@ -626,7 +626,7 @@ function Login({ onLogin }) {
 // ══════════════════════════════════════════════
 function Sidebar({ page, setPage, user, onLogout, counts, mob, sideOpen, setSideOpen }) {
   const isO = user.role === "owner";
-  const nav = [{ id: "dash", i: "📊", l: "Dashboard" }, { id: "purch", i: "📦", l: "Purchases" }, { id: "returns", i: "↩️", l: "Returns" }, { id: "inv", i: "💊", l: "Inventory" }, { id: "rack", i: "🗄", l: "Racks" }, { id: "audit", i: "📝", l: "Audit" }, { id: "bill", i: "🧾", l: "New Bill" }, ...(isO ? [{ id: "sales", i: "📈", l: "Sales" }, { id: "profit", i: "💹", l: "Profit Margin" }] : []), { id: "stock", i: "📋", l: "Stock" }, { id: "hist", i: "🗂", l: "Bills" }, { id: "wiki", i: "📖", l: "Med Wiki" }, ...(isO ? [{ id: "users", i: "👥", l: "Users" }, { id: "backup", i: "💾", l: "Backup" }] : [])];
+  const nav = [{ id: "dash", i: "📊", l: "Dashboard" }, { id: "purch", i: "📦", l: "Purchases" }, { id: "returns", i: "↩️", l: "Returns" }, { id: "inv", i: "💊", l: "Inventory" }, { id: "rack", i: "🗄", l: "Racks" }, { id: "audit", i: "📝", l: "Audit" }, { id: "bill", i: "🧾", l: "New Bill" }, ...(isO ? [{ id: "sales", i: "📈", l: "Sales" }, { id: "profit", i: "💹", l: "Profit Margin" }] : []), { id: "stock", i: "📋", l: "Stock" }, { id: "hist", i: "🗂", l: "Bills" }, { id: "wiki", i: "📖", l: "Med Wiki" }, { id: "ency", i: "📚", l: "Encyclopedia" }, ...(isO ? [{ id: "users", i: "👥", l: "Users" }, { id: "backup", i: "💾", l: "Backup" }] : [])];
   if (mob && !sideOpen) return null;
   return (
     <div>
@@ -2447,6 +2447,102 @@ function WikiPage({ inv, mob }) {
 }
 
 // ══════════════════════════════════════════════
+// ENCYCLOPEDIA PAGE (MedGuide India Live)
+// ══════════════════════════════════════════════
+function EncyclopediaPage({ mob }) {
+  const [mode, setMode] = useState("home");
+  const [iframeUrl, setIframeUrl] = useState("");
+  const [search, setSearch] = useState("");
+  const [iframeError, setIframeError] = useState(false);
+
+  var baseUrl = "https://www.medguideindia.info";
+
+  var doSearch = function() {
+    var q = search.trim();
+    if (!q) return;
+    setIframeUrl(baseUrl + "/show_brand.php?search_type=brand&brandname=" + encodeURIComponent(q) + "&submit=FIND");
+    setMode("search");
+  };
+
+  var showBrands = function(letter) {
+    setIframeUrl(baseUrl + "/show_brand.php?bindex=" + letter);
+    setMode("brands");
+  };
+
+  var showGenerics = function(letter) {
+    setIframeUrl(baseUrl + "/show_generics.php?gindex=" + letter);
+    setMode("generics");
+  };
+
+  var openExternal = function() {
+    var w = window.open(iframeUrl || baseUrl, "_blank");
+    if (!w) alert("Popup blocked. URL: " + (iframeUrl || baseUrl));
+  };
+
+  var alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+
+  return (
+    <div><h2 style={hds}>Medicine Encyclopedia</h2>
+      <div style={{ fontSize: 12, color: "#888", marginBottom: 12 }}>Powered by MedGuide India — comprehensive database of Indian medicine brands, generics, manufacturers and prices</div>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+        <input value={search} onChange={function(e) { setSearch(e.target.value); }} onKeyDown={function(e) { if (e.key === "Enter") doSearch(); }} placeholder="Search brand name (e.g. Dolo, Crocin, Augmentin)" style={{ ...inps, flex: 1, fontSize: 15, padding: "12px 16px", minWidth: 200 }} />
+        <button onClick={doSearch} style={{ ...bts(true), padding: "12px 20px", fontSize: 14 }}>Search</button>
+        {iframeUrl && <button onClick={openExternal} style={{ ...bts(false), padding: "12px 16px", fontSize: 12 }}>Open in New Tab</button>}
+      </div>
+
+      <div style={{ display: "flex", gap: 3, background: "#E8E4DD", borderRadius: 7, padding: 3, marginBottom: 12 }}>
+        <button onClick={function() { setMode("home"); setIframeUrl(""); }} style={{ padding: "6px 12px", border: "none", borderRadius: 5, fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: mode === "home" ? "#fff" : "transparent", color: mode === "home" ? "#0D6B5B" : "#888" }}>Home</button>
+        <button onClick={function() { setMode("brands"); setIframeUrl(baseUrl + "/show_brand.php"); }} style={{ padding: "6px 12px", border: "none", borderRadius: 5, fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: mode === "brands" ? "#fff" : "transparent", color: mode === "brands" ? "#0D6B5B" : "#888" }}>All Brands</button>
+        <button onClick={function() { setMode("generics"); setIframeUrl(baseUrl + "/show_generics.php"); }} style={{ padding: "6px 12px", border: "none", borderRadius: 5, fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: mode === "generics" ? "#fff" : "transparent", color: mode === "generics" ? "#0D6B5B" : "#888" }}>All Generics</button>
+        <button onClick={function() { setMode("mfg"); setIframeUrl(baseUrl + "/manufacturer_test.php"); }} style={{ padding: "6px 12px", border: "none", borderRadius: 5, fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: mode === "mfg" ? "#fff" : "transparent", color: mode === "mfg" ? "#0D6B5B" : "#888" }}>Manufacturers</button>
+      </div>
+
+      {mode === "home" && <div>
+        <div style={cds}>
+          <b style={{ fontSize: 14 }}>Browse Brands A-Z</b>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 8 }}>
+            {alpha.map(function(l) { return <button key={l} onClick={function() { showBrands(l); }} style={{ width: 36, height: 36, border: "1px solid #ddd", borderRadius: 8, background: "#FAFAF7", cursor: "pointer", fontSize: 14, fontWeight: 600, color: "#0D6B5B" }}>{l}</button>; })}
+          </div>
+        </div>
+        <div style={cds}>
+          <b style={{ fontSize: 14 }}>Browse Generics A-Z</b>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 8 }}>
+            {alpha.map(function(l) { return <button key={l} onClick={function() { showGenerics(l); }} style={{ width: 36, height: 36, border: "1px solid #ddd", borderRadius: 8, background: "#FAFAF7", cursor: "pointer", fontSize: 14, fontWeight: 600, color: "#2563EB" }}>{l}</button>; })}
+          </div>
+        </div>
+        <div style={cds}>
+          <b style={{ fontSize: 14 }}>Quick Links</b>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+            {["Dolo","Crocin","Azithromycin","Augmentin","Pantoprazole","Metformin","Amoxicillin","Cetirizine","Diclofenac","Omeprazole","Ciprofloxacin","Paracetamol","Atorvastatin","Amlodipine","Metoprolol"].map(function(q) {
+              return <button key={q} onClick={function() { setSearch(q); setIframeUrl(baseUrl + "/show_brand.php?search_type=brand&brandname=" + encodeURIComponent(q) + "&submit=FIND"); setMode("search"); }} style={{ padding: "6px 14px", background: "#FAFAF7", border: "1px solid #ddd", borderRadius: 20, fontSize: 12, cursor: "pointer", color: "#555" }}>{q}</button>;
+            })}
+          </div>
+        </div>
+      </div>}
+
+      {iframeUrl && <div style={{ ...cds, padding: 0, overflow: "hidden" }}>
+        {iframeError && <div style={{ padding: 20, textAlign: "center" }}>
+          <div style={{ fontSize: 14, color: "#B45309", marginBottom: 8 }}>The website may not load in embedded view due to security restrictions.</div>
+          <button onClick={openExternal} style={{ ...bts(true), padding: "12px 24px" }}>Open MedGuide India in New Tab</button>
+          <div style={{ marginTop: 12 }}>
+            <a href={iframeUrl} target="_blank" rel="noopener noreferrer" style={{ color: "#2563EB", fontSize: 12 }}>{iframeUrl}</a>
+          </div>
+        </div>}
+        <iframe
+          src={iframeUrl}
+          style={{ width: "100%", height: iframeError ? 0 : (mob ? 500 : 700), border: "none", display: iframeError ? "none" : "block" }}
+          title="MedGuide India"
+          sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
+          onLoad={function() { setIframeError(false); }}
+          onError={function() { setIframeError(true); }}
+        />
+      </div>}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════
 // MAIN APP
 // ══════════════════════════════════════════════
 function App() {
@@ -2604,6 +2700,7 @@ function App() {
           {page === "stock" && <StockPage inv={inv} saveInv={saveInv} isO={isO} mob={mob} />}
           {page === "hist" && <HistPage bills={bills} showBill={showBill} saveBills={saveBills} askConfirm={askConfirm} inv={inv} saveInv={saveInv} />}
           {page === "wiki" && <WikiPage inv={inv} mob={mob} />}
+          {page === "ency" && <EncyclopediaPage mob={mob} />}
           {page === "users" && isO && <UsersPage sessions={sessions} mob={mob} />}
           {page === "backup" && isO && <BackupPage inv={inv} bills={bills} purch={purch} saveAll={saveAll} askConfirm={askConfirm} />}
         </div></div></div>
