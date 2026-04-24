@@ -626,7 +626,7 @@ function Login({ onLogin }) {
 // ══════════════════════════════════════════════
 function Sidebar({ page, setPage, user, onLogout, counts, mob, sideOpen, setSideOpen }) {
   const isO = user.role === "owner";
-  const nav = [{ id: "dash", i: "📊", l: "Dashboard" }, { id: "purch", i: "📦", l: "Purchases" }, { id: "returns", i: "↩️", l: "Returns" }, { id: "inv", i: "💊", l: "Inventory" }, { id: "rack", i: "🗄", l: "Racks" }, { id: "audit", i: "📝", l: "Audit" }, { id: "bill", i: "🧾", l: "New Bill" }, ...(isO ? [{ id: "sales", i: "📈", l: "Sales" }, { id: "profit", i: "💹", l: "Profit Margin" }] : []), { id: "stock", i: "📋", l: "Stock" }, { id: "hist", i: "🗂", l: "Bills" }, { id: "wiki", i: "📖", l: "Med Wiki" }, { id: "ency", i: "📚", l: "Encyclopedia" }, ...(isO ? [{ id: "users", i: "👥", l: "Users" }, { id: "backup", i: "💾", l: "Backup" }] : [])];
+  const nav = [{ id: "dash", i: "📊", l: "Dashboard" }, { id: "purch", i: "📦", l: "Purchases" }, { id: "returns", i: "↩️", l: "Returns" }, { id: "inv", i: "💊", l: "Inventory" }, { id: "rack", i: "🗄", l: "Racks" }, { id: "audit", i: "📝", l: "Audit" }, { id: "bill", i: "🧾", l: "New Bill" }, ...(isO ? [{ id: "sales", i: "📈", l: "Sales" }, { id: "profit", i: "💹", l: "Profit Margin" }] : []), { id: "stock", i: "📋", l: "Stock" }, { id: "hist", i: "🗂", l: "Bills" }, { id: "ency", i: "📚", l: "Encyclopedia" }, ...(isO ? [{ id: "users", i: "👥", l: "Users" }, { id: "backup", i: "💾", l: "Backup" }] : [])];
   if (mob && !sideOpen) return null;
   return (
     <div>
@@ -2237,306 +2237,308 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm }) {
 }
 
 // ══════════════════════════════════════════════
-// MEDICINE WIKI (Hybrid: Local DB + Free APIs)
+// ENCYCLOPEDIA (Local DB + MedGuide India LIVE + OpenFDA)
 // ══════════════════════════════════════════════
-// Indian Brand → Generic mapping for API fallback
-var BRAND_MAP = {"dolo":"paracetamol","crocin":"paracetamol","calpol":"paracetamol","pacimol":"paracetamol","metacin":"paracetamol","combiflam":"ibuprofen+paracetamol","sumo":"nimesulide+paracetamol","saridon":"propyphenazone+paracetamol+caffeine","disprin":"aspirin","ecosprin":"aspirin","brufen":"ibuprofen","voveran":"diclofenac","flexon":"ibuprofen+paracetamol","hifenac":"aceclofenac","zerodol":"aceclofenac","movexx":"aceclofenac+paracetamol","nicip":"nimesulide","meftal":"mefenamic acid","azee":"azithromycin","azicip":"azithromycin","zithromax":"azithromycin","mox":"amoxicillin","novamox":"amoxicillin","augmentin":"amoxicillin+clavulanic acid","clavam":"amoxicillin+clavulanic acid","moxikind":"amoxicillin+clavulanic acid","taxim":"cefixime","cefix":"cefixime","zifi":"cefixime","ciplox":"ciprofloxacin","cifran":"ciprofloxacin","levoflox":"levofloxacin","levomac":"levofloxacin","oflox":"ofloxacin","zanocin":"ofloxacin","norflox":"norfloxacin","norbactin":"norfloxacin","flagyl":"metronidazole","metrogyl":"metronidazole","sporidex":"cephalexin","phexin":"cephalexin","doxt":"doxycycline","pan":"pantoprazole","pantocid":"pantoprazole","pantop":"pantoprazole","omez":"omeprazole","razo":"rabeprazole","rablet":"rabeprazole","zinetac":"ranitidine","rantac":"ranitidine","domstal":"domperidone","vomistop":"domperidone","emeset":"ondansetron","ondem":"ondansetron","imodium":"loperamide","glycomet":"metformin","glucophage":"metformin","obimet":"metformin","amaryl":"glimepiride","januvia":"sitagliptin","thyronorm":"levothyroxine","eltroxin":"levothyroxine","thyrox":"levothyroxine","telma":"telmisartan","telmikind":"telmisartan","losacar":"losartan","repace":"losartan","envas":"enalapril","amlong":"amlodipine","stamlo":"amlodipine","norvasc":"amlodipine","betaloc":"metoprolol","met xl":"metoprolol","atorva":"atorvastatin","lipitor":"atorvastatin","tonact":"atorvastatin","rozavel":"rosuvastatin","crestor":"rosuvastatin","clopilet":"clopidogrel","plavix":"clopidogrel","lasix":"furosemide","warf":"warfarin","cetzine":"cetirizine","alerid":"cetirizine","zyrtec":"cetirizine","levocet":"levocetirizine","xyzal":"levocetirizine","allegra":"fexofenadine","montair":"montelukast","montek":"montelukast","singulair":"montelukast","asthalin":"salbutamol","ventolin":"salbutamol","budecort":"budesonide","deriphyllin":"theophylline+etofylline","alprax":"alprazolam","restyl":"alprazolam","clonotril":"clonazepam","rivotril":"clonazepam","nexito":"escitalopram","cipralex":"escitalopram","zosert":"sertraline","daxid":"sertraline","tryptomer":"amitriptyline","zolfresh":"zolpidem","eptoin":"phenytoin","dilantin":"phenytoin","tegretal":"carbamazepine","gabapin":"gabapentin","neurontin":"gabapentin","pregalin":"pregabalin","lyrica":"pregabalin","keppra":"levetiracetam","levera":"levetiracetam","levipil":"levetiracetam","omnacortil":"prednisolone","wysolone":"prednisolone","medrol":"methylprednisolone","zocon":"fluconazole","forcan":"fluconazole","candid":"clotrimazole","canesten":"clotrimazole","zovirax":"acyclovir","acivir":"acyclovir","zentel":"albendazole","bendex":"albendazole","becosules":"multivitamin b","supradyn":"multivitamin","zincovit":"multivitamin+zinc","shelcal":"calcium+vitamin d3","cipcal":"calcium+vitamin d3","limcee":"ascorbic acid","celin":"ascorbic acid","folvite":"folic acid","evion":"tocopherol","electral":"oral rehydration salts","ascoril":"ambroxol+levosalbutamol+guaifenesin","benadryl":"diphenhydramine","betadine":"povidone iodine","cipladine":"povidone iodine","dettol":"chloroxylenol","savlon":"chlorhexidine","omnigel":"diclofenac topical","volini":"diclofenac topical","moov":"diclofenac topical","neosporin":"neomycin+polymyxin b","soframycin":"framycetin","t-bact":"mupirocin","bactroban":"mupirocin","ring guard":"tolnaftate+menthol","itchguard":"clotrimazole+menthol","strepsils":"amylmetacresol","dulcoflex":"bisacodyl","cremaffin":"liquid paraffin+milk of magnesia","cyclopam":"dicyclomine","primolut":"norethisterone","regestrone":"norethisterone","uprise":"cholecalciferol","calcitas":"cholecalciferol","tayo":"cholecalciferol","d-rise":"cholecalciferol","pan d":"pantoprazole+domperidone","pantocid d":"pantoprazole+domperidone","sucrafil":"sucralfate","silverex":"silver sulfadiazine","permite":"permethrin","ivecop":"ivermectin","lantus":"insulin glargine","basalog":"insulin glargine","neo mercazole":"carbimazole","tobrex":"tobramycin","moxicip":"moxifloxacin","vigamox":"moxifloxacin","winolap":"olopatadine","patanol":"olopatadine"};
+function parseMedGuideHTML(html) {
+  var results = [];
+  // Create a temporary DOM to parse HTML
+  var parser = new DOMParser();
+  var doc = parser.parseFromString(html, "text/html");
+  var tables = doc.querySelectorAll("table");
+  var currentMfg = "";
 
-function WikiPage({ inv, mob }) {
+  tables.forEach(function(table) {
+    var rows = table.querySelectorAll("tr");
+    rows.forEach(function(row) {
+      var cells = row.querySelectorAll("td");
+      if (cells.length === 0) return;
+      var text = row.textContent.trim();
+
+      // Manufacturer row: "Manufacturer : Company Name"
+      if (text.indexOf("Manufacturer") >= 0 && text.indexOf(":") >= 0) {
+        var mfgMatch = text.match(/Manufacturer\s*:\s*(.+)/i);
+        if (mfgMatch) currentMfg = mfgMatch[1].trim().replace(/\s+/g, " ");
+        return;
+      }
+
+      // Data row: S/N | Name | Type | Unit | Constituent | Package | Price | PricePerUnit
+      if (cells.length >= 7) {
+        var sn = cells[0] ? cells[0].textContent.trim() : "";
+        if (!sn.match(/^\d+$/)) return;
+
+        var name = cells[1] ? cells[1].textContent.trim() : "";
+        var type = cells[2] ? cells[2].textContent.trim() : "";
+        var unit = cells[3] ? cells[3].textContent.trim() : "";
+        var constituent = cells[4] ? cells[4].textContent.trim() : "";
+        var packageUnit = cells[5] ? cells[5].textContent.trim() : "";
+        var price = cells[6] ? cells[6].textContent.trim() : "";
+        var pricePerUnit = cells.length > 7 ? cells[7].textContent.trim() : "";
+
+        if (name && name.length > 1) {
+          results.push({
+            sn: parseInt(sn),
+            name: name,
+            type: type,
+            unit: unit,
+            constituents: constituent.replace(/\s+/g, " ").trim(),
+            packageUnit: packageUnit,
+            price: price,
+            pricePerUnit: pricePerUnit,
+            manufacturer: currentMfg
+          });
+        }
+      }
+    });
+  });
+  return results;
+}
+
+function EncyclopediaPage({ inv, mob }) {
   const [query, setQuery] = useState("");
-  const [result, setResult] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [cache, setCache] = useState({});
+  const [tab, setTab] = useState("all");
+  const [localResults, setLocalResults] = useState(null);
+  const [mgResults, setMgResults] = useState(null);
+  const [mgAlts, setMgAlts] = useState(null);
+  const [mgAltsLoading, setMgAltsLoading] = useState(false);
+  const [fdaResults, setFdaResults] = useState(null);
+  const [mgLoading, setMgLoading] = useState(false);
+  const [fdaLoading, setFdaLoading] = useState(false);
+  const [mgError, setMgError] = useState("");
+
+  // Search MedGuide for alternatives by generic/constituent name
+  var searchAlternatives = function(constituents) {
+    if (!constituents) return;
+    // Extract first generic name from constituents like "Paracetamol-650mg Caffeine-50mg"
+    var parts = constituents.split(/[,;+&]/).map(function(p) { return p.trim(); });
+    var mainGeneric = "";
+    for (var i = 0; i < parts.length; i++) {
+      var cleaned = parts[i].replace(/[-]\s*[\d.]+\s*(%|mg|ml|gm|mcg|iu|g|w\/v|w\/w)/gi, "").trim();
+      if (cleaned.length > 2 && cleaned.match(/[a-zA-Z]/)) { mainGeneric = cleaned; break; }
+    }
+    if (!mainGeneric) return;
+
+    setMgAltsLoading(true);
+    var altUrl = "https://www.medguideindia.info/show_brand.php?search_type=generic&genericname=" + encodeURIComponent(mainGeneric) + "&submit=FIND";
+    fetch(PROXY_URL + "/medguide?url=" + encodeURIComponent(altUrl))
+    .then(function(r) { return r.text(); })
+    .then(function(html) {
+      var parsed = parseMedGuideHTML(html);
+      setMgAlts({ generic: mainGeneric, items: parsed });
+      setMgAltsLoading(false);
+    })
+    .catch(function() { setMgAltsLoading(false); });
+  };
 
   var doSearch = function() {
     var q = query.trim();
     if (!q) return;
+    setMgError("");
+    setTab("all");
+    setMgAlts(null);
+
+    // 1. Local MED_DB search (instant)
     var ql = q.toLowerCase();
-
-    // Check cache
-    if (cache[ql]) { setResult(cache[ql]); return; }
-
-    // Step 1: Search local MED_DB
-    var found = MED_DB.filter(function(m) {
+    var local = MED_DB.filter(function(m) {
       return m.n.toLowerCase().indexOf(ql) >= 0 || m.g.toLowerCase().indexOf(ql) >= 0 || m.c.toLowerCase().indexOf(ql) >= 0 ||
         m.cp.some(function(c) { return c.s.toLowerCase().indexOf(ql) >= 0; }) ||
         m.u.some(function(u) { return u.toLowerCase().indexOf(ql) >= 0; });
     });
+    setLocalResults(local.length > 0 ? local : null);
 
-    if (found.length > 0) {
-      var m = found[0];
-      var inInv = inv.filter(function(im) { return im.name.toLowerCase().indexOf(m.g.toLowerCase()) >= 0 || im.name.toLowerCase().indexOf(m.n.split(" ")[0].toLowerCase()) >= 0; });
-      var alts = (m.alt || []).map(function(a) {
-        return Object.assign({}, a, { inStock: inv.some(function(im) { return im.name.toLowerCase().indexOf(a.n.split(" ")[0].toLowerCase()) >= 0; }) });
-      });
-      var res = { source: "local", med: m, allMatches: found, inInventory: inInv, altsChecked: alts };
-      setResult(res);
-      setCache(function(p) { var n = Object.assign({}, p); n[ql] = res; return n; });
-      return;
-    }
+    // 2. MedGuide India LIVE search (via worker proxy)
+    setMgLoading(true); setMgResults(null);
+    var mgUrl = "https://www.medguideindia.info/show_brand.php?search_type=brand&brandname=" + encodeURIComponent(q) + "&submit=FIND";
+    fetch(PROXY_URL + "/medguide?url=" + encodeURIComponent(mgUrl))
+    .then(function(r) {
+      if (!r.ok) throw new Error("Proxy returned " + r.status);
+      return r.text();
+    })
+    .then(function(html) {
+      var parsed = parseMedGuideHTML(html);
+      setMgResults(parsed);
+      setMgLoading(false);
+      // Auto-search alternatives using first result's constituents
+      if (parsed.length > 0 && parsed[0].constituents) {
+        searchAlternatives(parsed[0].constituents);
+      }
+    })
+    .catch(function(err) {
+      setMgError("MedGuide India: " + err.message + ". Update worker.js with the new /medguide route.");
+      setMgLoading(false);
+    });
 
-    // Step 2: Lookup brand mapping
+    // 3. OpenFDA search (free API)
+    setFdaLoading(true); setFdaResults(null);
     var genericName = "";
     var searchWords = ql.replace(/\d+\s*(mg|ml|gm|g|mcg|iu)\s*/gi, "").trim();
     Object.keys(BRAND_MAP).forEach(function(brand) {
       if (searchWords.indexOf(brand) >= 0 || brand.indexOf(searchWords) >= 0) genericName = BRAND_MAP[brand];
     });
-
-    // Step 3: Free API lookup
-    setLoading(true);
-    var apiQuery = genericName || q;
-
-    // Try OpenFDA first (free, no key)
-    fetch("https://api.fda.gov/drug/label.json?search=openfda.generic_name:%22" + encodeURIComponent(apiQuery) + "%22&limit=1")
+    var fdaQ = genericName || q;
+    fetch("https://api.fda.gov/drug/label.json?search=openfda.generic_name:%22" + encodeURIComponent(fdaQ) + "%22+openfda.brand_name:%22" + encodeURIComponent(q) + "%22&limit=3")
     .then(function(r) { return r.json(); })
     .then(function(data) {
       if (data.results && data.results.length > 0) {
-        var drug = data.results[0];
-        var gn = (drug.openfda && drug.openfda.generic_name) ? drug.openfda.generic_name[0] : apiQuery;
-        var bn = (drug.openfda && drug.openfda.brand_name) ? drug.openfda.brand_name[0] : q;
-        var cat = (drug.openfda && drug.openfda.pharm_class_epc) ? drug.openfda.pharm_class_epc[0] : "";
-        var moa = (drug.openfda && drug.openfda.pharm_class_moa) ? drug.openfda.pharm_class_moa : [];
-        var cs = (drug.openfda && drug.openfda.pharm_class_cs) ? drug.openfda.pharm_class_cs : [];
-        var uses = drug.indications_and_usage ? drug.indications_and_usage[0].split(/[.;]/).filter(function(s) { return s.trim().length > 5; }).slice(0, 6).map(function(s) { return s.trim().substring(0, 80); }) : [];
-        var se = drug.adverse_reactions ? drug.adverse_reactions[0].split(/[,;.]/).filter(function(s) { return s.trim().length > 3 && s.trim().length < 40; }).slice(0, 8).map(function(s) { return s.trim(); }) : [];
-        var warn = drug.warnings ? drug.warnings[0].split(/[.;]/).filter(function(s) { return s.trim().length > 10; }).slice(0, 5).map(function(s) { return s.trim().substring(0, 100); }) : [];
-        var dosage = drug.dosage_and_administration ? drug.dosage_and_administration[0].substring(0, 300) : "";
-        var rx = drug.openfda && drug.openfda.product_type ? drug.openfda.product_type[0] === "HUMAN PRESCRIPTION DRUG" : true;
-
-        var subCats = [];
-        if (cs.length) subCats = subCats.concat(cs);
-        if (moa.length) subCats = subCats.concat(moa);
-        if (cat) subCats.push(cat);
-
-        var inInv = inv.filter(function(im) { return im.name.toLowerCase().indexOf(gn.toLowerCase().split(" ")[0]) >= 0 || im.name.toLowerCase().indexOf(ql) >= 0; });
-
-        var apiRes = {
-          source: "api", med: {
-            n: bn, g: gn, c: cat || "Medicine",
-            sc: subCats.length > 0 ? subCats : [cat || "General"],
-            cp: [{ s: gn, st: "" }],
-            u: uses.length > 0 ? uses : ["See prescribing information"],
-            alt: [], se: se, d: dosage, rx: rx
-          }, allMatches: [], inInventory: inInv, altsChecked: []
-        };
-        setResult(apiRes);
-        setCache(function(p) { var n = Object.assign({}, p); n[ql] = apiRes; return n; });
-      } else {
-        // Not found in OpenFDA either
-        setResult({ source: "none", empty: true, q: q, generic: genericName });
-      }
-      setLoading(false);
-    })
-    .catch(function() {
-      setResult({ source: "none", empty: true, q: q, generic: genericName });
-      setLoading(false);
-    });
+        setFdaResults(data.results.map(function(drug) {
+          return {
+            brand: (drug.openfda && drug.openfda.brand_name) ? drug.openfda.brand_name[0] : q,
+            generic: (drug.openfda && drug.openfda.generic_name) ? drug.openfda.generic_name[0] : fdaQ,
+            category: (drug.openfda && drug.openfda.pharm_class_epc) ? drug.openfda.pharm_class_epc[0] : "",
+            manufacturer: (drug.openfda && drug.openfda.manufacturer_name) ? drug.openfda.manufacturer_name[0] : "",
+            route: (drug.openfda && drug.openfda.route) ? drug.openfda.route[0] : "",
+            uses: drug.indications_and_usage ? drug.indications_and_usage[0].split(/[.;]/).filter(function(s){return s.trim().length>5;}).slice(0,4).map(function(s){return s.trim().substring(0,100);}) : [],
+            sideEffects: drug.adverse_reactions ? drug.adverse_reactions[0].split(/[,;.]/).filter(function(s){return s.trim().length>3&&s.trim().length<50;}).slice(0,6).map(function(s){return s.trim();}) : [],
+            dosage: drug.dosage_and_administration ? drug.dosage_and_administration[0].substring(0,250) : "",
+            rx: drug.openfda && drug.openfda.product_type ? drug.openfda.product_type[0]==="HUMAN PRESCRIPTION DRUG" : true
+          };
+        }));
+      } else { setFdaResults([]); }
+      setFdaLoading(false);
+    }).catch(function() { setFdaResults([]); setFdaLoading(false); });
   };
 
-  return (
-    <div><h2 style={hds}>Medicine Wiki</h2>
-      <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
-        <input value={query} onChange={function(e) { setQuery(e.target.value); }} onKeyDown={function(e) { if (e.key === "Enter") doSearch(); }} placeholder="Search any medicine (brand name, generic name, or use...)" style={{ ...inps, flex: 1, fontSize: 16, padding: "14px 16px" }} />
-        <button onClick={doSearch} disabled={loading} style={{ ...bts(true), padding: "14px 24px", fontSize: 14, opacity: loading ? 0.6 : 1 }}>{loading ? "Searching..." : "Search"}</button>
-      </div>
-
-      {loading && <div style={{ ...cds, textAlign: "center", padding: 30 }}><div style={{ fontSize: 36, marginBottom: 8 }}>🔍</div><div style={{ color: "#888", fontSize: 14 }}>Searching free medical databases...</div></div>}
-
-      {result && result.empty && <div style={{ ...cds, textAlign: "center", padding: 30 }}>
-        <div style={{ fontSize: 36, marginBottom: 8, opacity: 0.4 }}>🔍</div>
-        <div style={{ fontSize: 14, color: "#888" }}>No results for "<b>{result.q}</b>"</div>
-        {result.generic && <div style={{ fontSize: 12, color: "#aaa", marginTop: 6 }}>Mapped to generic: <b>{result.generic}</b> but no data found</div>}
-        <div style={{ fontSize: 12, color: "#aaa", marginTop: 6 }}>Try searching by generic/salt name (e.g. "paracetamol" instead of brand name)</div>
-      </div>}
-
-      {result && result.med && <div>
-        <div style={{ ...cds, borderLeft: "4px solid #0D6B5B", background: "#F0FDF4" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-            <div>
-              <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "'Playfair Display',serif", color: "#0C2E24" }}>{result.med.n}</div>
-              <div style={{ fontSize: 13, color: "#888", marginTop: 4 }}>Generic: <b>{result.med.g}</b></div>
-            </div>
-            <Tag bg={result.source === "local" ? "#D1FAE5" : "#DBEAFE"} fg={result.source === "local" ? "#065F46" : "#1E40AF"}>{result.source === "local" ? "Local DB" : "OpenFDA"}</Tag>
-          </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-            <Tag bg="#D1FAE5" fg="#065F46">{result.med.c}</Tag>
-            {result.med.rx ? <Tag bg="#FEE2E2" fg="#991B1B">Rx Required</Tag> : <Tag bg="#DBEAFE" fg="#1E40AF">OTC</Tag>}
-            {result.inInventory.length > 0 && <Tag bg="#D1FAE5" fg="#065F46">In Inventory</Tag>}
-          </div>
-        </div>
-
-        {result.med.sc && result.med.sc.length > 0 && <div style={cds}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}><span style={{ fontSize: 18 }}>🏷</span><b style={{ fontSize: 14 }}>Classification</b></div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }}>
-            {result.med.sc.map(function(cat, i) {
-              return React.createElement(React.Fragment, { key: i },
-                React.createElement("span", { style: { padding: "4px 12px", background: i === result.med.sc.length - 1 ? "#0D6B5B" : "#E8E4DD", color: i === result.med.sc.length - 1 ? "#fff" : "#555", borderRadius: 20, fontSize: 11, fontWeight: 600 } }, cat),
-                i < result.med.sc.length - 1 && React.createElement("span", { style: { color: "#ccc", fontSize: 14 } }, "\u2192")
-              );
-            })}
-          </div>
-        </div>}
-
-        <div style={cds}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}><span style={{ fontSize: 18 }}>🧪</span><b style={{ fontSize: 14 }}>Composition</b></div>
-          <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 8 }}>
-            {result.med.cp.map(function(c, i) { return <div key={i} style={{ padding: "8px 12px", background: "#FAFAF7", borderRadius: 8, border: "1px solid #eee", fontSize: 13 }}><b style={{ color: "#0D6B5B" }}>{c.s}</b>{c.st && <span style={{ color: "#888", marginLeft: 6 }}>{c.st}</span>}</div>; })}
-          </div>
-        </div>
-
-        <div style={cds}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}><span style={{ fontSize: 18 }}>💊</span><b style={{ fontSize: 14 }}>Uses</b></div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {result.med.u.map(function(u, i) { return <span key={i} style={{ padding: "4px 12px", background: "#EFF6FF", borderRadius: 20, fontSize: 12, color: "#1E40AF" }}>{u}</span>; })}
-          </div>
-        </div>
-
-        {result.altsChecked && result.altsChecked.length > 0 && <div style={cds}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}><span style={{ fontSize: 18 }}>🔄</span><b style={{ fontSize: 14 }}>Alternatives</b></div>
-          <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
-            {["Medicine","Manufacturer","Type","In Stock"].map(function(h) { return <th key={h} style={ths}>{h}</th>; })}</tr></thead><tbody>
-            {result.altsChecked.map(function(a, i) {
-              return <tr key={i}><td style={{ ...tds, fontWeight: 600 }}>{a.n}</td><td style={{ ...tds, fontSize: 12, color: "#888" }}>{a.m || "-"}</td>
-                <td style={tds}><Tag bg={a.e ? "#D1FAE5" : "#FEF3C7"} fg={a.e ? "#065F46" : "#92400E"}>{a.e ? "Same Salt" : "Similar"}</Tag></td>
-                <td style={tds}>{a.inStock ? <Tag bg="#D1FAE5" fg="#065F46">Yes</Tag> : <span style={{ color: "#aaa", fontSize: 12 }}>No</span>}</td></tr>;
-            })}</tbody></table></div>
-        </div>}
-
-        {result.med.se && result.med.se.length > 0 && <div style={cds}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}><span style={{ fontSize: 18 }}>⚠️</span><b style={{ fontSize: 14 }}>Side Effects</b></div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {result.med.se.map(function(s, i) { return <span key={i} style={{ padding: "4px 12px", background: "#FEF3C7", borderRadius: 20, fontSize: 12, color: "#92400E" }}>{s}</span>; })}
-          </div>
-        </div>}
-
-        {result.med.d && <div style={cds}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}><span style={{ fontSize: 18 }}>📋</span><b style={{ fontSize: 14 }}>Dosage</b></div>
-          <div style={{ fontSize: 13, color: "#555", lineHeight: 1.6 }}>{result.med.d.substring(0, 400)}</div>
-        </div>}
-
-        {result.inInventory && result.inInventory.length > 0 && <div style={{ ...cds, border: "2px solid #0D6B5B" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}><span style={{ fontSize: 18 }}>📦</span><b style={{ fontSize: 14 }}>Your Inventory</b></div>
-          <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
-            {["Name","Batch","Expiry","Stock","MRP"].map(function(h) { return <th key={h} style={ths}>{h}</th>; })}</tr></thead><tbody>
-            {result.inInventory.map(function(m) {
-              return <tr key={m.id}><td style={{ ...tds, fontWeight: 600 }}>{m.name}</td><td style={{ ...tds, fontFamily: "monospace", fontSize: 11 }}>{m.batch}</td><td style={tds}>{m.expiry || "-"}</td><td style={{ ...tds, fontWeight: 700, color: "#0D6B5B" }}>{fStock(m.stock, m.packQty)}</td><td style={tds}>Rs.{f2(m.mrp)}</td></tr>;
-            })}</tbody></table></div>
-        </div>}
-
-        {result.allMatches && result.allMatches.length > 1 && <div style={cds}>
-          <b style={{ fontSize: 13 }}>Other matches ({result.allMatches.length - 1})</b>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
-            {result.allMatches.slice(1, 8).map(function(m, i) { return <button key={i} onClick={function() { setQuery(m.n); }} style={{ padding: "6px 14px", background: "#FAFAF7", border: "1px solid #ddd", borderRadius: 20, fontSize: 12, cursor: "pointer" }}>{m.n}</button>; })}
-          </div>
-        </div>}
-      </div>}
-
-      {!result && !loading && <div style={{ textAlign: "center", padding: 40, color: "#888" }}>
-        <div style={{ fontSize: 48, marginBottom: 12, opacity: 0.4 }}>📖</div>
-        <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>Search any medicine</div>
-        <div style={{ fontSize: 12, marginBottom: 4 }}>100+ Indian brands in local database (instant, offline)</div>
-        <div style={{ fontSize: 12, marginBottom: 16, color: "#aaa" }}>200+ brand-to-generic mappings + OpenFDA free API for everything else</div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center" }}>
-          {["Dolo 650","Azithromycin","Crocin","Pan 40","Metformin","Cetirizine","Montair LC","Combiflam","Becosules","Omnigel","Betadine","Losartan","Gabapentin","Escitalopram"].map(function(s) {
-            return <button key={s} onClick={function() { setQuery(s); }} style={{ padding: "6px 14px", background: "#FAFAF7", border: "1px solid #ddd", borderRadius: 20, fontSize: 12, cursor: "pointer", color: "#555" }}>{s}</button>;
-          })}
-        </div>
-      </div>}
-    </div>
-  );
-}
-
-// ══════════════════════════════════════════════
-// ENCYCLOPEDIA PAGE (MedGuide India Live)
-// ══════════════════════════════════════════════
-function EncyclopediaPage({ mob }) {
-  const [mode, setMode] = useState("home");
-  const [iframeUrl, setIframeUrl] = useState("");
-  const [search, setSearch] = useState("");
-  const [iframeError, setIframeError] = useState(false);
-
-  var baseUrl = "https://www.medguideindia.info";
-
-  var doSearch = function() {
-    var q = search.trim();
-    if (!q) return;
-    setIframeUrl(baseUrl + "/show_brand.php?search_type=brand&brandname=" + encodeURIComponent(q) + "&submit=FIND");
-    setMode("search");
-  };
-
-  var showBrands = function(letter) {
-    setIframeUrl(baseUrl + "/show_brand.php?bindex=" + letter);
-    setMode("brands");
-  };
-
-  var showGenerics = function(letter) {
-    setIframeUrl(baseUrl + "/show_generics.php?gindex=" + letter);
-    setMode("generics");
-  };
-
-  var openExternal = function() {
-    var w = window.open(iframeUrl || baseUrl, "_blank");
-    if (!w) alert("Popup blocked. URL: " + (iframeUrl || baseUrl));
-  };
-
-  var alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+  var totalResults = (localResults ? localResults.length : 0) + (mgResults ? mgResults.length : 0) + (fdaResults ? fdaResults.length : 0);
+  var anyLoading = mgLoading || fdaLoading;
 
   return (
     <div><h2 style={hds}>Medicine Encyclopedia</h2>
-      <div style={{ fontSize: 12, color: "#888", marginBottom: 12 }}>Powered by MedGuide India — comprehensive database of Indian medicine brands, generics, manufacturers and prices</div>
+      <div style={{ fontSize: 12, color: "#888", marginBottom: 12 }}>Search across 50,000+ Indian brands (MedGuide India) + local database + OpenFDA global</div>
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-        <input value={search} onChange={function(e) { setSearch(e.target.value); }} onKeyDown={function(e) { if (e.key === "Enter") doSearch(); }} placeholder="Search brand name (e.g. Dolo, Crocin, Augmentin)" style={{ ...inps, flex: 1, fontSize: 15, padding: "12px 16px", minWidth: 200 }} />
-        <button onClick={doSearch} style={{ ...bts(true), padding: "12px 20px", fontSize: 14 }}>Search</button>
-        {iframeUrl && <button onClick={openExternal} style={{ ...bts(false), padding: "12px 16px", fontSize: 12 }}>Open in New Tab</button>}
+      <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+        <input value={query} onChange={function(e){setQuery(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter")doSearch();}} placeholder="Search any medicine — brand, generic, salt, or use..." style={{ ...inps, flex: 1, fontSize: 16, padding: "14px 18px" }} />
+        <button onClick={doSearch} disabled={anyLoading} style={{ ...bts(true), padding: "14px 28px", fontSize: 14, opacity: anyLoading ? 0.6 : 1 }}>{anyLoading ? "Searching..." : "Search"}</button>
       </div>
 
-      <div style={{ display: "flex", gap: 3, background: "#E8E4DD", borderRadius: 7, padding: 3, marginBottom: 12 }}>
-        <button onClick={function() { setMode("home"); setIframeUrl(""); }} style={{ padding: "6px 12px", border: "none", borderRadius: 5, fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: mode === "home" ? "#fff" : "transparent", color: mode === "home" ? "#0D6B5B" : "#888" }}>Home</button>
-        <button onClick={function() { setMode("brands"); setIframeUrl(baseUrl + "/show_brand.php"); }} style={{ padding: "6px 12px", border: "none", borderRadius: 5, fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: mode === "brands" ? "#fff" : "transparent", color: mode === "brands" ? "#0D6B5B" : "#888" }}>All Brands</button>
-        <button onClick={function() { setMode("generics"); setIframeUrl(baseUrl + "/show_generics.php"); }} style={{ padding: "6px 12px", border: "none", borderRadius: 5, fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: mode === "generics" ? "#fff" : "transparent", color: mode === "generics" ? "#0D6B5B" : "#888" }}>All Generics</button>
-        <button onClick={function() { setMode("mfg"); setIframeUrl(baseUrl + "/manufacturer_test.php"); }} style={{ padding: "6px 12px", border: "none", borderRadius: 5, fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: mode === "mfg" ? "#fff" : "transparent", color: mode === "mfg" ? "#0D6B5B" : "#888" }}>Manufacturers</button>
-      </div>
-
-      {mode === "home" && <div>
-        <div style={cds}>
-          <b style={{ fontSize: 14 }}>Browse Brands A-Z</b>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 8 }}>
-            {alpha.map(function(l) { return <button key={l} onClick={function() { showBrands(l); }} style={{ width: 36, height: 36, border: "1px solid #ddd", borderRadius: 8, background: "#FAFAF7", cursor: "pointer", fontSize: 14, fontWeight: 600, color: "#0D6B5B" }}>{l}</button>; })}
-          </div>
-        </div>
-        <div style={cds}>
-          <b style={{ fontSize: 14 }}>Browse Generics A-Z</b>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 8 }}>
-            {alpha.map(function(l) { return <button key={l} onClick={function() { showGenerics(l); }} style={{ width: 36, height: 36, border: "1px solid #ddd", borderRadius: 8, background: "#FAFAF7", cursor: "pointer", fontSize: 14, fontWeight: 600, color: "#2563EB" }}>{l}</button>; })}
-          </div>
-        </div>
-        <div style={cds}>
-          <b style={{ fontSize: 14 }}>Quick Links</b>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
-            {["Dolo","Crocin","Azithromycin","Augmentin","Pantoprazole","Metformin","Amoxicillin","Cetirizine","Diclofenac","Omeprazole","Ciprofloxacin","Paracetamol","Atorvastatin","Amlodipine","Metoprolol"].map(function(q) {
-              return <button key={q} onClick={function() { setSearch(q); setIframeUrl(baseUrl + "/show_brand.php?search_type=brand&brandname=" + encodeURIComponent(q) + "&submit=FIND"); setMode("search"); }} style={{ padding: "6px 14px", background: "#FAFAF7", border: "1px solid #ddd", borderRadius: 20, fontSize: 12, cursor: "pointer", color: "#555" }}>{q}</button>;
-            })}
-          </div>
-        </div>
+      {/* Source tabs */}
+      {(localResults || mgResults || fdaResults) && <div style={{ display: "flex", gap: 3, background: "#E8E4DD", borderRadius: 8, padding: 3, marginBottom: 16 }}>
+        <button onClick={function(){setTab("all");}} style={{ padding: "8px 16px", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: tab==="all"?"#fff":"transparent", color: tab==="all"?"#0D6B5B":"#888" }}>All Results{totalResults > 0 ? " (" + totalResults + ")" : ""}</button>
+        {localResults && <button onClick={function(){setTab("local");}} style={{ padding: "8px 16px", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: tab==="local"?"#fff":"transparent", color: tab==="local"?"#059669":"#888" }}>Local ({localResults.length})</button>}
+        <button onClick={function(){setTab("mg");}} style={{ padding: "8px 16px", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: tab==="mg"?"#fff":"transparent", color: tab==="mg"?"#B45309":"#888" }}>MedGuide India{mgLoading?" ...":mgResults?" ("+mgResults.length+")":""}</button>
+        <button onClick={function(){setTab("fda");}} style={{ padding: "8px 16px", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: tab==="fda"?"#fff":"transparent", color: tab==="fda"?"#2563EB":"#888" }}>OpenFDA{fdaLoading?" ...":fdaResults?" ("+fdaResults.length+")":""}</button>
       </div>}
 
-      {iframeUrl && <div style={{ ...cds, padding: 0, overflow: "hidden" }}>
-        {iframeError && <div style={{ padding: 20, textAlign: "center" }}>
-          <div style={{ fontSize: 14, color: "#B45309", marginBottom: 8 }}>The website may not load in embedded view due to security restrictions.</div>
-          <button onClick={openExternal} style={{ ...bts(true), padding: "12px 24px" }}>Open MedGuide India in New Tab</button>
-          <div style={{ marginTop: 12 }}>
-            <a href={iframeUrl} target="_blank" rel="noopener noreferrer" style={{ color: "#2563EB", fontSize: 12 }}>{iframeUrl}</a>
+      {mgError && <div style={{ padding: "10px 14px", background: "#FEF3C7", border: "1px solid #D97706", borderRadius: 8, fontSize: 12, color: "#92400E", marginBottom: 12 }}>{mgError}</div>}
+
+      {/* LOCAL RESULTS */}
+      {(tab === "all" || tab === "local") && localResults && localResults.map(function(m, idx) {
+        var inInv = inv.filter(function(im){return im.name.toLowerCase().indexOf(m.g.toLowerCase())>=0||im.name.toLowerCase().indexOf(m.n.split(" ")[0].toLowerCase())>=0;});
+        var alts = (m.alt||[]).map(function(a){return Object.assign({},a,{inStock:inv.some(function(im){return im.name.toLowerCase().indexOf(a.n.split(" ")[0].toLowerCase())>=0;})});});
+        return <div key={"l"+idx} style={{ ...cds, borderLeft: "4px solid #059669", marginBottom: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+            <div>
+              <div style={{ fontSize: 20, fontWeight: 800, color: "#0C2E24" }}>{m.n}</div>
+              <div style={{ fontSize: 12, color: "#888" }}>Generic: <b>{m.g}</b></div>
+            </div>
+            <Tag bg="#D1FAE5" fg="#065F46">Local DB</Tag>
           </div>
-        </div>}
-        <iframe
-          src={iframeUrl}
-          style={{ width: "100%", height: iframeError ? 0 : (mob ? 500 : 700), border: "none", display: iframeError ? "none" : "block" }}
-          title="MedGuide India"
-          sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
-          onLoad={function() { setIframeError(false); }}
-          onError={function() { setIframeError(true); }}
-        />
+          <div style={{ display: "flex", gap: 5, marginTop: 8, flexWrap: "wrap" }}>
+            <Tag bg="#D1FAE5" fg="#065F46">{m.c}</Tag>
+            {m.rx?<Tag bg="#FEE2E2" fg="#991B1B">Rx</Tag>:<Tag bg="#DBEAFE" fg="#1E40AF">OTC</Tag>}
+            {inInv.length>0&&<Tag bg="#D1FAE5" fg="#065F46">In Stock</Tag>}
+          </div>
+          {m.sc&&m.sc.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:4,alignItems:"center",marginTop:10}}>
+            {m.sc.map(function(cat,i){return React.createElement(React.Fragment,{key:i},React.createElement("span",{style:{padding:"4px 12px",background:i===m.sc.length-1?"#0D6B5B":"#F5F3EE",color:i===m.sc.length-1?"#fff":"#555",borderRadius:20,fontSize:11,fontWeight:600}},cat),i<m.sc.length-1&&React.createElement("span",{style:{color:"#ccc",fontSize:14}},"\u2192"));})}
+          </div>}
+          <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:10,marginTop:10}}>
+            <div><div style={{fontSize:12,fontWeight:700,color:"#888",marginBottom:4}}>Composition</div>
+              {m.cp.map(function(c,i){return <div key={i} style={{padding:"6px 10px",background:"#F5F3EE",borderRadius:6,marginBottom:3,fontSize:12}}><b style={{color:"#0D6B5B"}}>{c.s}</b>{c.st&&<span style={{color:"#888",marginLeft:6}}>{c.st}</span>}</div>;})}</div>
+            <div><div style={{fontSize:12,fontWeight:700,color:"#888",marginBottom:4}}>Uses</div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:4}}>{m.u.map(function(u,i){return <span key={i} style={{padding:"3px 10px",background:"#EFF6FF",borderRadius:16,fontSize:11,color:"#1E40AF"}}>{u}</span>;})}</div></div>
+          </div>
+          {alts.length>0&&<div style={{marginTop:10}}><div style={{fontSize:12,fontWeight:700,color:"#888",marginBottom:4}}>Alternatives</div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:4}}>{alts.map(function(a,i){return <span key={i} style={{padding:"4px 10px",background:a.inStock?"#D1FAE5":"#F5F3EE",border:a.inStock?"1px solid #059669":"1px solid #eee",borderRadius:16,fontSize:11,color:a.inStock?"#065F46":"#555"}}>{a.n} <span style={{color:"#aaa"}}>({a.m})</span>{a.inStock?" ✓":""}</span>;})}</div></div>}
+          <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr",gap:10,marginTop:10}}>
+            <div><div style={{fontSize:12,fontWeight:700,color:"#888",marginBottom:4}}>Side Effects</div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:3}}>{m.se.map(function(s,i){return <span key={i} style={{padding:"3px 10px",background:"#FEF3C7",borderRadius:16,fontSize:11,color:"#92400E"}}>{s}</span>;})}</div></div>
+            <div><div style={{fontSize:12,fontWeight:700,color:"#888",marginBottom:4}}>Dosage</div><div style={{fontSize:12,color:"#555"}}>{m.d}</div></div>
+          </div>
+          {inInv.length>0&&<div style={{marginTop:10,padding:"8px 12px",background:"#F0FDF4",borderRadius:8,border:"1px solid #059669"}}>
+            <div style={{fontSize:11,fontWeight:700,color:"#059669",marginBottom:4}}>In Your Inventory</div>
+            {inInv.map(function(im){return <div key={im.id} style={{fontSize:12}}>{im.name} — Batch: {im.batch||"-"} — Stock: {fStock(im.stock,im.packQty)} — MRP: Rs.{f2(im.mrp)}</div>;})}</div>}
+        </div>;
+      })}
+
+      {/* MEDGUIDE INDIA RESULTS */}
+      {(tab === "all" || tab === "mg") && mgLoading && <div style={{...cds,textAlign:"center",padding:24}}><div style={{fontSize:24,marginBottom:8}}>🔍</div><div style={{color:"#888",fontSize:13}}>Searching MedGuide India (50,000+ brands)...</div></div>}
+      {(tab === "all" || tab === "mg") && mgResults && mgResults.length > 0 && <div style={{...cds,borderLeft:"4px solid #B45309"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+          <b style={{fontSize:14,color:"#B45309"}}>MedGuide India Results ({mgResults.length})</b>
+          <Tag bg="#FEF3C7" fg="#92400E">Live Data</Tag>
+        </div>
+        <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr>
+          {["#","Brand Name","Type","Unit","Constituents","Package","Price","Manufacturer",""].map(function(h){return <th key={h} style={ths}>{h}</th>;})}</tr></thead><tbody>
+          {mgResults.map(function(r,i){
+            var isInv = inv.some(function(im){return im.name.toLowerCase().indexOf(r.name.split("(")[0].trim().toLowerCase())>=0;});
+            return <tr key={i} style={{background:isInv?"#F0FDF4":"transparent"}}>
+              <td style={{...tds,color:"#888"}}>{r.sn}</td>
+              <td style={{...tds,fontWeight:600}}>{r.name}{isInv&&<span style={{color:"#059669",marginLeft:4,fontSize:10}}>IN STOCK</span>}</td>
+              <td style={tds}><Tag bg="#F3E8FF" fg="#6B21A8">{r.type||"-"}</Tag></td>
+              <td style={{...tds,fontSize:11}}>{r.unit||"-"}</td>
+              <td style={{...tds,fontSize:11,maxWidth:200}}>{r.constituents||"-"}</td>
+              <td style={{...tds,fontSize:11}}>{r.packageUnit||"-"}</td>
+              <td style={{...tds,fontWeight:600,color:"#0D6B5B"}}>Rs.{r.price||"-"}</td>
+              <td style={{...tds,fontSize:11,color:"#888"}}>{r.manufacturer||"-"}</td>
+              <td style={tds}>{r.constituents && <button onClick={function(){searchAlternatives(r.constituents);}} style={{border:"none",borderRadius:6,padding:"4px 8px",fontWeight:600,cursor:"pointer",fontSize:10,background:"#7C3AED",color:"#fff",whiteSpace:"nowrap"}}>Alternatives</button>}</td>
+            </tr>;
+          })}</tbody></table></div>
+      </div>}
+      {(tab === "all" || tab === "mg") && mgResults && mgResults.length === 0 && !mgLoading && <div style={{...cds,textAlign:"center",padding:16,color:"#888",fontSize:12,borderLeft:"4px solid #B45309"}}>No results from MedGuide India for this search</div>}
+
+      {/* MEDGUIDE ALTERNATIVES */}
+      {(tab === "all" || tab === "mg") && mgAltsLoading && <div style={{...cds,textAlign:"center",padding:20,borderLeft:"4px solid #7C3AED"}}><div style={{color:"#888",fontSize:13}}>Finding alternative medicines...</div></div>}
+      {(tab === "all" || tab === "mg") && mgAlts && mgAlts.items && mgAlts.items.length > 0 && <div style={{...cds,borderLeft:"4px solid #7C3AED",marginBottom:12}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+          <div><b style={{fontSize:14,color:"#7C3AED"}}>Alternative Brands</b><div style={{fontSize:11,color:"#888"}}>Same composition: <b>{mgAlts.generic}</b> — {mgAlts.items.length} brand(s) found</div></div>
+          <Tag bg="#F3E8FF" fg="#6B21A8">Alternatives</Tag>
+        </div>
+        <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse"}}><thead><tr>
+          {["#","Alternative Brand","Type","Unit","Constituents","Price","Manufacturer"].map(function(h){return <th key={h} style={ths}>{h}</th>;})}</tr></thead><tbody>
+          {mgAlts.items.map(function(r,i){
+            var isInv = inv.some(function(im){return im.name.toLowerCase().indexOf(r.name.split("(")[0].trim().toLowerCase())>=0;});
+            return <tr key={i} style={{background:isInv?"#F0FDF4":i%2===0?"transparent":"#FAFAF7"}}>
+              <td style={{...tds,color:"#888"}}>{i+1}</td>
+              <td style={{...tds,fontWeight:600}}>{r.name}{isInv&&<span style={{color:"#059669",marginLeft:4,fontSize:10}}>IN STOCK</span>}</td>
+              <td style={tds}><Tag bg="#F3E8FF" fg="#6B21A8">{r.type||"-"}</Tag></td>
+              <td style={{...tds,fontSize:11}}>{r.unit||"-"}</td>
+              <td style={{...tds,fontSize:11,maxWidth:200}}>{r.constituents||"-"}</td>
+              <td style={{...tds,fontWeight:600,color:"#0D6B5B"}}>Rs.{r.price||"-"}</td>
+              <td style={{...tds,fontSize:11,color:"#888"}}>{r.manufacturer||"-"}</td>
+            </tr>;
+          })}</tbody></table></div>
+      </div>}
+
+      {/* OPENFDA RESULTS */}
+      {(tab === "all" || tab === "fda") && fdaLoading && <div style={{...cds,textAlign:"center",padding:24}}><div style={{fontSize:24,marginBottom:8}}>🌐</div><div style={{color:"#888",fontSize:13}}>Searching OpenFDA global database...</div></div>}
+      {(tab === "all" || tab === "fda") && fdaResults && fdaResults.length > 0 && fdaResults.map(function(drug,i){
+        return <div key={"f"+i} style={{...cds,borderLeft:"4px solid #2563EB",marginBottom:12}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+            <div><div style={{fontSize:18,fontWeight:800,color:"#0C2E24"}}>{drug.brand}</div><div style={{fontSize:12,color:"#888"}}>Generic: <b>{drug.generic}</b></div></div>
+            <div style={{display:"flex",gap:4}}><Tag bg="#DBEAFE" fg="#1E40AF">OpenFDA</Tag>{drug.rx?<Tag bg="#FEE2E2" fg="#991B1B">Rx</Tag>:<Tag bg="#DBEAFE" fg="#1E40AF">OTC</Tag>}</div>
+          </div>
+          {drug.manufacturer&&<div style={{fontSize:11,color:"#888",marginTop:4}}>Manufacturer: <b>{drug.manufacturer}</b></div>}
+          {drug.category&&<div style={{marginTop:6}}><Tag bg="#E8E4DD" fg="#555">{drug.category}</Tag>{drug.route&&<span style={{marginLeft:4}}><Tag bg="#F3E8FF" fg="#6B21A8">{drug.route}</Tag></span>}</div>}
+          {drug.uses.length>0&&<div style={{marginTop:8}}><div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:3}}>Uses</div><div style={{display:"flex",flexWrap:"wrap",gap:3}}>{drug.uses.map(function(u,j){return <span key={j} style={{padding:"3px 10px",background:"#EFF6FF",borderRadius:16,fontSize:11,color:"#1E40AF"}}>{u}</span>;})}</div></div>}
+          {drug.sideEffects.length>0&&<div style={{marginTop:6}}><div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:3}}>Side Effects</div><div style={{display:"flex",flexWrap:"wrap",gap:3}}>{drug.sideEffects.map(function(s,j){return <span key={j} style={{padding:"3px 10px",background:"#FEF3C7",borderRadius:16,fontSize:11,color:"#92400E"}}>{s}</span>;})}</div></div>}
+          {drug.dosage&&<div style={{marginTop:6}}><div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:3}}>Dosage</div><div style={{fontSize:12,color:"#555",lineHeight:1.5}}>{drug.dosage}</div></div>}
+        </div>;
+      })}
+      {(tab === "all" || tab === "fda") && fdaResults && fdaResults.length === 0 && !fdaLoading && <div style={{...cds,textAlign:"center",padding:16,color:"#888",fontSize:12,borderLeft:"4px solid #2563EB"}}>No results from OpenFDA</div>}
+
+      {/* Empty state */}
+      {!localResults && !mgResults && !fdaResults && !anyLoading && <div style={{textAlign:"center",padding:50,color:"#888"}}>
+        <div style={{fontSize:56,marginBottom:16,opacity:0.3}}>📚</div>
+        <div style={{fontSize:18,fontWeight:700,color:"#555",marginBottom:8}}>Medicine Encyclopedia</div>
+        <div style={{fontSize:13,marginBottom:4,color:"#888"}}>Search across <b>3 databases simultaneously</b></div>
+        <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"1fr 1fr 1fr",gap:10,maxWidth:500,margin:"16px auto"}}>
+          <div style={{padding:12,background:"#F0FDF4",borderRadius:10,border:"1px solid #D1FAE5"}}><div style={{fontSize:20,marginBottom:4}}>💊</div><div style={{fontSize:12,fontWeight:700,color:"#059669"}}>Local DB</div><div style={{fontSize:11,color:"#888"}}>100+ brands, instant</div></div>
+          <div style={{padding:12,background:"#FFFBEB",borderRadius:10,border:"1px solid #FEF3C7"}}><div style={{fontSize:20,marginBottom:4}}>🇮🇳</div><div style={{fontSize:12,fontWeight:700,color:"#B45309"}}>MedGuide India</div><div style={{fontSize:11,color:"#888"}}>50,000+ brands, live</div></div>
+          <div style={{padding:12,background:"#EFF6FF",borderRadius:10,border:"1px solid #DBEAFE"}}><div style={{fontSize:20,marginBottom:4}}>🌐</div><div style={{fontSize:12,fontWeight:700,color:"#2563EB"}}>OpenFDA</div><div style={{fontSize:11,color:"#888"}}>Global drug data</div></div>
+        </div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:6,justifyContent:"center",marginTop:20,maxWidth:550,margin:"20px auto 0"}}>
+          {["Dolo 650","Crocin","Azithromycin","Pan 40","Augmentin","Metformin","Combiflam","Cetirizine","Betadine","Montair LC","Diclofenac","Omeprazole","Losartan","Becosules","Amoxicillin","Atorvastatin","Gabapentin","Clopidogrel"].map(function(s){
+            return <button key={s} onClick={function(){setQuery(s);}} style={{padding:"7px 16px",background:"#F5F3EE",border:"1px solid #E8E4DD",borderRadius:20,fontSize:12,cursor:"pointer",color:"#555"}}>{s}</button>;
+          })}
+        </div>
       </div>}
     </div>
   );
@@ -2699,8 +2701,7 @@ function App() {
           {page === "profit" && isO && <ProfitPage bills={bills} inv={inv} mob={mob} />}
           {page === "stock" && <StockPage inv={inv} saveInv={saveInv} isO={isO} mob={mob} />}
           {page === "hist" && <HistPage bills={bills} showBill={showBill} saveBills={saveBills} askConfirm={askConfirm} inv={inv} saveInv={saveInv} />}
-          {page === "wiki" && <WikiPage inv={inv} mob={mob} />}
-          {page === "ency" && <EncyclopediaPage mob={mob} />}
+          {page === "ency" && <EncyclopediaPage inv={inv} mob={mob} />}
           {page === "users" && isO && <UsersPage sessions={sessions} mob={mob} />}
           {page === "backup" && isO && <BackupPage inv={inv} bills={bills} purch={purch} saveAll={saveAll} askConfirm={askConfirm} />}
         </div></div></div>
