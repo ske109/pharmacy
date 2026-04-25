@@ -79,6 +79,12 @@ const f2 = (n) => Number(n || 0).toFixed(2);
 const fD = (d) => { try { return d ? new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "-"; } catch(e) { return "-"; } };
 const fDT = (d) => { try { return d ? new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "Asia/Kolkata" }) : "-"; } catch(e) { return "-"; } };
 const getIST = () => { return new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }); };
+// Price rounding: Full decimal→ceil, Loose decimal→ceil+1, Integer→no change
+function roundP(price, isLoose) {
+  if (Number.isInteger(price) || price === Math.floor(price)) return price;
+  if (isLoose) return Math.ceil(price) + 1;
+  return Math.ceil(price);
+}
 const mkId = () => "id" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const mkBill = () => "ATZ" + String(Date.now()).slice(-5) + String(Math.floor(Math.random() * 90) + 10);
 const mkUID = () => "AZ-" + String(Date.now()).slice(-4) + Math.random().toString(36).slice(2, 5).toUpperCase();
@@ -1006,7 +1012,7 @@ function BillPage({ inv, saveInv, addBill, mob, showBill }) {
   const [scanResult, setScanResult] = useState(null);
   const camRef = useRef(null);
   const res = sq.length >= 1 ? inv.filter((m) => { const s = sq.toLowerCase(); return (m.name.toLowerCase().includes(s) || m.batch.toLowerCase().includes(s) || (m.uid || "") === sq.toUpperCase() || (m.uid || "").toLowerCase().includes(s)) && m.stock > 0; }).slice(0, 8) : [];
-  const addIt = (med) => { const ex = items.findIndex((i) => i.mid === med.id && !i.loose); if (ex >= 0) setItems((p) => p.map((i, idx) => idx === ex ? { ...i, qty: i.qty + 1 } : i)); else setItems((p) => [...p, { mid: med.id, name: med.name, manufacturer: med.manufacturer || "", pack: med.pack || "", batch: med.batch, expiry: med.expiry, mrp: med.mrp, ptr: med.ptr || 0, gstRate: med.gstRate || 5, qty: 1, discount: 0, loose: false, packQty: med.packQty || 0, unitPrice: med.mrp, unitPtr: med.ptr || 0, uid: med.uid || "", purchaseBillNo: med.purchaseBillNo || "", purchaseDistributor: med.purchaseDistributor || med.distributor || "", purchaseDate: med.purchaseDate || "" }]); setSq(""); setSo(false); };
+  const addIt = (med) => { const ex = items.findIndex((i) => i.mid === med.id && !i.loose); if (ex >= 0) setItems((p) => p.map((i, idx) => idx === ex ? { ...i, qty: i.qty + 1 } : i)); else setItems((p) => [...p, { mid: med.id, name: med.name, manufacturer: med.manufacturer || "", pack: med.pack || "", batch: med.batch, expiry: med.expiry, mrp: med.mrp, ptr: med.ptr || 0, gstRate: med.gstRate || 5, qty: 1, discount: 0, loose: false, packQty: med.packQty || 0, unitPrice: roundP(med.mrp, false), unitPtr: med.ptr || 0, uid: med.uid || "", purchaseBillNo: med.purchaseBillNo || "", purchaseDistributor: med.purchaseDistributor || med.distributor || "", purchaseDate: med.purchaseDate || "" }]); setSq(""); setSo(false); };
 
   // Camera scan - reads medicine strip/box image and matches to inventory
   const doScan = async (e) => {
@@ -1048,7 +1054,7 @@ function BillPage({ inv, saveInv, addBill, mob, showBill }) {
     e.target.value = "";
   };
 
-  const toggleLoose = (idx) => { setItems((p) => p.map((it, i) => { if (i !== idx) return it; const loose = !it.loose; const pq = it.packQty || 10; const foundM = inv.find((m) => m.id === it.mid); const origMrp = foundM ? foundM.mrp : it.mrp; const origPtr = foundM ? foundM.ptr : it.ptr; return { ...it, loose, unitPrice: loose ? it.mrp / pq : origMrp, unitPtr: loose ? (it.ptr || 0) / pq : origPtr, qty: 1 }; })); };
+  const toggleLoose = (idx) => { setItems((p) => p.map((it, i) => { if (i !== idx) return it; const loose = !it.loose; const pq = it.packQty || 10; const foundM = inv.find((m) => m.id === it.mid); const origMrp = foundM ? foundM.mrp : it.mrp; const origPtr = foundM ? foundM.ptr : it.ptr; const rawPrice = loose ? it.mrp / pq : origMrp; return { ...it, loose, unitPrice: roundP(rawPrice, loose), unitPtr: loose ? (it.ptr || 0) / pq : origPtr, qty: 1 }; })); };
   const ca = (i) => { const price = i.unitPrice * i.qty; return price - price * i.discount / 100; };
   const tMRP = items.reduce((s, i) => s + i.unitPrice * i.qty, 0), tDisc = items.reduce((s, i) => s + i.unitPrice * i.qty * i.discount / 100, 0);
   const tGST = items.reduce((s, i) => { const a = ca(i); return s + (a - a / (1 + i.gstRate / 100)); }, 0);
@@ -1089,19 +1095,8 @@ function BillPage({ inv, saveInv, addBill, mob, showBill }) {
         }
       }
     }
-    // Round prices: Full pack decimals → ceil, Loose decimals → ceil+1, integers unchanged
-    var roundedItems = items.map(function(it) {
-      var p = it.unitPrice;
-      if (Number.isInteger(p) || p === Math.floor(p)) return it; // integer, no change
-      if (it.loose) return Object.assign({}, it, { unitPrice: Math.ceil(p) + 1 });
-      return Object.assign({}, it, { unitPrice: Math.ceil(p) });
-    });
-    var rTMRP = roundedItems.reduce(function(s, i) { return s + i.unitPrice * i.qty; }, 0);
-    var rTDisc = roundedItems.reduce(function(s, i) { return s + i.unitPrice * i.qty * i.discount / 100; }, 0);
-    var rTGST = roundedItems.reduce(function(s, i) { var a = i.unitPrice * i.qty * (1 - i.discount / 100); return s + (a - a / (1 + i.gstRate / 100)); }, 0);
-    var rNet = Math.max(0, Math.round(rTMRP - rTDisc - billDisc));
-    const bill = { billNo: mkBill(), date: new Date(getIST()).toISOString(), dateIST: new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true }), patient: pt, patientContact: pc, patientAddress: pa, doctor: doc, doctorContact: dc, paymentMode: pm, items: roundedItems.map((i) => ({ ...i, amount: i.unitPrice * i.qty * (1 - i.discount / 100) })), totalMRP: rTMRP, totalDiscount: rTDisc, billDiscount: billDisc, netAmount: rNet, cgst: rTGST / 2, sgst: rTGST / 2 };
-    const updInv = inv.map((m) => { const sold = roundedItems.filter((i) => i.mid === m.id); if (!sold.length) return m; const totalSold = sold.reduce((s, i) => i.loose ? s + (i.qty / (i.packQty || 10)) : s + i.qty, 0); var newMrp = m.mrp; var fullPack = sold.find(function(i) { return !i.loose && i.unitPrice !== m.mrp; }); if (fullPack) newMrp = fullPack.unitPrice; return { ...m, stock: Math.max(0, Math.round((m.stock - totalSold) * 10000) / 10000), mrp: newMrp }; });
+    const bill = { billNo: mkBill(), date: new Date(getIST()).toISOString(), dateIST: new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true }), patient: pt, patientContact: pc, patientAddress: pa, doctor: doc, doctorContact: dc, paymentMode: pm, items: items.map((i) => ({ ...i, amount: ca(i) })), totalMRP: tMRP, totalDiscount: tDisc, billDiscount: billDisc, netAmount: net, cgst: tGST / 2, sgst: tGST / 2 };
+    const updInv = inv.map((m) => { const sold = items.filter((i) => i.mid === m.id); if (!sold.length) return m; const totalSold = sold.reduce((s, i) => i.loose ? s + (i.qty / (i.packQty || 10)) : s + i.qty, 0); var newMrp = m.mrp; var fullPack = sold.find(function(i) { return !i.loose && i.unitPrice !== m.mrp; }); if (fullPack) newMrp = fullPack.unitPrice; return { ...m, stock: Math.max(0, Math.round((m.stock - totalSold) * 10000) / 10000), mrp: newMrp }; });
     saveInv(updInv); addBill(bill); showBill(bill); setPt(""); setPc(""); setPa(""); setDoc(""); setDc(""); setItems([]); setPm("Cash"); setBillDisc(0); setBillDiscPct(0); };
 
   return (
@@ -1133,7 +1128,7 @@ function BillPage({ inv, saveInv, addBill, mob, showBill }) {
               <td style={tds}>{i + 1}</td><td style={{ ...tds, fontWeight: 500 }}>{it.name}</td>
               <td style={{ ...tds, fontFamily: "monospace", fontSize: 10, color: "#7C3AED" }}>{it.uid || "-"}</td>
               <td style={tds}><button onClick={() => toggleLoose(i)} style={{ padding: "3px 8px", fontSize: 10, borderRadius: 4, border: "none", cursor: "pointer", fontWeight: 600, background: it.loose ? "#FDBA74" : "#E8E4DD", color: it.loose ? "#7C2D12" : "#555" }}>{it.loose ? "LOOSE" : "FULL"}</button></td>
-              <td style={{ padding: "4px" }}><input type="number" min="0" step="0.01" value={it.unitPrice} onChange={(e) => setItems((p) => p.map((x, idx) => idx === i ? { ...x, unitPrice: Math.max(0, parseFloat(e.target.value) || 0) } : x))} style={{ ...smis, width: 70, textAlign: "right" }} />{it.loose && <span style={{ fontSize: 9, color: "#B45309" }}>/pc</span>}</td>
+              <td style={{ padding: "4px" }}><input type="number" min="0" step="0.01" value={it.unitPrice} onChange={(e) => setItems((p) => p.map((x, idx) => idx === i ? { ...x, unitPrice: Math.max(0, parseFloat(e.target.value) || 0) } : x))} onBlur={(e) => { var v = parseFloat(e.target.value) || 0; setItems((p) => p.map((x, idx) => idx === i ? { ...x, unitPrice: roundP(v, x.loose) } : x)); }} style={{ ...smis, width: 70, textAlign: "right" }} />{it.loose && <span style={{ fontSize: 9, color: "#B45309" }}>/pc</span>}</td>
               <td style={{ padding: "4px" }}><input type="number" min="1" value={it.qty} onChange={(e) => setItems((p) => p.map((x, idx) => idx === i ? { ...x, qty: Math.max(1, parseInt(e.target.value) || 1) } : x))} style={{ ...smis, width: 55, textAlign: "center" }} /></td>
               <td style={{ padding: "4px" }}>
                 <input type="number" min="0" max="100" step="0.01" value={it.discount} onChange={(e) => setItemDiscPct(i, e.target.value)} style={{ ...smis, width: 60, textAlign: "center" }} />
