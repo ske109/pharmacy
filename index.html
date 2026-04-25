@@ -659,9 +659,10 @@ function Sidebar({ page, setPage, user, onLogout, counts, mob, sideOpen, setSide
 // DASHBOARD
 // ══════════════════════════════════════════════
 function DashPage({ inv, bills, purch, isO, mob }) {
-  const ts = inv.reduce((s, m) => s + (m.stock || 0), 0), low = inv.filter((m) => m.stock > 0 && m.stock < 3).length;
+  const ts = Math.floor(inv.reduce((s, m) => s + (m.stock || 0), 0)), low = inv.filter((m) => m.stock > 0 && m.stock < 3).length;
   const today = new Date().toDateString(), tb = bills.filter((b) => new Date(b.date).toDateString() === today);
-  const tr = tb.reduce((s, b) => s + b.netAmount, 0), tc = tb.reduce((s, b) => s + b.items.reduce((ss, i) => ss + (i.ptr || 0) * i.qty, 0), 0);
+  const tr = tb.reduce((s, b) => s + b.netAmount, 0);
+  const tc = tb.reduce((s, b) => s + b.items.reduce((ss, i) => ss + (i.unitPtr || i.ptr || 0) * (1 + (i.gstRate || 0) / 100) * i.qty, 0), 0);
   return (
     <div><h2 style={hds}>Dashboard</h2>
       <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(auto-fit,minmax(155px,1fr))", gap: 12, marginBottom: 20 }}>
