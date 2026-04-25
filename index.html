@@ -118,7 +118,7 @@ function csvToItems(rows) {
   if (rows.length < 2) return null; const h = rows[0].map((x) => x.toLowerCase().trim()); const ix = (n) => h.findIndex((x) => x.includes(n));
   const items = [], sup = (rows[1] && rows[1][ix("seller name")]) || (rows[1] && rows[1][ix("seller")]) || "Unknown", inv = (rows[1] && rows[1][ix("invoice")]) || "", dt = (rows[1] && rows[1][ix("date")]) || "";
   for (let i = 1; i < rows.length; i++) { const r = rows[i]; if (!r || r.length < 5) continue; const g = (n) => r[ix(n)] || "", gn = (n) => parseFloat(r[ix(n)]) || 0;
-    items.push({ name: g("description") || g("name"), manufacturer: g("mfg"), hsn: g("hsn") || "300490", batch: g("batch"), expiry: g("expiry"), pack: g("pkg") || g("pack"), mrp: gn("mrp"), qty: gn("qty"), ptr: gn("ptr"), gstRate: gn("cgst") ? gn("cgst") * 2 : 5, rack: "", packQty: gn("pkg") || gn("pack") || 0, discPct: gn("disc"), schemePct: gn("scheme"), freeQty: 0, amount: gn("linetotal") || 0 }); }
+    items.push({ name: g("description") || g("name"), manufacturer: g("mfg"), hsn: g("hsn") || "300490", batch: g("batch"), expiry: g("expiry"), pack: g("pkg") || g("pack"), mrp: gn("mrp"), qty: gn("qty"), ptr: gn("ptr"), gstRate: gn("cgst") ? gn("cgst") * 2 : 5, rack: "", packQty: gn("pkg") || gn("pack") || 0, discPct: gn("disc"), schemePct: gn("scheme") || gn("schemepct") || 0, freeQty: gn("free") || gn("freeqty") || gn("freeq") || 0, amount: gn("linetotal") || 0 }); }
   return { supplier: sup, invoiceNo: inv, date: dt, items: items.filter((i) => i.name) };
 }
 
@@ -228,6 +228,21 @@ function parsePdfToItems(text) {
     var mrp = numsBefore[numsBefore.length - 1];
     var ptr = numsAfter[0];
 
+    // Extract scheme% from after QtyEA - look for first percentage in the text
+    var schemePct = 0;
+    var afterParts = afterQty.split("|").map(function(p) { return p.trim(); });
+    for (var sp = 0; sp < Math.min(3, afterParts.length); sp++) {
+      // Skip the first part (PTR) already extracted
+      if (sp === 0) continue;
+      var spMatch = afterParts[sp].match(/^(\d+\.?\d*)%/);
+      if (spMatch && parseFloat(spMatch[1]) > 0) { schemePct = parseFloat(spMatch[1]); break; }
+    }
+
+    // Extract free qty - look for "free" or "+N" patterns in the line
+    var freeQty = 0;
+    var freeMatch = l.match(/free\s*[:=]?\s*(\d+)/i);
+    if (freeMatch) freeQty = parseInt(freeMatch[1]);
+
     // HSN: 6-8 digit number
     var hsn = "";
     var parts = l.split("|").map(function(p){return p.trim();});
@@ -281,7 +296,7 @@ function parsePdfToItems(text) {
     items.push({
       name: name.substring(0, 80), manufacturer: "", hsn: hsn, batch: batch, expiry: expiry,
       pack: "", mrp: mrp, qty: qty, ptr: Math.round(ptr * 100) / 100, gstRate: gstRate,
-      rack: "", packQty: 0, discPct: 0, schemePct: 0, freeQty: 0, amount: 0
+      rack: "", packQty: 0, discPct: 0, schemePct: schemePct, freeQty: freeQty, amount: 0
     });
   });
 
@@ -691,7 +706,7 @@ function purchCalcAmt(it) {
 // ══════════════════════════════════════════════
 // PURCHASES PAGE
 // ══════════════════════════════════════════════
-function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm }) {
+function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm, inv, saveInv, bills, saveBills }) {
   const [tab, setTab] = useState("csv"); const [imgP, setImgP] = useState(false); const [rev, setRev] = useState(null); const [distSite, setDistSite] = useState(null);
   const csvR = useRef(null); const imgR = useRef(null);
   const empty = { name: "", manufacturer: "", hsn: "300490", batch: "", expiry: "", pack: "", mrp: 0, qty: 1, ptr: 0, gstRate: 5, rack: "", packQty: 0, discPct: 0, schemePct: 0, freeQty: 0, amount: 0 };
@@ -747,13 +762,49 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm }) {
   const [editPurch, setEditPurch] = useState(null);
   const saveEditPurch = () => {
     if (!editPurch) return;
+    var oldPurch = purch.find(function(p) { return p.id === editPurch.id; });
+    var newSupplier = editPurch.supplier || "";
+    var newInvoice = editPurch.invoiceNo || "";
+    var newDate = editPurch.date || "";
+
+    // 1. Update purchase record
     var updated = purch.map(function(p) {
       if (p.id !== editPurch.id) return p;
-      return Object.assign({}, p, { supplier: editPurch.supplier, invoiceNo: editPurch.invoiceNo, date: editPurch.date });
+      return Object.assign({}, p, { supplier: newSupplier, invoiceNo: newInvoice, date: newDate });
     });
     var obj = {};
     updated.forEach(function(p) { obj[p.id] = p; });
     fbSet("purchases", obj);
+
+    // 2. Update inventory items that came from this purchase
+    if (inv && saveInv) {
+      var updInv = inv.map(function(m) {
+        if (m.purchaseId === editPurch.id) {
+          return Object.assign({}, m, { purchaseBillNo: newInvoice, purchaseDistributor: newSupplier, purchaseDate: newDate, distributor: newSupplier });
+        }
+        return m;
+      });
+      saveInv(updInv);
+    }
+
+    // 3. Update bill items that reference this purchase invoice
+    if (bills && saveBills && oldPurch) {
+      var oldInvoice = oldPurch.invoiceNo || "";
+      var oldSupp = oldPurch.supplier || "";
+      var changed = false;
+      var updBills = bills.map(function(b) {
+        var updItems = b.items.map(function(it) {
+          if ((it.purchaseBillNo === oldInvoice && it.purchaseDistributor === oldSupp) || it.purchaseBillNo === oldInvoice) {
+            changed = true;
+            return Object.assign({}, it, { purchaseBillNo: newInvoice, purchaseDistributor: newSupplier, purchaseDate: newDate });
+          }
+          return it;
+        });
+        return Object.assign({}, b, { items: updItems });
+      });
+      if (changed) saveBills(updBills);
+    }
+
     setEditPurch(null);
   };
 
@@ -1257,6 +1308,12 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv }) {
   const [retBill, setRetBill] = useState(null);
   const [retQtys, setRetQtys] = useState({});
 
+  const editRef = useRef(null);
+  const doEdit = function(b) {
+    setEditBill({ ...b, patient: b.patient || "", doctor: b.doctor || "", paymentMode: b.paymentMode || "Cash", billDiscount: b.billDiscount || 0, items: b.items.map(function(i) { return { ...i, unitPrice: i.unitPrice || i.mrp || 0, discount: i.discount || 0, gstRate: i.gstRate || 0 }; }) });
+    setTimeout(function() { if (editRef.current) editRef.current.scrollIntoView({ behavior: "smooth", block: "start" }); }, 100);
+  };
+
   const saveEditedBill = () => {
     if (!editBill) return;
     const tMRP = editBill.items.reduce((s, i) => s + (i.unitPrice || i.mrp) * i.qty, 0);
@@ -1352,7 +1409,7 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv }) {
       )}
 
       {editBill && (
-        <div style={{ ...cds, border: "2px solid #2563EB", marginBottom: 16 }}>
+        <div ref={editRef} style={{ ...cds, border: "2px solid #2563EB", marginBottom: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
             <b style={{ color: "#2563EB" }}>Edit Bill: {editBill.billNo}</b>
             <div style={{ display: "flex", gap: 6 }}><button onClick={saveEditedBill} style={{ ...bts(true), background: "#2563EB" }}>Save</button><button onClick={() => setEditBill(null)} style={bts(false)}>Cancel</button></div></div>
@@ -1377,7 +1434,7 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv }) {
                   <span style={{ fontSize: 9, color: "#888", display: "block", textAlign: "center" }}>%</span>
                 </td>
                 <td style={{ padding: "4px" }}>
-                  <input type="number" min="0" step="0.01" value={f2(discRs)} onChange={(e) => updEditDiscRs(e.target.value)} style={{ ...smis, width: 65, textAlign: "right" }} />
+                  <input type="number" min="0" step="0.01" value={Math.round(discRs * 100) / 100} onChange={(e) => updEditDiscRs(e.target.value)} style={{ ...smis, width: 65, textAlign: "right" }} />
                   <span style={{ fontSize: 9, color: "#888", display: "block", textAlign: "center" }}>Rs.</span>
                 </td>
                 <td style={tds}>{it.gstRate}%</td>
@@ -1391,7 +1448,7 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv }) {
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <div style={{ position: "relative" }}>
                   <input type="number" min="0" max="100" step="0.01"
-                    value={f2((editBill.billDiscount || 0) / Math.max(0.01, editBill.items.reduce((s, i) => s + (i.unitPrice || i.mrp) * i.qty * (1 - (i.discount || 0) / 100), 0)) * 100)}
+                    value={Math.round((editBill.billDiscount || 0) / Math.max(0.01, editBill.items.reduce((s, i) => s + (i.unitPrice || i.mrp) * i.qty * (1 - (i.discount || 0) / 100), 0)) * 10000) / 100}
                     onChange={(e) => { const base = editBill.items.reduce((s, i) => s + (i.unitPrice || i.mrp) * i.qty * (1 - (i.discount || 0) / 100), 0); setEditBill((p) => ({ ...p, billDiscount: Math.round(base * (parseFloat(e.target.value) || 0) / 100 * 100) / 100 })); }}
                     style={{ ...smis, width: 75, paddingRight: 22 }} />
                   <span style={{ position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)", fontSize: 11, color: "#888" }}>%</span>
@@ -1408,7 +1465,7 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv }) {
         </div>
       )}
       {bills.length === 0 ? <div style={{ ...cds, padding: 30, textAlign: "center", color: "#aaa" }}>None</div> :
-      <HistBillTable bills={bills} showBill={showBill} setEditBill={setEditBill} startBillReturn={startBillReturn} askConfirm={askConfirm} saveBills={saveBills} />}
+      <HistBillTable bills={bills} showBill={showBill} setEditBill={doEdit} startBillReturn={startBillReturn} askConfirm={askConfirm} saveBills={saveBills} />}
     </div>
   );
 }
@@ -1490,7 +1547,7 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, askConfi
                       {sh("pay") && <td style={tds}><Tag bg={b.paymentMode === "Cash" ? "#D1FAE5" : "#DBEAFE"} fg={b.paymentMode === "Cash" ? "#065F46" : "#1E40AF"}>{b.paymentMode}</Tag></td>}
                       <td style={tds}><button onClick={() => setExpanded(isOpen ? null : b.billNo)} style={{ ...bts(false), padding: "4px 10px", fontSize: 11, background: isOpen ? "#D1FAE5" : undefined, color: isOpen ? "#065F46" : undefined }}>{isOpen ? "▲ Hide" : "▼ " + b.items.length + " items"}</button></td>
                       <td style={tds}><button onClick={() => showBill(b, true)} style={{ ...bts(true), padding: "5px 12px", fontSize: 11 }}>View</button></td>
-                      <td style={tds}><button onClick={() => setEditBill({ ...b, items: b.items.map((i) => ({ ...i })) })} style={{ ...bts(false), padding: "5px 12px", fontSize: 11 }}>Edit</button></td>
+                      <td style={tds}><button onClick={() => setEditBill(b)} style={{ ...bts(false), padding: "5px 12px", fontSize: 11 }}>Edit</button></td>
                       <td style={tds}><button onClick={function() { startBillReturn(b); }} style={{ border: "none", borderRadius: 7, padding: "5px 12px", fontWeight: 600, cursor: "pointer", fontSize: 11, background: "#DC2626", color: "#fff" }}>Return</button></td>
                     </tr>
                     {isOpen && (
@@ -2526,7 +2583,7 @@ function App() {
   }, [saveBills]);
 
   const addPurchase = useCallback((rev) => {
-    const pur = { id: mkId(), invoiceNo: rev.invoiceNo || "", supplier: rev.supplier || "", date: rev.date || "", entryDate: new Date().toISOString(), items: rev.items, sourceType: rev.srcType || "manual", sourceFile: rev.srcFile || "", netAmount: rev.items.reduce((s, i) => s + (i.amount || i.ptr * i.qty), 0) };
+    const pur = { id: mkId(), invoiceNo: rev.invoiceNo || "", supplier: rev.supplier || "", date: rev.date || "", entryDate: new Date().toISOString(), items: rev.items, sourceType: rev.srcType || "manual", sourceFile: rev.srcFile || "", netAmount: rev.items.reduce((s, i) => s + (i.amount || purchCalcAmt(i)), 0) };
     setPurch((p) => { const next = [...p, pur]; savePurch(next); return next; });
     setInv((prevInv) => {
       let next = [...prevInv];
@@ -2591,7 +2648,7 @@ function App() {
           <div style={{ width: 30, height: 30, borderRadius: 7, background: "#E8E4DD", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13 }}>{isO ? "👑" : "👤"}</div></div>}
         <div style={{ flex: 1, padding: mob ? 14 : 24, overflow: "auto" }}>
           {page === "dash" && <DashPage inv={inv} bills={bills} purch={purch} isO={isO} mob={mob} />}
-          {page === "purch" && <PurchPage purch={purch} addPurchase={addPurchase} deletePurchase={deletePurchase} mob={mob} askConfirm={askConfirm} />}
+          {page === "purch" && <PurchPage purch={purch} addPurchase={addPurchase} deletePurchase={deletePurchase} mob={mob} askConfirm={askConfirm} inv={inv} saveInv={saveInv} bills={bills} saveBills={saveBills} />}
           {page === "returns" && <ReturnsPage purch={purch} inv={inv} saveInv={saveInv} savePurch={savePurch} mob={mob} askConfirm={askConfirm} />}
           {page === "inv" && <InvPage inv={inv} saveInv={saveInv} isO={isO} mob={mob} askConfirm={askConfirm} />}
           {page === "rack" && <RackPage inv={inv} saveInv={saveInv} mob={mob} />}
