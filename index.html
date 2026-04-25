@@ -1307,6 +1307,23 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv }) {
   const [editBill, setEditBill] = useState(null);
   const [retBill, setRetBill] = useState(null);
   const [retQtys, setRetQtys] = useState({});
+  const [editAddQ, setEditAddQ] = useState("");
+
+  const editAddItem = function(med) {
+    if (!editBill) return;
+    var items = editBill.items.slice();
+    items.push({ mid: med.id, name: med.name, batch: med.batch, expiry: med.expiry, mrp: med.mrp, unitPrice: med.mrp, ptr: med.ptr || 0, unitPtr: med.ptr || 0, gstRate: med.gstRate || 5, qty: 1, discount: 0, loose: false, packQty: med.packQty || 0, uid: med.uid || "", purchaseBillNo: med.purchaseBillNo || "", purchaseDistributor: med.purchaseDistributor || med.distributor || "", purchaseDate: med.purchaseDate || "" });
+    setEditBill(Object.assign({}, editBill, { items: items }));
+    setEditAddQ("");
+  };
+
+  const editDelItem = function(idx) {
+    if (!editBill || editBill.items.length <= 1) { alert("Bill must have at least 1 item"); return; }
+    var items = editBill.items.filter(function(_, i) { return i !== idx; });
+    setEditBill(Object.assign({}, editBill, { items: items }));
+  };
+
+  var editSearchResults = editAddQ.length >= 2 && inv ? inv.filter(function(m) { return m.name.toLowerCase().indexOf(editAddQ.toLowerCase()) >= 0 || (m.uid || "").toLowerCase().indexOf(editAddQ.toLowerCase()) >= 0; }).slice(0, 8) : [];
 
   const editRef = useRef(null);
   const doEdit = function(b) {
@@ -1417,8 +1434,8 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv }) {
             <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Patient</label><input value={editBill.patient} onChange={(e) => setEditBill((p) => ({ ...p, patient: e.target.value }))} style={inps} /></div>
             <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Doctor</label><input value={editBill.doctor || ""} onChange={(e) => setEditBill((p) => ({ ...p, doctor: e.target.value }))} style={inps} /></div>
             <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Payment</label><select value={editBill.paymentMode} onChange={(e) => setEditBill((p) => ({ ...p, paymentMode: e.target.value }))} style={{ ...inps, background: "#fff" }}>{["Cash","UPI","Card","Credit"].map((m) => <option key={m}>{m}</option>)}</select></div></div>
-          <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: 600 }}><thead><tr>
-            {["Medicine","Qty","Price","Disc%","Disc Rs","GST%","Amt"].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
+          <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: 650 }}><thead><tr>
+            {["Medicine","Qty","Price","Disc%","Disc Rs","GST%","Amt",""].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
             {editBill.items.map((it, i) => {
               const baseAmt = (it.unitPrice || it.mrp) * it.qty;
               const discRs = it.discountRs !== undefined ? it.discountRs : baseAmt * (it.discount || 0) / 100;
@@ -1426,7 +1443,7 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv }) {
               const updEditDiscRs = (rs) => { const v = Math.max(0, parseFloat(rs) || 0); const pct = baseAmt > 0 ? Math.min(100, Math.round(v / baseAmt * 10000) / 100) : 0; const items = [...editBill.items]; items[i] = { ...items[i], discountRs: v, discount: pct }; setEditBill((p) => ({ ...p, items })); };
               return (
               <tr key={i}>
-                <td style={{ ...tds, fontWeight: 500 }}>{it.name}</td>
+                <td style={{ ...tds, fontWeight: 500 }}>{it.name}{it.loose && <span style={{ color: "#B45309", fontSize: 9, marginLeft: 4 }}>[L]</span>}</td>
                 <td style={{ padding: "4px" }}><input type="number" min="1" value={it.qty} onChange={(e) => { const items = [...editBill.items]; items[i] = { ...items[i], qty: Math.max(1, parseInt(e.target.value) || 1) }; setEditBill((p) => ({ ...p, items })); }} style={{ ...smis, width: 55 }} /></td>
                 <td style={{ padding: "4px" }}><input type="number" min="0" step="0.01" value={it.unitPrice || it.mrp} onChange={(e) => { const items = [...editBill.items]; items[i] = { ...items[i], unitPrice: Math.max(0, parseFloat(e.target.value) || 0), mrp: Math.max(0, parseFloat(e.target.value) || 0) }; setEditBill((p) => ({ ...p, items })); }} style={{ ...smis, width: 70, textAlign: "right" }} /></td>
                 <td style={{ padding: "4px" }}>
@@ -1439,9 +1456,21 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv }) {
                 </td>
                 <td style={tds}>{it.gstRate}%</td>
                 <td style={{ ...tds, fontWeight: 700 }}>Rs.{f2(baseAmt * (1 - (it.discount || 0) / 100))}</td>
+                <td style={tds}><button onClick={function() { editDelItem(i); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#DC2626", fontSize: 16, fontWeight: 700, padding: 2 }}>x</button></td>
               </tr>
               );
             })}</tbody></table></div>
+          <div style={{ marginTop: 10, position: "relative" }}>
+            <input value={editAddQ} onChange={function(e) { setEditAddQ(e.target.value); }} placeholder="Search medicine to add..." style={{ ...inps, fontSize: 13 }} />
+            {editSearchResults.length > 0 && <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: "1px solid #ddd", borderRadius: 8, boxShadow: "0 4px 12px rgba(0,0,0,0.1)", maxHeight: 200, overflowY: "auto", zIndex: 10 }}>
+              {editSearchResults.map(function(m) {
+                return <button key={m.id} onClick={function() { editAddItem(m); }} style={{ display: "flex", justifyContent: "space-between", width: "100%", padding: "8px 12px", border: "none", borderBottom: "1px solid #f5f5f0", background: "transparent", cursor: "pointer", textAlign: "left", fontSize: 12 }}>
+                  <span><b>{m.name}</b> {m.uid && <span style={{ color: "#7C3AED", fontSize: 10 }}>({m.uid})</span>} - {m.batch}</span>
+                  <span style={{ color: "#0D6B5B", fontWeight: 600 }}>Rs.{f2(m.mrp)}</span>
+                </button>;
+              })}
+            </div>}
+          </div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginTop: 10, flexWrap: "wrap", gap: 8 }}>
             <div>
               <label style={{ fontSize: 11, fontWeight: 700, color: "#444", display: "block", marginBottom: 6 }}>Bill Discount</label>
