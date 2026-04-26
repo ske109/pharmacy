@@ -25,6 +25,7 @@
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 html,body,#root{height:100%;width:100%;overflow:hidden}
 body{font-family:'DM Sans',sans-serif;background:#EFECE5;color:#1a1a1a}
+.mob-scroll-fix{-webkit-overflow-scrolling:touch;overflow-y:auto;}
 input,select,button,textarea{font-family:inherit;-webkit-appearance:none}
 ::-webkit-scrollbar{width:5px;height:5px}
 ::-webkit-scrollbar-thumb{background:#bbb;border-radius:4px}
@@ -701,9 +702,21 @@ function DashPage({ inv, bills, purch, isO, mob }) {
       </div>
       <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 14 }}>
         <div style={cds}><b>Recent Bills</b>{bills.length === 0 ? <p style={{ color: "#aaa", fontSize: 12, padding: 16, textAlign: "center" }}>None</p> :
+          mob ? <div style={{ marginTop: 10 }}>
+            {bills.slice(-5).reverse().map((b) => <div key={b.billNo} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid #F0EDE8" }}>
+              <div><div style={{ fontFamily: "monospace", fontWeight: 700, color: "#0D6B5B", fontSize: 12 }}>{b.billNo}</div><div style={{ fontSize: 11, color: "#888" }}>{b.patient}</div></div>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>Rs.{f2(b.netAmount)}</div>
+            </div>)}
+          </div> :
           <div style={{ overflowX: "auto", marginTop: 10 }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th style={ths}>Bill</th><th style={ths}>Patient</th><th style={ths}>Amt</th></tr></thead><tbody>
             {bills.slice(-5).reverse().map((b) => <tr key={b.billNo}><td style={{ ...tds, fontWeight: 600, color: "#0D6B5B", fontFamily: "monospace" }}>{b.billNo}</td><td style={tds}>{b.patient}</td><td style={{ ...tds, fontWeight: 600 }}>Rs.{f2(b.netAmount)}</td></tr>)}</tbody></table></div>}</div>
         <div style={cds}><b>Recent Purchases</b>{purch.length === 0 ? <p style={{ color: "#aaa", fontSize: 12, padding: 16, textAlign: "center" }}>None</p> :
+          mob ? <div style={{ marginTop: 10 }}>
+            {purch.slice(-5).reverse().map((p) => <div key={p.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid #F0EDE8" }}>
+              <div><div style={{ fontWeight: 600, fontSize: 12, color: "#0C2E24" }}>{p.supplier}</div><div style={{ fontSize: 11, color: "#888" }}>{p.invoiceNo || "-"} · {fD(p.date)}</div></div>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>Rs.{f2(p.netAmount)}</div>
+            </div>)}
+          </div> :
           <div style={{ overflowX: "auto", marginTop: 10 }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr><th style={ths}>Supplier</th><th style={ths}>Amt</th></tr></thead><tbody>
             {purch.slice(-5).reverse().map((p) => <tr key={p.id}><td style={tds}>{p.supplier}</td><td style={{ ...tds, fontWeight: 600 }}>Rs.{f2(p.netAmount)}</td></tr>)}</tbody></table></div>}</div>
       </div></div>
@@ -935,6 +948,27 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm, inv, s
           </div>
         </div>}
         {purch.length === 0 ? <p style={{ color: "#aaa", fontSize: 12, textAlign: "center", padding: 16 }}>None</p> :
+        mob ? <div>
+          {[...purch].reverse().map((p) => (
+            <div key={p.id} style={{ ...cds, padding: 12, marginBottom: 8, borderLeft: "3px solid #0D6B5B" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                <div>
+                  <div style={{ fontFamily: "monospace", fontWeight: 700, color: "#0D6B5B", fontSize: 14 }}>{p.invoiceNo || "No Invoice"}</div>
+                  <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>{p.supplier}</div>
+                  <div style={{ fontSize: 11, color: "#888" }}>{fD(p.date)} · {p.items.length} item(s)</div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontWeight: 800, fontSize: 15, color: "#0C2E24" }}>Rs.{f2(p.netAmount)}</div>
+                  <Tag bg={p.sourceType === "csv" ? "#DBEAFE" : p.sourceType === "image" ? "#FEE2E2" : "#F3E8FF"} fg={p.sourceType === "csv" ? "#1E40AF" : p.sourceType === "image" ? "#991B1B" : "#6B21A8"}>{(p.sourceType || "?").toUpperCase()}</Tag>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                <button onClick={function(){setEditPurch({id:p.id,supplier:p.supplier,invoiceNo:p.invoiceNo,date:p.date});}} style={{ ...bts(false), padding: "7px 14px", fontSize: 12, flex: 1 }}>Edit</button>
+                <button onClick={() => delPurch(p.id)} style={{ border: "none", borderRadius: 7, padding: "7px 14px", fontWeight: 600, cursor: "pointer", fontSize: 12, background: "#DC2626", color: "#fff", flex: 1 }}>Delete</button>
+              </div>
+            </div>
+          ))}
+        </div> :
         <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: 200 }}><thead><tr>
           {shP("invoice") && <th style={ths}>Invoice</th>}
           {shP("supplier") && <th style={ths}>Supplier</th>}
@@ -1516,11 +1550,34 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv }) {
 
       {retBill && (
         <div style={{ ...cds, border: "2px solid #DC2626", marginBottom: 16 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
             <div><b style={{ color: "#DC2626" }}>Return Bill: {retBill.billNo}</b><div style={{ fontSize: 12, color: "#888" }}>Patient: {retBill.patient} | Date: {fD(retBill.date)}</div></div>
-            <div style={{ display: "flex", gap: 6 }}><button onClick={returnAll} style={{ ...bts(false), padding: "5px 12px", fontSize: 11, color: "#DC2626" }}>Return All</button><button onClick={processBillReturn} style={{ border: "none", borderRadius: 7, padding: "9px 18px", fontWeight: 600, cursor: "pointer", fontSize: 13, background: "#DC2626", color: "#fff" }}>Process Return</button><button onClick={function() { setRetBill(null); }} style={bts(false)}>Cancel</button></div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}><button onClick={returnAll} style={{ ...bts(false), padding: "5px 12px", fontSize: 11, color: "#DC2626" }}>Return All</button><button onClick={processBillReturn} style={{ border: "none", borderRadius: 7, padding: "9px 18px", fontWeight: 600, cursor: "pointer", fontSize: 13, background: "#DC2626", color: "#fff" }}>Process Return</button><button onClick={function() { setRetBill(null); }} style={bts(false)}>Cancel</button></div>
           </div>
-          <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
+          {mob ? <div>
+            {retBill.items.map(function(it, i) {
+              var price = (it.unitPrice || it.mrp) * (1 - (it.discount || 0) / 100);
+              return <div key={i} style={{ ...cds, padding: 10, marginBottom: 6, borderLeft: "3px solid #DC2626" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13 }}>{it.name}</div>
+                    <div style={{ fontSize: 11, color: "#888" }}>{it.loose ? "Loose" : "Pack"} · Sold: {it.qty}{it.loose ? " pcs" : ""} · Rs.{f2(price)}/unit</div>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ fontSize: 11, color: "#888" }}>Return:</span>
+                      <input type="number" min="0" max={it.qty} value={retQtys[i] || 0} onChange={function(e) { setRetQtys(function(p) { var n = Object.assign({}, p); n[i] = Math.min(it.qty, Math.max(0, parseInt(e.target.value) || 0)); return n; }); }} style={{ ...smis, width: 65, textAlign: "center" }} />
+                    </div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#DC2626" }}>Rs.{f2(price * (retQtys[i] || 0))}</div>
+                  </div>
+                </div>
+              </div>;
+            })}
+            <div style={{ textAlign: "right", marginTop: 8, fontSize: 14, fontWeight: 700, color: "#DC2626" }}>
+              Total Refund: Rs.{f2(retBill.items.reduce(function(s, it, i) { return s + (it.unitPrice || it.mrp) * (1 - (it.discount || 0) / 100) * (retQtys[i] || 0); }, 0))}
+            </div>
+          </div> :
+          <div><div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
             {["Medicine","Type","Sold Qty","Return Qty","Price","Refund Amt"].map(function(h) { return <th key={h} style={ths}>{h}</th>; })}</tr></thead><tbody>
             {retBill.items.map(function(it, i) {
               var price = (it.unitPrice || it.mrp) * (1 - (it.discount || 0) / 100);
@@ -1535,7 +1592,7 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv }) {
             })}</tbody></table></div>
           <div style={{ textAlign: "right", marginTop: 8, fontSize: 14, fontWeight: 700, color: "#DC2626" }}>
             Total Refund: Rs.{f2(retBill.items.reduce(function(s, it, i) { return s + (it.unitPrice || it.mrp) * (1 - (it.discount || 0) / 100) * (retQtys[i] || 0); }, 0))}
-          </div>
+          </div></div>}
         </div>
       )}
 
@@ -1764,12 +1821,38 @@ function UsersPage({ sessions, mob }) {
       <div style={cds}>
         <b>Login Accounts</b>
         <p style={{ fontSize: 12, color: "#888", margin: "8px 0" }}>Manage users in Firebase Console &gt; Authentication &gt; Users</p>
+        {mob ? <div style={{ marginTop: 10 }}>
+          {Object.entries(ROLES).map(([email, role]) => (
+            <div key={email} style={{ ...cds, padding: 10, marginBottom: 6, borderLeft: "3px solid #0D6B5B" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ fontFamily: "monospace", fontSize: 12 }}>{email}</div>
+                <Tag bg={role === "owner" ? "#FEF3C7" : "#DBEAFE"} fg={role === "owner" ? "#92400E" : "#1E40AF"}>{role.toUpperCase()}</Tag>
+              </div>
+            </div>
+          ))}
+        </div> :
         <div style={{ overflowX: "auto", marginTop: 10 }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
           {["Email","Role"].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
           {Object.entries(ROLES).map(([email, role]) => (<tr key={email}><td style={{ ...tds, fontFamily: "monospace" }}>{email}</td>
-            <td style={tds}><Tag bg={role === "owner" ? "#FEF3C7" : "#DBEAFE"} fg={role === "owner" ? "#92400E" : "#1E40AF"}>{role.toUpperCase()}</Tag></td></tr>))}</tbody></table></div></div>
-      {sessions.length > 0 && <div style={cds}><b>Active Sessions</b><div style={{ overflowX: "auto", marginTop: 10 }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>{["User","Device","Last Active"].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
-        {sessions.map((s, i) => (<tr key={i}><td style={tds}>{s.user}</td><td style={tds}>{s.device}</td><td style={tds}>{s.lastActive}</td></tr>))}</tbody></table></div></div>}</div>
+            <td style={tds}><Tag bg={role === "owner" ? "#FEF3C7" : "#DBEAFE"} fg={role === "owner" ? "#92400E" : "#1E40AF"}>{role.toUpperCase()}</Tag></td></tr>))}</tbody></table></div>}
+      </div>
+      {sessions.length > 0 && <div style={cds}><b>Active Sessions</b>
+        {mob ? <div style={{ marginTop: 10 }}>
+          {sessions.map((s, i) => (
+            <div key={i} style={{ ...cds, padding: 10, marginBottom: 6, borderLeft: "3px solid #2563EB" }}>
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 13 }}>{s.user}</div>
+                  <div style={{ fontSize: 11, color: "#888" }}>{s.device}</div>
+                </div>
+                <div style={{ fontSize: 11, color: "#888", textAlign: "right" }}>{s.lastActive}</div>
+              </div>
+            </div>
+          ))}
+        </div> :
+        <div style={{ overflowX: "auto", marginTop: 10 }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>{["User","Device","Last Active"].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
+          {sessions.map((s, i) => (<tr key={i}><td style={tds}>{s.user}</td><td style={tds}>{s.device}</td><td style={tds}>{s.lastActive}</td></tr>))}</tbody></table></div>}
+      </div>}</div>
   );
 }
 
@@ -1928,7 +2011,7 @@ function BackupPage({ inv, bills, purch, saveAll, askConfirm, saveInv, saveBills
         <b>Data Summary:</b> {inv.length} medicines, {bills.length} bills, {purch.length} purchases, {returns.length} purchase returns, {billReturns.length} bill returns
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 14 }}>
+      <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr 1fr", gap: 14, marginBottom: 14 }}>
         <div style={{ ...cds, textAlign: "center", padding: 24 }}><div style={{ fontSize: 36, marginBottom: 8 }}>💾</div><b>Backup</b>
           <p style={{ fontSize: 12, color: "#888", margin: "8px 0" }}>Download all data</p>
           {!backupLink && <button onClick={doBackup} style={{ ...bts(true), width: "100%" }}>Prepare Backup</button>}
@@ -1969,7 +2052,7 @@ function BackupPage({ inv, bills, purch, saveAll, askConfirm, saveInv, saveBills
 
         {migStep === "preview" && migStats && (
           <div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10, marginBottom: 14 }}>
+            <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "1fr 1fr 1fr 1fr", gap: 10, marginBottom: 14 }}>
               {[
                 { label: "Inventory Matched", value: migStats.invMatched, color: "#059669", bg: "#D1FAE5", icon: "✅" },
                 { label: "Inventory No Match", value: migStats.invSkipped, color: "#D97706", bg: "#FEF3C7", icon: "⚠️" },
@@ -2156,6 +2239,27 @@ function ProfitPage({ bills, inv, mob }) {
 
       <div style={cds}><b>Bill-wise Breakdown ({fl.length})</b>
         {fl.length === 0 ? <p style={{ color: "#aaa", textAlign: "center", padding: 16, fontSize: 12 }}>No bills in this period</p> :
+        mob ? <div style={{ marginTop: 10 }}>
+          {[...fl].reverse().map((b) => { const p = calcBillProfit(b);
+            return <div key={b.billNo} style={{ ...cds, padding: 12, marginBottom: 8, borderLeft: "3px solid " + (p.profit >= 0 ? "#059669" : "#DC2626") }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                <div>
+                  <div style={{ fontFamily: "monospace", fontWeight: 700, color: "#0D6B5B", fontSize: 13 }}>{b.billNo}</div>
+                  <div style={{ fontSize: 11, color: "#888" }}>{fD(b.date)}</div>
+                  <div style={{ fontSize: 12, fontWeight: 500 }}>{b.patient}</div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontWeight: 800, fontSize: 15, color: p.profit >= 0 ? "#059669" : "#DC2626" }}>+Rs.{f2(p.profit)}</div>
+                  <div style={{ fontSize: 11, color: p.margin >= 20 ? "#059669" : p.margin >= 10 ? "#D97706" : "#DC2626", fontWeight: 600 }}>{f2(p.margin)}% margin</div>
+                </div>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6, fontSize: 11, color: "#888" }}>
+                <span>Sale: <b style={{ color: "#059669" }}>Rs.{f2(p.netSale)}</b></span>
+                <span>Cost: <b style={{ color: "#B45309" }}>Rs.{f2(p.totalCost)}</b></span>
+                <span>Disc: <b style={{ color: "#DC2626" }}>Rs.{f2(p.totalDisc)}</b></span>
+              </div>
+            </div>; })}
+        </div> :
         <div style={{ overflowX: "auto", marginTop: 10 }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: 650 }}><thead><tr>
           {["Bill","Date","Patient","Net Sale","Discounts","Cost","Profit","Margin %"].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
           {[...fl].reverse().map((b) => { const p = calcBillProfit(b);
@@ -2441,6 +2545,14 @@ function AuditPage({ inv, mob }) {
 
           {rpt.invalidCount > 0 && <div style={{ marginBottom: 12 }}>
             <b style={{ color: "#DC2626", fontSize: 13 }}>Not Verified ({rpt.invalidCount})</b>
+            {mob ? <div style={{ marginTop: 6 }}>
+              {rpt.invalidItems.map(function(m) { return <div key={m.id} style={{ ...cds, padding: 8, marginBottom: 4, background: "#FEF2F2", borderLeft: "3px solid #DC2626" }}>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <div><div style={{ fontWeight: 600, fontSize: 12, color: "#DC2626" }}>{m.name}</div><div style={{ fontSize: 10, color: "#888" }}>{m.batch || "-"} · {m.rack} · Exp: {m.expiry || "-"}</div></div>
+                  <div style={{ textAlign: "right" }}><div style={{ fontWeight: 700, fontSize: 13 }}>{fStock(m.stock, m.packQty)}</div><div style={{ fontSize: 10, color: "#888" }}>Rs.{f2(m.mrp)}</div></div>
+                </div>
+              </div>; })}
+            </div> :
             <div style={{ overflowX: "auto", marginTop: 6 }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
               {["Medicine","Batch","Rack","Stock","MRP","Expiry"].map(function(h) { return <th key={h} style={ths}>{h}</th>; })}</tr></thead><tbody>
               {rpt.invalidItems.map(function(m) { return <tr key={m.id} style={{ background: "#FEF2F2" }}>
@@ -2450,11 +2562,19 @@ function AuditPage({ inv, mob }) {
                 <td style={{ ...tds, fontWeight: 600 }}>{fStock(m.stock, m.packQty)}</td>
                 <td style={tds}>Rs.{f2(m.mrp)}</td>
                 <td style={tds}>{m.expiry || "-"}</td></tr>; })}
-            </tbody></table></div>
+            </tbody></table></div>}
           </div>}
 
           {rpt.validCount > 0 && <div>
             <b style={{ color: "#059669", fontSize: 13 }}>Verified ({rpt.validCount})</b>
+            {mob ? <div style={{ marginTop: 6 }}>
+              {rpt.validItems.map(function(m) { return <div key={m.id} style={{ ...cds, padding: 8, marginBottom: 4, background: "#F0FDF4", borderLeft: "3px solid #059669" }}>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <div><div style={{ fontWeight: 600, fontSize: 12 }}>{m.name}</div><div style={{ fontSize: 10, color: "#888" }}>{m.batch || "-"} · {m.rack} · Exp: {m.expiry || "-"}</div></div>
+                  <div style={{ textAlign: "right" }}><div style={{ fontWeight: 700, fontSize: 13, color: "#059669" }}>{fStock(m.stock, m.packQty)}</div><div style={{ fontSize: 10, color: "#888" }}>Rs.{f2(m.mrp)}</div></div>
+                </div>
+              </div>; })}
+            </div> :
             <div style={{ overflowX: "auto", marginTop: 6 }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
               {["Medicine","Batch","Rack","Stock","MRP","Expiry"].map(function(h) { return <th key={h} style={ths}>{h}</th>; })}</tr></thead><tbody>
               {rpt.validItems.map(function(m) { return <tr key={m.id}>
@@ -2464,7 +2584,7 @@ function AuditPage({ inv, mob }) {
                 <td style={{ ...tds, fontWeight: 600, color: "#059669" }}>{fStock(m.stock, m.packQty)}</td>
                 <td style={tds}>Rs.{f2(m.mrp)}</td>
                 <td style={tds}>{m.expiry || "-"}</td></tr>; })}
-            </tbody></table></div>
+            </tbody></table></div>}
           </div>}
         </div>;
       })()}
@@ -2494,6 +2614,23 @@ function AuditPage({ inv, mob }) {
       {/* Past Audit Reports */}
       {pastAudits.length > 0 && !auditStarted && !auditReport && !viewReport && <div style={{ ...cds, marginTop: 16 }}>
         <b style={{ fontSize: 14 }}>Past Audit Reports ({pastAudits.length})</b>
+        {mob ? <div style={{ marginTop: 10 }}>
+          {[].concat(pastAudits).reverse().map(function(a) {
+            var acc = Math.round(a.validCount / Math.max(a.totalItems, 1) * 100);
+            return <div key={a.id} style={{ ...cds, padding: 10, marginBottom: 6, borderLeft: "3px solid #0D6B5B" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>{a.date}</div>
+                  <div style={{ fontSize: 11, color: "#888" }}>Total: {a.totalItems} · ✅ {a.validCount} · ❌ {a.invalidCount}</div>
+                </div>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <Tag bg={a.validCount === a.totalItems ? "#D1FAE5" : "#FEF3C7"} fg={a.validCount === a.totalItems ? "#065F46" : "#92400E"}>{acc}%</Tag>
+                  <button onClick={function() { setViewReport(a); }} style={{ ...bts(true), padding: "4px 10px", fontSize: 11 }}>View</button>
+                </div>
+              </div>
+            </div>;
+          })}
+        </div> :
         <div style={{ overflowX: "auto", marginTop: 10 }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
           {["Date","Total","Verified","Not Verified","Accuracy",""].map(function(h) { return <th key={h} style={ths}>{h}</th>; })}</tr></thead><tbody>
           {[].concat(pastAudits).reverse().map(function(a) {
@@ -2505,7 +2642,7 @@ function AuditPage({ inv, mob }) {
               <td style={tds}><Tag bg={a.validCount === a.totalItems ? "#D1FAE5" : "#FEF3C7"} fg={a.validCount === a.totalItems ? "#065F46" : "#92400E"}>{Math.round(a.validCount / Math.max(a.totalItems, 1) * 100)}%</Tag></td>
               <td style={tds}><button onClick={function() { setViewReport(a); }} style={{ ...bts(true), padding: "4px 10px", fontSize: 11 }}>View</button></td>
             </tr>;
-          })}</tbody></table></div>
+          })}</tbody></table></div>}
       </div>}
     </div>
   );
@@ -2569,11 +2706,33 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm }) {
 
       {retPurch ? (
         <div style={{ ...cds, border: "2px solid #DC2626" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
             <div><b style={{ color: "#DC2626" }}>Return from: {retPurch.supplier}</b><div style={{ fontSize: 12, color: "#888" }}>Invoice: {retPurch.invoiceNo || "-"} | Date: {fD(retPurch.date)}</div></div>
             <div style={{ display: "flex", gap: 6 }}><button onClick={processReturn} style={{ border: "none", borderRadius: 7, padding: "9px 18px", fontWeight: 600, cursor: "pointer", fontSize: 13, background: "#DC2626", color: "#fff" }}>Process Return</button><button onClick={() => setRetPurch(null)} style={bts(false)}>Cancel</button></div>
           </div>
-          <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
+          {mob ? <div>
+            {retPurch.items.map((it, i) => (
+              <div key={i} style={{ ...cds, padding: 10, marginBottom: 6, borderLeft: "3px solid #DC2626" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13 }}>{it.name}</div>
+                    <div style={{ fontSize: 11, color: "#888" }}>Batch: {it.batch || "-"} · Purchased: {it.qty} · PTR: Rs.{f2(it.ptr || it.mrp)}</div>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ fontSize: 11, color: "#888" }}>Return:</span>
+                      <input type="number" min="0" max={it.qty} value={retQtys[i] || 0} onChange={(e) => setRetQtys((p) => ({ ...p, [i]: Math.min(it.qty, Math.max(0, parseInt(e.target.value) || 0)) }))} style={{ ...smis, width: 60, textAlign: "center" }} />
+                    </div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#DC2626" }}>Rs.{f2((it.ptr || it.mrp || 0) * (retQtys[i] || 0))}</div>
+                  </div>
+                </div>
+              </div>
+            ))}
+            <div style={{ textAlign: "right", marginTop: 8, fontSize: 14, fontWeight: 700, color: "#DC2626" }}>
+              Total Return: Rs.{f2(retPurch.items.reduce((s, it, i) => s + (it.ptr || it.mrp || 0) * (retQtys[i] || 0), 0))}
+            </div>
+          </div> :
+          <div><div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
             {["Medicine","Batch","Purchased Qty","Return Qty","PTR","Return Amt"].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
             {retPurch.items.map((it, i) => (
               <tr key={i}>
@@ -2587,11 +2746,28 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm }) {
             ))}</tbody></table></div>
           <div style={{ textAlign: "right", marginTop: 8, fontSize: 14, fontWeight: 700, color: "#DC2626" }}>
             Total Return: Rs.{f2(retPurch.items.reduce((s, it, i) => s + (it.ptr || it.mrp || 0) * (retQtys[i] || 0), 0))}
-          </div>
+          </div></div>}
         </div>
       ) : (
         <div style={cds}><b>Select Purchase to Return</b>
           {purch.length === 0 ? <p style={{ color: "#aaa", fontSize: 12, textAlign: "center", padding: 16 }}>No purchases</p> :
+          mob ? <div style={{ marginTop: 10 }}>
+            {[...purch].reverse().map((p) => (
+              <div key={p.id} style={{ ...cds, padding: 12, marginBottom: 8, borderLeft: "3px solid #DC2626" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                  <div>
+                    <div style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 13, color: "#0D6B5B" }}>{p.invoiceNo || "No Invoice"}</div>
+                    <div style={{ fontSize: 12, fontWeight: 600 }}>{p.supplier}</div>
+                    <div style={{ fontSize: 11, color: "#888" }}>{fD(p.date)} · {p.items.length} item(s)</div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontWeight: 700, fontSize: 14 }}>Rs.{f2(p.netAmount)}</div>
+                    <button onClick={() => startReturn(p)} style={{ border: "none", borderRadius: 7, padding: "7px 14px", fontWeight: 600, cursor: "pointer", fontSize: 12, background: "#DC2626", color: "#fff", marginTop: 6 }}>Return</button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div> :
           <div style={{ overflowX: "auto", marginTop: 10 }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
             {["Invoice","Supplier","Date","Items","Amount",""].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
             {[...purch].reverse().map((p) => (<tr key={p.id}>
@@ -2603,21 +2779,50 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm }) {
       )}
 
       {returns.length > 0 && <div style={cds}><b>Purchase Return History ({returns.length})</b>
+        {mob ? <div style={{ marginTop: 10 }}>
+          {[...returns].reverse().map((r) => (
+            <div key={r.id} style={{ ...cds, padding: 10, marginBottom: 6, borderLeft: "3px solid #DC2626" }}>
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 13 }}>{r.supplier}</div>
+                  <div style={{ fontSize: 11, color: "#888" }}>{fD(r.date)} · Invoice: {r.invoiceNo || "-"} · {r.items.length} item(s)</div>
+                </div>
+                <div style={{ fontWeight: 700, color: "#DC2626" }}>Rs.{f2(r.totalAmount)}</div>
+              </div>
+            </div>
+          ))}
+        </div> :
         <div style={{ overflowX: "auto", marginTop: 10 }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
           {["Date","Supplier","Invoice","Items","Amount"].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
           {[...returns].reverse().map((r) => (<tr key={r.id}>
             <td style={tds}>{fD(r.date)}</td><td style={tds}>{r.supplier}</td><td style={tds}>{r.invoiceNo || "-"}</td>
             <td style={tds}>{r.items.length}</td><td style={{ ...tds, fontWeight: 700, color: "#DC2626" }}>Rs.{f2(r.totalAmount)}</td>
-          </tr>))}</tbody></table></div></div>}
+          </tr>))}</tbody></table></div>}
+      </div>}
 
       {billReturns.length > 0 && <div style={{ ...cds, borderLeft: "4px solid #DC2626" }}><b>Customer / Bill Return History ({billReturns.length})</b>
+        {mob ? <div style={{ marginTop: 10 }}>
+          {[...billReturns].reverse().map(function(r) { return (
+            <div key={r.id} style={{ ...cds, padding: 10, marginBottom: 6, borderLeft: "3px solid #DC2626" }}>
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <div>
+                  <div style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 13, color: "#0D6B5B" }}>{r.billNo}</div>
+                  <div style={{ fontSize: 12, fontWeight: 500 }}>{r.patient}</div>
+                  <div style={{ fontSize: 11, color: "#888" }}>{fD(r.date)} · {r.items.map(function(i) { return i.name.split(" ")[0] + " x" + i.returnQty; }).join(", ")}</div>
+                </div>
+                <div style={{ fontWeight: 700, color: "#DC2626", fontSize: 14 }}>Rs.{f2(r.refundAmount)}</div>
+              </div>
+            </div>
+          ); })}
+        </div> :
         <div style={{ overflowX: "auto", marginTop: 10 }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
           {["Date","Bill No","Patient","Items","Refund"].map(function(h) { return <th key={h} style={ths}>{h}</th>; })}</tr></thead><tbody>
           {[...billReturns].reverse().map(function(r) { return (<tr key={r.id}>
             <td style={tds}>{fD(r.date)}</td><td style={{ ...tds, fontFamily: "monospace", fontWeight: 600 }}>{r.billNo}</td><td style={tds}>{r.patient}</td>
             <td style={tds}>{r.items.length} ({r.items.map(function(i) { return i.name.split(" ")[0] + "x" + i.returnQty; }).join(", ")})</td>
             <td style={{ ...tds, fontWeight: 700, color: "#DC2626" }}>Rs.{f2(r.refundAmount)}</td>
-          </tr>); })}</tbody></table></div></div>}
+          </tr>); })}</tbody></table></div>}
+      </div>}
     </div>
   );
 }
@@ -2904,7 +3109,7 @@ function App() {
           <button onClick={() => setSideOpen(true)} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer" }}>☰</button>
           <div style={{ fontWeight: 700, fontFamily: "'Playfair Display',serif", fontSize: 15, color: "#0C2E24" }}>A to Z Pharmacy</div>
           <div style={{ width: 30, height: 30, borderRadius: 7, background: "#E8E4DD", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13 }}>{isO ? "👑" : "👤"}</div></div>}
-        <div style={{ flex: 1, padding: mob ? 14 : 24, overflow: "auto" }}>
+        <div style={{ flex: 1, padding: mob ? 14 : 24, overflow: "auto", WebkitOverflowScrolling: "touch" }}>
           {page === "dash" && <DashPage inv={inv} bills={bills} purch={purch} isO={isO} mob={mob} />}
           {page === "purch" && <PurchPage purch={purch} addPurchase={addPurchase} deletePurchase={deletePurchase} mob={mob} askConfirm={askConfirm} inv={inv} saveInv={saveInv} bills={bills} saveBills={saveBills} />}
           {page === "returns" && <ReturnsPage purch={purch} inv={inv} saveInv={saveInv} savePurch={savePurch} mob={mob} askConfirm={askConfirm} />}
