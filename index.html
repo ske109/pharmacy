@@ -641,7 +641,7 @@ function Login({ onLogin }) {
 // ══════════════════════════════════════════════
 function Sidebar({ page, setPage, user, onLogout, counts, mob, sideOpen, setSideOpen }) {
   const isO = user.role === "owner";
-  const nav = [{ id: "dash", i: "📊", l: "Dashboard" }, { id: "purch", i: "📦", l: "Purchases" }, { id: "returns", i: "↩️", l: "Returns" }, { id: "inv", i: "💊", l: "Inventory" }, { id: "rack", i: "🗄", l: "Racks" }, { id: "audit", i: "📝", l: "Audit" }, { id: "bill", i: "🧾", l: "New Bill" }, ...(isO ? [{ id: "sales", i: "📈", l: "Sales" }, { id: "profit", i: "💹", l: "Profit Margin" }] : []), { id: "stock", i: "📋", l: "Stock" }, { id: "hist", i: "🗂", l: "Bills" }, { id: "ency", i: "📚", l: "Encyclopedia" }, ...(isO ? [{ id: "users", i: "👥", l: "Users" }, { id: "backup", i: "💾", l: "Backup" }] : [])];
+  const nav = [{ id: "dash", i: "📊", l: "Dashboard" }, { id: "purch", i: "📦", l: "Purchases" }, { id: "returns", i: "↩️", l: "Returns" }, { id: "inv", i: "💊", l: "Inventory" }, { id: "rack", i: "🗄", l: "Racks" }, { id: "audit", i: "📝", l: "Audit" }, { id: "bill", i: "🧾", l: "New Bill" }, ...(isO ? [{ id: "profit", i: "💹", l: "Profit Margin" }] : []), { id: "stock", i: "📋", l: "Stock" }, { id: "hist", i: "🗂", l: "Bills" }, { id: "ency", i: "📚", l: "Encyclopedia" }, ...(isO ? [{ id: "users", i: "👥", l: "Users" }, { id: "backup", i: "💾", l: "Backup" }] : [])];
   if (mob && !sideOpen) return null;
   return (
     <div>
@@ -671,7 +671,7 @@ function DashPage({ inv, bills, purch, isO, mob }) {
   const ts = Math.floor(inv.reduce((s, m) => s + (m.stock || 0), 0)), low = inv.filter((m) => m.stock > 0 && m.stock < 3).length;
   const today = new Date().toDateString(), tb = bills.filter((b) => new Date(b.date).toDateString() === today);
   const tr = tb.reduce((s, b) => s + b.netAmount, 0);
-  const tc = tb.reduce((s, b) => s + b.items.reduce((ss, i) => ss + (i.unitPtr || i.ptr || 0) * (1 + (i.gstRate || 0) / 100) * i.qty, 0), 0);
+  const tc = tb.reduce((s, b) => s + b.items.reduce((ss, i) => ss + (i.unitCost || (i.unitPtr || i.ptr || 0) * (1 + (i.gstRate || 0) / 100)) * i.qty, 0), 0);
   return (
     <div><h2 style={hds}>Dashboard</h2>
       <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(auto-fit,minmax(155px,1fr))", gap: 12, marginBottom: 20 }}>
@@ -1058,7 +1058,7 @@ function BillPage({ inv, saveInv, addBill, mob, showBill }) {
   const [scanResult, setScanResult] = useState(null);
   const camRef = useRef(null);
   const res = sq.length >= 1 ? inv.filter((m) => { const s = sq.toLowerCase(); return (m.name.toLowerCase().includes(s) || m.batch.toLowerCase().includes(s) || (m.uid || "") === sq.toUpperCase() || (m.uid || "").toLowerCase().includes(s)) && m.stock > 0; }).slice(0, 8) : [];
-  const addIt = (med) => { const ex = items.findIndex((i) => i.mid === med.id && !i.loose); if (ex >= 0) setItems((p) => p.map((i, idx) => idx === ex ? { ...i, qty: i.qty + 1 } : i)); else setItems((p) => [...p, { mid: med.id, name: med.name, manufacturer: med.manufacturer || "", pack: med.pack || "", batch: med.batch, expiry: med.expiry, mrp: med.mrp, ptr: med.ptr || 0, gstRate: med.gstRate || 5, qty: 1, discount: 0, loose: false, packQty: med.packQty || 0, unitPrice: med.mrp, unitPtr: med.ptr || 0, uid: med.uid || "", purchaseBillNo: med.purchaseBillNo || "", purchaseDistributor: med.purchaseDistributor || med.distributor || "", purchaseDate: med.purchaseDate || "" }]); setSq(""); setSo(false); };
+  const addIt = (med) => { const ex = items.findIndex((i) => i.mid === med.id && !i.loose); if (ex >= 0) setItems((p) => p.map((i, idx) => idx === ex ? { ...i, qty: i.qty + 1 } : i)); else setItems((p) => [...p, { mid: med.id, name: med.name, manufacturer: med.manufacturer || "", pack: med.pack || "", batch: med.batch, expiry: med.expiry, mrp: med.mrp, ptr: med.ptr || 0, gstRate: med.gstRate || 5, qty: 1, discount: 0, loose: false, packQty: med.packQty || 0, unitPrice: med.mrp, unitPtr: med.ptr || 0, uid: med.uid || "", purchaseBillNo: med.purchaseBillNo || "", purchaseDistributor: med.purchaseDistributor || med.distributor || "", purchaseDate: med.purchaseDate || "", unitCost: med.unitCost || 0, purchDiscPct: med.purchDiscPct || 0, purchSchemePct: med.purchSchemePct || 0, purchFreeRatio: med.purchFreeRatio || 1 }]); setSq(""); setSo(false); };
 
   // Camera scan - reads medicine strip/box image and matches to inventory
   const doScan = async (e) => {
@@ -1100,7 +1100,7 @@ function BillPage({ inv, saveInv, addBill, mob, showBill }) {
     e.target.value = "";
   };
 
-  const toggleLoose = (idx) => { setItems((p) => p.map((it, i) => { if (i !== idx) return it; const loose = !it.loose; const pq = it.packQty || 10; const foundM = inv.find((m) => m.id === it.mid); const origMrp = foundM ? foundM.mrp : it.mrp; const origPtr = foundM ? foundM.ptr : it.ptr; return { ...it, loose, unitPrice: loose ? it.mrp / pq : origMrp, unitPtr: loose ? (it.ptr || 0) / pq : origPtr, qty: 1 }; })); };
+  const toggleLoose = (idx) => { setItems((p) => p.map((it, i) => { if (i !== idx) return it; const loose = !it.loose; const pq = it.packQty || 10; const foundM = inv.find((m) => m.id === it.mid); const origMrp = foundM ? foundM.mrp : it.mrp; const origPtr = foundM ? foundM.ptr : it.ptr; const origCost = foundM ? (foundM.unitCost || 0) : (it.unitCost || 0); return { ...it, loose, unitPrice: loose ? it.mrp / pq : origMrp, unitPtr: loose ? (it.ptr || 0) / pq : origPtr, unitCost: loose ? origCost / pq : origCost, qty: 1 }; })); };
   const ca = (i) => { const price = i.unitPrice * i.qty; return price - price * i.discount / 100; };
   const tMRP = items.reduce((s, i) => s + i.unitPrice * i.qty, 0), tDisc = items.reduce((s, i) => s + i.unitPrice * i.qty * i.discount / 100, 0);
   const tGST = items.reduce((s, i) => { const a = ca(i); return s + (a - a / (1 + i.gstRate / 100)); }, 0);
@@ -1220,30 +1220,6 @@ function BillPage({ inv, saveInv, addBill, mob, showBill }) {
   );
 }
 
-// ══════════════════════════════════════════════
-// SALES PAGE
-// ══════════════════════════════════════════════
-function SalesPage({ bills, mob }) {
-  const [df, setDf] = useState("all"); const now = new Date();
-  const fl = bills.filter((b) => { const d = new Date(b.date); if (df === "today") return d.toDateString() === now.toDateString(); if (df === "week") { const w = new Date(now); w.setDate(w.getDate() - 7); return d >= w; } if (df === "month") return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear(); return true; });
-  const tR = fl.reduce((s, b) => s + b.netAmount, 0), tC = fl.reduce((s, b) => s + b.items.reduce((ss, i) => ss + (i.unitPtr || i.ptr || 0) * i.qty, 0), 0), tP = tR - tC;
-  return (
-    <div><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
-      <h2 style={{ ...hds, marginBottom: 0 }}>Sales and Profit</h2>
-      <div style={{ display: "flex", gap: 3, background: "#E8E4DD", borderRadius: 7, padding: 3 }}>
-        {[["today","Today"],["week","Week"],["month","Month"],["all","All"]].map(([id, l]) => <button key={id} onClick={() => setDf(id)} style={{ padding: "6px 12px", border: "none", borderRadius: 5, fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: df === id ? "#fff" : "transparent", color: df === id ? "#0D6B5B" : "#888" }}>{l}</button>)}</div></div>
-      <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(4,1fr)", gap: 12, marginBottom: 16 }}>
-        <Stat icon="💰" label="Revenue" value={"Rs." + f2(tR)} color="#2563EB" /><Stat icon="📦" label="Cost" value={"Rs." + f2(tC)} color="#B45309" />
-        <Stat icon="📈" label="Profit" value={"Rs." + f2(tP)} color={tP >= 0 ? "#059669" : "#DC2626"} /><Stat icon="📊" label="Margin" value={tR > 0 ? f2(tP / tR * 100) + "%" : "0%"} color="#7C3AED" /></div>
-      <div style={cds}><b>Details ({fl.length})</b>{fl.length === 0 ? <p style={{ color: "#aaa", textAlign: "center", padding: 16, fontSize: 12 }}>No sales</p> :
-        <div style={{ overflowX: "auto", marginTop: 10 }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: 500 }}><thead><tr>
-          {["Bill","Date","Patient","Revenue","Cost","Profit"].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
-          {[...fl].reverse().map((b) => { const r = b.netAmount, c = b.items.reduce((s, i) => s + (i.unitPtr || i.ptr || 0) * i.qty, 0), p = r - c;
-            return (<tr key={b.billNo}><td style={{ ...tds, fontFamily: "monospace", fontWeight: 600, color: "#0D6B5B" }}>{b.billNo}</td><td style={tds}>{b.dateIST || fDT(b.date)}</td><td style={tds}>{b.patient}</td>
-              <td style={{ ...tds, fontWeight: 600 }}>Rs.{f2(r)}</td><td style={{ ...tds, color: "#B45309" }}>Rs.{f2(c)}</td>
-              <td style={{ ...tds, fontWeight: 700, color: p >= 0 ? "#059669" : "#DC2626" }}>Rs.{f2(p)}</td></tr>); })}</tbody></table></div>}</div></div>
-  );
-}
 
 // ══════════════════════════════════════════════
 // STOCK PAGE
@@ -1698,7 +1674,7 @@ function runPurchaseTraceMigration(data) {
 // ══════════════════════════════════════════════
 // BACKUP PAGE
 // ══════════════════════════════════════════════
-function BackupPage({ inv, bills, purch, saveAll, askConfirm }) {
+function BackupPage({ inv, bills, purch, saveAll, askConfirm, saveInv, saveBills }) {
   const [backupLink, setBackupLink] = useState(null);
   const [returns, setReturns] = useState([]);
   const [billReturns, setBillReturns] = useState([]);
@@ -1864,13 +1840,93 @@ function BackupPage({ inv, bills, purch, saveAll, askConfirm }) {
           </div>
         )}
       </div>
+
+      {/* ── COST MIGRATION (for Profit Margin) ── */}
+      <div style={{ ...cds, border: "2px solid #B45309", marginTop: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+          <span style={{ fontSize: 28 }}>💰</span>
+          <div>
+            <b style={{ color: "#B45309", fontSize: 14 }}>Purchase Cost Migration (for Profit Margin)</b>
+            <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>Backfills unitCost (including scheme%, discount%, free items) into existing bills and inventory for accurate profit calculation.</div>
+          </div>
+        </div>
+        <button onClick={function() {
+          if (!purch || !purch.length) { alert("No purchase records found"); return; }
+          askConfirm("Run cost migration on " + bills.length + " bills and " + inv.length + " inventory items?", function() {
+            var invUpdated = 0, billItemsUpdated = 0;
+
+            // Build purchase lookup: name+batch → cost data
+            var costLookup = {};
+            purch.forEach(function(p) {
+              (p.items || []).forEach(function(it) {
+                var key = (it.name || "").toLowerCase().trim() + "|" + (it.batch || "").trim();
+                var totalUnits = (it.qty || 0) + (it.freeQty || 0);
+                var paidQty = it.qty || 0;
+                var freeRatio = totalUnits > 0 ? paidQty / totalUnits : 1;
+                var uc = (it.ptr || 0) * (1 - (it.discPct || 0) / 100) * (1 - (it.schemePct || 0) / 100) * (1 + (it.gstRate || 0) / 100) * freeRatio;
+                costLookup[key] = { unitCost: Math.round(uc * 100) / 100, purchDiscPct: it.discPct || 0, purchSchemePct: it.schemePct || 0, purchFreeRatio: Math.round(freeRatio * 10000) / 10000 };
+              });
+            });
+
+            // Update inventory
+            var newInv = inv.map(function(m) {
+              if (m.unitCost && m.unitCost > 0) return m;
+              var key = (m.name || "").toLowerCase().trim() + "|" + (m.batch || "").trim();
+              var cd = costLookup[key];
+              if (cd) { invUpdated++; return Object.assign({}, m, cd); }
+              // Fallback: calculate from PTR+GST if no purchase match
+              if (m.ptr && m.ptr > 0) {
+                invUpdated++;
+                return Object.assign({}, m, { unitCost: Math.round(m.ptr * (1 + (m.gstRate || 0) / 100) * 100) / 100, purchDiscPct: 0, purchSchemePct: 0, purchFreeRatio: 1 });
+              }
+              return m;
+            });
+            saveInv(newInv);
+
+            // Update bills
+            var newBills = bills.map(function(b) {
+              var items = b.items.map(function(it) {
+                if (it.unitCost && it.unitCost > 0) return it;
+                // Try exact match
+                var key = (it.name || "").toLowerCase().trim() + "|" + (it.batch || "").trim();
+                var cd = costLookup[key];
+                if (cd) {
+                  billItemsUpdated++;
+                  var uc = it.loose ? cd.unitCost / (it.packQty || 10) : cd.unitCost;
+                  return Object.assign({}, it, { unitCost: Math.round(uc * 100) / 100, purchDiscPct: cd.purchDiscPct, purchSchemePct: cd.purchSchemePct, purchFreeRatio: cd.purchFreeRatio });
+                }
+                // Try name-only match
+                var nameKey = Object.keys(costLookup).find(function(k) { return k.split("|")[0] === (it.name || "").toLowerCase().trim(); });
+                if (nameKey) {
+                  cd = costLookup[nameKey];
+                  billItemsUpdated++;
+                  var uc2 = it.loose ? cd.unitCost / (it.packQty || 10) : cd.unitCost;
+                  return Object.assign({}, it, { unitCost: Math.round(uc2 * 100) / 100, purchDiscPct: cd.purchDiscPct, purchSchemePct: cd.purchSchemePct, purchFreeRatio: cd.purchFreeRatio });
+                }
+                // Fallback: PTR+GST
+                if ((it.unitPtr || it.ptr) && (it.unitPtr || it.ptr) > 0) {
+                  billItemsUpdated++;
+                  var fallbackCost = (it.unitPtr || it.ptr) * (1 + (it.gstRate || 0) / 100);
+                  return Object.assign({}, it, { unitCost: Math.round(fallbackCost * 100) / 100, purchDiscPct: 0, purchSchemePct: 0, purchFreeRatio: 1 });
+                }
+                return it;
+              });
+              return Object.assign({}, b, { items: items });
+            });
+            saveBills(newBills);
+
+            alert("Cost migration complete!\n\nInventory: " + invUpdated + " items updated\nBill items: " + billItemsUpdated + " items updated\n\nProfit Margin tab will now show accurate data.");
+          });
+        }} style={{ ...bts(true), background: "#B45309", padding: "10px 20px" }}>
+          Run Cost Migration
+        </button>
+        <div style={{ fontSize: 11, color: "#888", marginTop: 8 }}>
+          Formula: unitCost = PTR x (1 - Disc%) x (1 - Scheme%) x (1 + GST%) x PaidQty / (PaidQty + FreeQty)
+        </div>
+      </div>
     </div>
   );
 }
-
-// ══════════════════════════════════════════════
-// PROFIT MARGIN PAGE
-// ══════════════════════════════════════════════
 function ProfitPage({ bills, inv, mob }) {
   const [view, setView] = useState("bill");
   const [fromD, setFromD] = useState("");
@@ -1890,7 +1946,14 @@ function ProfitPage({ bills, inv, mob }) {
     const salePrice = (it.unitPrice || it.mrp) * it.qty;
     const discAmt = salePrice * (it.discount || 0) / 100;
     const netSale = salePrice - discAmt;
-    const costPerUnit = (it.unitPtr || it.ptr || 0) * (1 + (it.gstRate || 0) / 100);
+    // Cost = PTR × (1-PurchDisc%) × (1-Scheme%) × (1+GST%) adjusted for free items
+    var ptr = it.unitPtr || it.ptr || 0;
+    var purchDisc = it.purchDiscPct || 0;
+    var scheme = it.purchSchemePct || 0;
+    var freeRatio = it.purchFreeRatio || 1; // ratio of paid/(paid+free), default 1 if no free
+    var costPerUnit = ptr * (1 - purchDisc / 100) * (1 - scheme / 100) * (1 + (it.gstRate || 0) / 100) * freeRatio;
+    // If unitCost is pre-calculated (from migration), use it directly
+    if (it.unitCost && it.unitCost > 0) costPerUnit = it.unitCost;
     const totalCost = costPerUnit * it.qty;
     return { netSale, totalCost, profit: netSale - totalCost, margin: netSale > 0 ? ((netSale - totalCost) / netSale * 100) : 0 };
   };
@@ -2623,7 +2686,10 @@ function App() {
           // Auto-assign rack if same medicine name exists with a rack
           const rackMatch = next.find((m) => m.name.toLowerCase() === it.name.toLowerCase() && m.rack);
           const autoRack = rackMatch ? rackMatch.rack : (it.rack || "");
-          next.push({ id: mkId(), name: it.name, manufacturer: it.manufacturer || "", hsn: it.hsn || "300490", batch: it.batch || "", expiry: it.expiry || "", pack: it.pack || "", mrp: it.mrp || 0, ptr: it.ptr || 0, stock: (it.qty || 0) + (it.freeQty || 0), gstRate: it.gstRate || 5, rack: autoRack, packQty: it.packQty || 0, distributor: rev.supplier, purchaseBillNo: pur.invoiceNo || "", purchaseDistributor: rev.supplier || "", purchaseDate: pur.date || "", purchaseId: pur.id || "", addedFrom: rev.srcType || "manual", uid: mkUID() }); }
+          var totalUnits = (it.qty || 0) + (it.freeQty || 0);
+          var paidQty = it.qty || 0;
+          var itemUnitCost = (it.ptr || 0) * (1 - (it.discPct || 0) / 100) * (1 - (it.schemePct || 0) / 100) * (1 + (it.gstRate || 0) / 100) * (totalUnits > 0 ? paidQty / totalUnits : 1);
+          next.push({ id: mkId(), name: it.name, manufacturer: it.manufacturer || "", hsn: it.hsn || "300490", batch: it.batch || "", expiry: it.expiry || "", pack: it.pack || "", mrp: it.mrp || 0, ptr: it.ptr || 0, stock: totalUnits, gstRate: it.gstRate || 5, rack: autoRack, packQty: it.packQty || 0, distributor: rev.supplier, purchaseBillNo: pur.invoiceNo || "", purchaseDistributor: rev.supplier || "", purchaseDate: pur.date || "", purchaseId: pur.id || "", purchDiscPct: it.discPct || 0, purchSchemePct: it.schemePct || 0, purchFreeRatio: totalUnits > 0 ? paidQty / totalUnits : 1, unitCost: Math.round(itemUnitCost * 100) / 100, addedFrom: rev.srcType || "manual", uid: mkUID() }); }
       });
       saveInv(next);
       return next;
@@ -2683,13 +2749,12 @@ function App() {
           {page === "rack" && <RackPage inv={inv} saveInv={saveInv} mob={mob} />}
           {page === "audit" && <AuditPage inv={inv} mob={mob} />}
           {page === "bill" && <BillPage inv={inv} saveInv={saveInv} addBill={addBill} mob={mob} showBill={showBill} />}
-          {page === "sales" && isO && <SalesPage bills={bills} mob={mob} />}
           {page === "profit" && isO && <ProfitPage bills={bills} inv={inv} mob={mob} />}
           {page === "stock" && <StockPage inv={inv} saveInv={saveInv} isO={isO} mob={mob} />}
           {page === "hist" && <HistPage bills={bills} showBill={showBill} saveBills={saveBills} askConfirm={askConfirm} inv={inv} saveInv={saveInv} />}
           {page === "ency" && <EncyclopediaPage inv={inv} mob={mob} />}
           {page === "users" && isO && <UsersPage sessions={sessions} mob={mob} />}
-          {page === "backup" && isO && <BackupPage inv={inv} bills={bills} purch={purch} saveAll={saveAll} askConfirm={askConfirm} />}
+          {page === "backup" && isO && <BackupPage inv={inv} bills={bills} purch={purch} saveAll={saveAll} askConfirm={askConfirm} saveInv={saveInv} saveBills={saveBills} />}
         </div></div></div>
   );
 }
