@@ -1395,7 +1395,7 @@ function StockPage({ inv, saveInv, isO, mob }) {
 // ══════════════════════════════════════════════
 // BILL HISTORY
 // ══════════════════════════════════════════════
-function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv }) {
+function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch }) {
   const [editBill, setEditBill] = useState(null);
   const [retBill, setRetBill] = useState(null);
   const [retQtys, setRetQtys] = useState({});
@@ -1458,17 +1458,56 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv }) {
 
   const saveEditedBill = () => {
     if (!editBill) return;
-    const tMRP = editBill.items.reduce((s, i) => s + (i.unitPrice || i.mrp) * i.qty, 0);
-    const tDisc = editBill.items.reduce((s, i) => s + (i.unitPrice || i.mrp) * i.qty * (i.discount || 0) / 100, 0);
-    const tGST = editBill.items.reduce((s, i) => { const a = (i.unitPrice || i.mrp) * i.qty * (1 - (i.discount || 0) / 100); return s + (a - a / (1 + (i.gstRate || 0) / 100)); }, 0);
+
+    // Build cost lookup from purchases + inventory
+    var costLookup = {};
+    if (purch) purch.forEach(function(p) {
+      (p.items || []).forEach(function(it) {
+        var key = (it.name || "").toLowerCase().trim() + "|" + (it.batch || "").trim();
+        var totalUnits = (it.qty || 0) + (it.freeQty || 0);
+        var paidQty = it.qty || 0;
+        var freeRatio = totalUnits > 0 ? paidQty / totalUnits : 1;
+        var uc = (it.ptr || 0) * (1 - (it.discPct || 0) / 100) * (1 - (it.schemePct || 0) / 100) * (1 + (it.gstRate || 0) / 100) * freeRatio;
+        costLookup[key] = { unitCost: Math.round(uc * 100) / 100, purchDiscPct: it.discPct || 0, purchSchemePct: it.schemePct || 0, purchFreeRatio: Math.round(freeRatio * 10000) / 10000 };
+        var nk = "n:" + (it.name || "").toLowerCase().trim();
+        if (!costLookup[nk]) costLookup[nk] = costLookup[key];
+      });
+    });
+    if (inv) inv.forEach(function(m) {
+      var key = (m.name || "").toLowerCase().trim() + "|" + (m.batch || "").trim();
+      if (!costLookup[key] && m.unitCost) costLookup[key] = { unitCost: m.unitCost, purchDiscPct: m.purchDiscPct || 0, purchSchemePct: m.purchSchemePct || 0, purchFreeRatio: m.purchFreeRatio || 1 };
+      var nk = "n:" + (m.name || "").toLowerCase().trim();
+      if (!costLookup[nk] && m.unitCost) costLookup[nk] = { unitCost: m.unitCost, purchDiscPct: m.purchDiscPct || 0, purchSchemePct: m.purchSchemePct || 0, purchFreeRatio: m.purchFreeRatio || 1 };
+    });
+
+    // Sync cost data into each item — ALWAYS refresh from purchases/inventory
+    var syncedItems = editBill.items.map(function(it) {
+      var newIt = Object.assign({}, it);
+      var key = (it.name || "").toLowerCase().trim() + "|" + (it.batch || "").trim();
+      var cd = costLookup[key] || costLookup["n:" + (it.name || "").toLowerCase().trim()];
+      if (cd) {
+        newIt.unitCost = Math.round((it.loose ? cd.unitCost / (it.packQty || 10) : cd.unitCost) * 100) / 100;
+        newIt.purchDiscPct = cd.purchDiscPct;
+        newIt.purchSchemePct = cd.purchSchemePct;
+        newIt.purchFreeRatio = cd.purchFreeRatio;
+      } else if ((!newIt.unitCost || newIt.unitCost === 0) && (newIt.unitPtr || newIt.ptr) && (newIt.unitPtr || newIt.ptr) > 0) {
+        newIt.unitCost = Math.round((newIt.unitPtr || newIt.ptr) * (1 + (newIt.gstRate || 0) / 100) * 100) / 100;
+      }
+      newIt.amount = (newIt.unitPrice || newIt.mrp) * newIt.qty * (1 - (newIt.discount || 0) / 100);
+      return newIt;
+    });
+
+    const tMRP = syncedItems.reduce((s, i) => s + (i.unitPrice || i.mrp) * i.qty, 0);
+    const tDisc = syncedItems.reduce((s, i) => s + (i.unitPrice || i.mrp) * i.qty * (i.discount || 0) / 100, 0);
+    const tGST = syncedItems.reduce((s, i) => { const a = (i.unitPrice || i.mrp) * i.qty * (1 - (i.discount || 0) / 100); return s + (a - a / (1 + (i.gstRate || 0) / 100)); }, 0);
     const net = Math.max(0, Math.round(tMRP - tDisc - (editBill.billDiscount || 0)));
-    const updated = { ...editBill, totalMRP: tMRP, totalDiscount: tDisc, netAmount: net, cgst: tGST / 2, sgst: tGST / 2, items: editBill.items.map((i) => ({ ...i, amount: (i.unitPrice || i.mrp) * i.qty * (1 - (i.discount || 0) / 100) })) };
+    const updated = { ...editBill, totalMRP: tMRP, totalDiscount: tDisc, netAmount: net, cgst: tGST / 2, sgst: tGST / 2, items: syncedItems };
     const next = bills.map((b) => b.billNo === updated.billNo ? updated : b);
     saveBills(next);
     if (inv && saveInv) {
       var changed = false;
       var updInv = inv.map(function(m) {
-        var match = editBill.items.find(function(i) { return i.mid === m.id && !i.loose && (i.unitPrice || i.mrp) !== m.mrp; });
+        var match = syncedItems.find(function(i) { return i.mid === m.id && !i.loose && (i.unitPrice || i.mrp) !== m.mrp; });
         if (match) { changed = true; return Object.assign({}, m, { mrp: match.unitPrice || match.mrp }); }
         return m;
       });
@@ -3278,7 +3317,7 @@ function App() {
           {page === "bill" && <BillPage inv={inv} saveInv={saveInv} addBill={addBill} mob={mob} showBill={showBill} />}
           {page === "profit" && isO && <ProfitPage bills={bills} inv={inv} mob={mob} />}
           {page === "stock" && <StockPage inv={inv} saveInv={saveInv} isO={isO} mob={mob} />}
-          {page === "hist" && <HistPage bills={bills} showBill={showBill} saveBills={saveBills} askConfirm={askConfirm} inv={inv} saveInv={saveInv} />}
+          {page === "hist" && <HistPage bills={bills} showBill={showBill} saveBills={saveBills} askConfirm={askConfirm} inv={inv} saveInv={saveInv} purch={purch} />}
           {page === "reports" && <ReportsPage bills={bills} inv={inv} mob={mob} showBill={showBill} />}
           {page === "ency" && <EncyclopediaPage inv={inv} mob={mob} />}
           {page === "users" && isO && <UsersPage sessions={sessions} mob={mob} />}
