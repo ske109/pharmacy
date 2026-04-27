@@ -2374,7 +2374,6 @@ function ProfitPage({ bills, inv, mob, purch, saveBills }) {
             fixed++;
           }
         }
-        }
         n.amount = (n.unitPrice || n.mrp) * n.qty * (1 - (n.discount || 0) / 100);
         return n;
       });
