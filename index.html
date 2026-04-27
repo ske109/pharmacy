@@ -2353,26 +2353,23 @@ function ProfitPage({ bills, inv, mob, purch, saveBills }) {
         var n = Object.assign({}, it);
         var key = (it.name || "").toLowerCase().trim() + "|" + (it.batch || "").trim();
         var cd = cl[key] || cl["n:" + (it.name || "").toLowerCase().trim()];
+        var gotCost = false;
         if (cd) {
           n.unitCost = Math.round((it.loose ? cd.unitCost / (it.packQty || 10) : cd.unitCost) * 100) / 100;
           n.purchDiscPct = cd.purchDiscPct;
           n.purchSchemePct = cd.purchSchemePct;
           n.purchFreeRatio = cd.purchFreeRatio;
+          gotCost = true;
           fixed++;
-        } else {
-          // No purchase match — recalculate from PTR
+        }
+        if (!gotCost) {
           var ptr = n.unitPtr || 0;
-          if (!ptr && n.ptr) ptr = it.loose ? n.ptr / (n.packQty || 10) : n.ptr;
-          if (ptr > 0) {
-            n.unitCost = Math.round(ptr * (1 + (n.gstRate || 0) / 100) * 100) / 100;
-            fixed++;
-          }
-          // Sanity fix: if loose item has unitCost > 3x selling price, it was set from full pack PTR
-          var sp = n.unitPrice || n.mrp || 0;
-          if (it.loose && n.unitCost && sp > 0 && n.unitCost > sp * 3 && n.packQty && n.packQty > 1) {
-            n.unitCost = Math.round(n.unitCost / n.packQty * 100) / 100;
-            fixed++;
-          }
+          if (!ptr && n.ptr) { ptr = it.loose ? n.ptr / (n.packQty || 10) : n.ptr; }
+          if (ptr > 0) { n.unitCost = Math.round(ptr * (1 + (n.gstRate || 0) / 100) * 100) / 100; fixed++; }
+        }
+        var sp = n.unitPrice || n.mrp || 0;
+        if (it.loose && n.unitCost && sp > 0 && n.unitCost > sp * 3 && n.packQty && n.packQty > 1) {
+          n.unitCost = Math.round(n.unitCost / n.packQty * 100) / 100;
         }
         n.amount = (n.unitPrice || n.mrp) * n.qty * (1 - (n.discount || 0) / 100);
         return n;
