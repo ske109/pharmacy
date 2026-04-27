@@ -3121,26 +3121,6 @@ function ReportsPage({ bills, inv, mob, showBill }) {
     if (w) { w.document.write(html); w.document.close(); w.print(); }
   };
 
-  return (
-    <div><h2 style={hds}>Sales & Profit Reports</h2>
-
-      <div style={{ display: "flex", gap: 3, background: "#E8E4DD", borderRadius: 7, padding: 3, marginBottom: 12, flexWrap: "wrap" }}>
-        {[["today","Today"],["week","This Week"],["month","This Month"],["custom","Custom Range"]].map(function(x) { return <button key={x[0]} onClick={function(){setPeriod(x[0]);}} style={{ padding: "7px 14px", border: "none", borderRadius: 5, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: period === x[0] ? "#fff" : "transparent", color: period === x[0] ? "#0D6B5B" : "#888" }}>{x[1]}</button>; })}
-      </div>
-      {period === "custom" && <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
-        <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>From</label><input type="date" value={from} onChange={function(e){setFrom(e.target.value);}} style={inps} /></div>
-        <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>To</label><input type="date" value={to} onChange={function(e){setTo(e.target.value);}} style={inps} /></div>
-      </div>}
-
-      <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(6,1fr)", gap: 10, marginBottom: 20 }}>
-        <Stat icon="🧾" label="Bills" value={filtered.length} color="#2563EB" />
-        <Stat icon="💰" label="Revenue" value={"Rs." + f2(totalRevenue)} color="#059669" />
-        <Stat icon="📦" label="Cost" value={"Rs." + f2(totalCost)} color="#B45309" />
-        <Stat icon="🏷" label="Discounts" value={"Rs." + f2(totalDisc)} color="#DC2626" />
-        <Stat icon="📈" label={"Profit (" + f2(totalMargin) + "%)"} value={"Rs." + f2(totalProfit)} color={totalProfit >= 0 ? "#059669" : "#DC2626"} />
-        <Stat icon="🚫" label="Out of Stock" value={inv.filter(function(m) { return !m.stock || m.stock <= 0; }).length} color="#DC2626" />
-      </div>
-
   var sendWhatsApp = function() {
     var pLabel = period === "today" ? "Today" : period === "week" ? "This Week" : period === "month" ? "This Month" : from + " to " + to;
     var msg = "*A to Z Pharmacy — Sales Report*\n";
@@ -3187,6 +3167,27 @@ function ReportsPage({ bills, inv, mob, showBill }) {
     var url = "https://wa.me/918884762255?text=" + encodeURIComponent(msg);
     window.open(url, "_blank");
   };
+
+
+  return (
+    <div><h2 style={hds}>Sales & Profit Reports</h2>
+
+      <div style={{ display: "flex", gap: 3, background: "#E8E4DD", borderRadius: 7, padding: 3, marginBottom: 12, flexWrap: "wrap" }}>
+        {[["today","Today"],["week","This Week"],["month","This Month"],["custom","Custom Range"]].map(function(x) { return <button key={x[0]} onClick={function(){setPeriod(x[0]);}} style={{ padding: "7px 14px", border: "none", borderRadius: 5, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: period === x[0] ? "#fff" : "transparent", color: period === x[0] ? "#0D6B5B" : "#888" }}>{x[1]}</button>; })}
+      </div>
+      {period === "custom" && <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+        <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>From</label><input type="date" value={from} onChange={function(e){setFrom(e.target.value);}} style={inps} /></div>
+        <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>To</label><input type="date" value={to} onChange={function(e){setTo(e.target.value);}} style={inps} /></div>
+      </div>}
+
+      <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(6,1fr)", gap: 10, marginBottom: 20 }}>
+        <Stat icon="🧾" label="Bills" value={filtered.length} color="#2563EB" />
+        <Stat icon="💰" label="Revenue" value={"Rs." + f2(totalRevenue)} color="#059669" />
+        <Stat icon="📦" label="Cost" value={"Rs." + f2(totalCost)} color="#B45309" />
+        <Stat icon="🏷" label="Discounts" value={"Rs." + f2(totalDisc)} color="#DC2626" />
+        <Stat icon="📈" label={"Profit (" + f2(totalMargin) + "%)"} value={"Rs." + f2(totalProfit)} color={totalProfit >= 0 ? "#059669" : "#DC2626"} />
+        <Stat icon="🚫" label="Out of Stock" value={inv.filter(function(m) { return !m.stock || m.stock <= 0; }).length} color="#DC2626" />
+      </div>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
         <button onClick={printReport} style={{ ...bts(true), padding: "10px 20px", fontSize: 13 }}>🖨 Print Report</button>
