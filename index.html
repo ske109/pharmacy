@@ -2106,6 +2106,103 @@ function BackupPage({ inv, bills, purch, saveAll, askConfirm, saveInv, saveBills
           Formula: unitCost = PTR x (1 - Disc%) x (1 - Scheme%) x (1 + GST%) x PaidQty / (PaidQty + FreeQty)
         </div>
       </div>
+
+      {/* ── BILL SYNC MIGRATION ── */}
+      <div style={{ ...cds, border: "2px solid #2563EB", marginTop: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+          <span style={{ fontSize: 28 }}>🔄</span>
+          <div>
+            <b style={{ color: "#2563EB", fontSize: 14 }}>Bill Recalculation & Sync</b>
+            <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>Recalculates all bill totals and syncs cost data from purchases into every bill item. Run this after editing bills to fix Profit Margin.</div>
+          </div>
+        </div>
+        <button onClick={function() {
+          askConfirm("Recalculate all " + bills.length + " bills and sync cost data from " + purch.length + " purchases?", function() {
+            // Build cost lookup from purchases
+            var costLookup = {};
+            purch.forEach(function(p) {
+              (p.items || []).forEach(function(it) {
+                var key = (it.name || "").toLowerCase().trim() + "|" + (it.batch || "").trim();
+                var totalUnits = (it.qty || 0) + (it.freeQty || 0);
+                var paidQty = it.qty || 0;
+                var freeRatio = totalUnits > 0 ? paidQty / totalUnits : 1;
+                var uc = (it.ptr || 0) * (1 - (it.discPct || 0) / 100) * (1 - (it.schemePct || 0) / 100) * (1 + (it.gstRate || 0) / 100) * freeRatio;
+                costLookup[key] = { unitCost: Math.round(uc * 100) / 100, purchDiscPct: it.discPct || 0, purchSchemePct: it.schemePct || 0, purchFreeRatio: Math.round(freeRatio * 10000) / 10000 };
+                // Also store name-only key for fallback
+                var nameKey = (it.name || "").toLowerCase().trim();
+                if (!costLookup["n:" + nameKey]) costLookup["n:" + nameKey] = costLookup[key];
+              });
+            });
+
+            // Build cost lookup from inventory as secondary source
+            inv.forEach(function(m) {
+              var key = (m.name || "").toLowerCase().trim() + "|" + (m.batch || "").trim();
+              if (!costLookup[key] && m.unitCost) {
+                costLookup[key] = { unitCost: m.unitCost, purchDiscPct: m.purchDiscPct || 0, purchSchemePct: m.purchSchemePct || 0, purchFreeRatio: m.purchFreeRatio || 1 };
+              }
+              var nameKey = "n:" + (m.name || "").toLowerCase().trim();
+              if (!costLookup[nameKey] && m.unitCost) {
+                costLookup[nameKey] = { unitCost: m.unitCost, purchDiscPct: m.purchDiscPct || 0, purchSchemePct: m.purchSchemePct || 0, purchFreeRatio: m.purchFreeRatio || 1 };
+              }
+            });
+
+            var billsFixed = 0;
+            var itemsFixed = 0;
+
+            var newBills = bills.map(function(b) {
+              var changed = false;
+              var items = b.items.map(function(it) {
+                // Try to find cost data
+                var cd = null;
+                var key = (it.name || "").toLowerCase().trim() + "|" + (it.batch || "").trim();
+                cd = costLookup[key] || costLookup["n:" + (it.name || "").toLowerCase().trim()];
+
+                var newIt = Object.assign({}, it);
+
+                // Sync cost data if found and missing or zero
+                if (cd && (!it.unitCost || it.unitCost === 0)) {
+                  var uc = it.loose ? cd.unitCost / (it.packQty || 10) : cd.unitCost;
+                  newIt.unitCost = Math.round(uc * 100) / 100;
+                  newIt.purchDiscPct = cd.purchDiscPct;
+                  newIt.purchSchemePct = cd.purchSchemePct;
+                  newIt.purchFreeRatio = cd.purchFreeRatio;
+                  changed = true;
+                  itemsFixed++;
+                }
+
+                // Fallback: compute from PTR+GST if still no cost
+                if ((!newIt.unitCost || newIt.unitCost === 0) && (newIt.unitPtr || newIt.ptr) && (newIt.unitPtr || newIt.ptr) > 0) {
+                  newIt.unitCost = Math.round((newIt.unitPtr || newIt.ptr) * (1 + (newIt.gstRate || 0) / 100) * 100) / 100;
+                  changed = true;
+                  itemsFixed++;
+                }
+
+                // Recalculate item amount
+                newIt.amount = (newIt.unitPrice || newIt.mrp) * newIt.qty * (1 - (newIt.discount || 0) / 100);
+                return newIt;
+              });
+
+              // Recalculate bill totals
+              var tMRP = items.reduce(function(s, i) { return s + (i.unitPrice || i.mrp) * i.qty; }, 0);
+              var tDisc = items.reduce(function(s, i) { return s + (i.unitPrice || i.mrp) * i.qty * (i.discount || 0) / 100; }, 0);
+              var tGST = items.reduce(function(s, i) { var a = (i.unitPrice || i.mrp) * i.qty * (1 - (i.discount || 0) / 100); return s + (a - a / (1 + (i.gstRate || 0) / 100)); }, 0);
+              var net = Math.max(0, Math.round(tMRP - tDisc - (b.billDiscount || 0)));
+
+              if (changed || net !== b.netAmount) billsFixed++;
+
+              return Object.assign({}, b, { items: items, totalMRP: tMRP, totalDiscount: tDisc, netAmount: net, cgst: tGST / 2, sgst: tGST / 2 });
+            });
+
+            saveBills(newBills);
+            alert("Bill sync complete!\n\n" + billsFixed + " bills recalculated\n" + itemsFixed + " items got cost data\n\nProfit Margin and Reports will now show accurate data.");
+          });
+        }} style={{ ...bts(true), background: "#2563EB", padding: "10px 20px" }}>
+          Run Bill Sync
+        </button>
+        <div style={{ fontSize: 11, color: "#888", marginTop: 8 }}>
+          Does 3 things: (1) Syncs unitCost from purchases into all bill items, (2) Recalculates bill totals (MRP, discounts, net), (3) Fixes items missing cost data. Run after editing bills.
+        </div>
+      </div>
     </div>
   );
 }
