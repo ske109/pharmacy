@@ -3141,7 +3141,57 @@ function ReportsPage({ bills, inv, mob, showBill }) {
         <Stat icon="🚫" label="Out of Stock" value={inv.filter(function(m) { return !m.stock || m.stock <= 0; }).length} color="#DC2626" />
       </div>
 
-      <button onClick={printReport} style={{ ...bts(true), padding: "10px 20px", fontSize: 13, marginBottom: 16 }}>Print Report</button>
+  var sendWhatsApp = function() {
+    var pLabel = period === "today" ? "Today" : period === "week" ? "This Week" : period === "month" ? "This Month" : from + " to " + to;
+    var msg = "*A to Z Pharmacy — Sales Report*\n";
+    msg += "Period: " + pLabel + "\nGenerated: " + new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) + "\n\n";
+    msg += "*Summary*\n";
+    msg += "Bills: " + filtered.length + "\n";
+    msg += "Revenue: Rs." + f2(totalRevenue) + "\n";
+    msg += "Cost: Rs." + f2(totalCost) + "\n";
+    msg += "Discounts: Rs." + f2(totalDisc) + "\n";
+    msg += "Profit: Rs." + f2(totalProfit) + " (" + f2(totalMargin) + "%)\n\n";
+
+    if (allMeds.length > 0) {
+      msg += "*Medicines Sold (" + allMeds.length + ")*\n";
+      allMeds.forEach(function(m, i) {
+        var pr = m.revenue - m.cost;
+        var stockLeft = getStock(m.name, m.mid);
+        msg += (i + 1) + ". " + m.name + " — Qty: " + m.qty + " | Rev: Rs." + f2(m.revenue) + " | Profit: Rs." + f2(pr) + " | Stock: " + stockLeft + "\n";
+      });
+      msg += "\n";
+    }
+
+    if (sorted.length > 0) {
+      msg += "*Bill Details (" + sorted.length + ")*\n";
+      sorted.forEach(function(b) {
+        var bp = billProfit(b);
+        msg += b.billNo + " | " + (b.dateIST || fDT(b.date)) + " | " + b.patient + " | Rs." + f2(b.netAmount) + " | Profit: Rs." + f2(bp.profit) + "\n";
+        b.items.forEach(function(it) {
+          var rev = itemRevenue(it);
+          msg += "  - " + it.name + (it.loose ? " [L]" : "") + " x" + it.qty + " @ Rs." + f2(it.unitPrice || it.mrp) + " = Rs." + f2(rev) + "\n";
+        });
+      });
+      msg += "\n";
+    }
+
+    var zeroItems = inv.filter(function(m) { return !m.stock || m.stock <= 0; });
+    if (zeroItems.length > 0) {
+      msg += "*Out of Stock (" + zeroItems.length + ")*\n";
+      zeroItems.forEach(function(m, i) {
+        var wasSold = allMeds.find(function(s) { return s.name === m.name; });
+        msg += (i + 1) + ". " + m.name + " | MRP: Rs." + f2(m.mrp) + (wasSold ? " | Sold: " + wasSold.qty + " units" : "") + " | " + (m.purchaseDistributor || m.distributor || "-") + "\n";
+      });
+    }
+
+    var url = "https://wa.me/918884762255?text=" + encodeURIComponent(msg);
+    window.open(url, "_blank");
+  };
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+        <button onClick={printReport} style={{ ...bts(true), padding: "10px 20px", fontSize: 13 }}>🖨 Print Report</button>
+        <button onClick={sendWhatsApp} style={{ border: "none", borderRadius: 8, padding: "10px 20px", fontWeight: 600, cursor: "pointer", fontSize: 13, background: "#25D366", color: "#fff", fontFamily: "inherit" }}>📱 Send to WhatsApp</button>
+      </div>
 
       {/* ALL medicines sold */}
       {allMeds.length > 0 && <div style={{ ...cds, marginBottom: 16 }}>
