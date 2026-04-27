@@ -690,17 +690,10 @@ function DashPage({ inv, bills, purch, isO, mob }) {
   const today = new Date().toDateString(), tb = bills.filter((b) => new Date(b.date).toDateString() === today);
   const tr = tb.reduce((s, b) => s + b.netAmount, 0);
   const tc = tb.reduce((s, b) => s + b.items.reduce((ss, i) => {
-    var uc = 0;
-    if (i.unitCost && i.unitCost > 0) {
-      uc = i.unitCost;
-      var sp = i.unitPrice || i.mrp || 0;
-      if (i.loose && sp > 0 && uc > sp * 3 && i.packQty && i.packQty > 1) uc = uc / i.packQty;
-    } else {
-      var p = i.unitPtr || 0;
-      if (!p && i.ptr) p = i.loose ? i.ptr / (i.packQty || 10) : i.ptr;
-      uc = p * (1 + (i.gstRate || 0) / 100);
-    }
-    return ss + uc * i.qty;
+    var p = i.unitPtr || 0;
+    if (!p && i.ptr) p = i.loose ? i.ptr / (i.packQty || 10) : i.ptr;
+    var cost = p * (1 - (i.purchDiscPct || 0) / 100) * (1 - (i.purchSchemePct || 0) / 100) * (i.purchFreeRatio || 1);
+    return ss + cost * i.qty;
   }, 0), 0);
   return (
     <div><h2 style={hds}>Dashboard</h2>
@@ -1492,20 +1485,19 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
       if (!costLookup[nk] && m.unitCost) costLookup[nk] = { unitCost: m.unitCost, purchDiscPct: m.purchDiscPct || 0, purchSchemePct: m.purchSchemePct || 0, purchFreeRatio: m.purchFreeRatio || 1 };
     });
 
-    // Sync cost data into each item — ALWAYS refresh from purchases/inventory
+    // Sync cost data into each item — ensure unitPtr is correct
     var syncedItems = editBill.items.map(function(it) {
       var newIt = Object.assign({}, it);
       var key = (it.name || "").toLowerCase().trim() + "|" + (it.batch || "").trim();
       var cd = costLookup[key] || costLookup["n:" + (it.name || "").toLowerCase().trim()];
       if (cd) {
-        newIt.unitCost = Math.round((it.loose ? cd.unitCost / (it.packQty || 10) : cd.unitCost) * 100) / 100;
         newIt.purchDiscPct = cd.purchDiscPct;
         newIt.purchSchemePct = cd.purchSchemePct;
         newIt.purchFreeRatio = cd.purchFreeRatio;
-      } else if ((!newIt.unitCost || newIt.unitCost === 0) && (newIt.unitPtr || newIt.ptr) && (newIt.unitPtr || newIt.ptr) > 0) {
-        var sePtr = newIt.unitPtr || newIt.ptr;
-        if (it.loose && !newIt.unitPtr && newIt.ptr) sePtr = newIt.ptr / (newIt.packQty || 10);
-        newIt.unitCost = Math.round(sePtr * (1 + (newIt.gstRate || 0) / 100) * 100) / 100;
+      }
+      // Ensure unitPtr is correct for loose items
+      if (it.loose && (!newIt.unitPtr || newIt.unitPtr === 0) && newIt.ptr && newIt.ptr > 0) {
+        newIt.unitPtr = Math.round(newIt.ptr / (newIt.packQty || 10) * 100) / 100;
       }
       newIt.amount = (newIt.unitPrice || newIt.mrp) * newIt.qty * (1 - (newIt.discount || 0) / 100);
       return newIt;
@@ -2282,26 +2274,18 @@ function ProfitPage({ bills, inv, mob, purch, saveBills }) {
     const salePrice = (it.unitPrice || it.mrp) * it.qty;
     const discAmt = salePrice * (it.discount || 0) / 100;
     const netSale = salePrice - discAmt;
-    var costPerUnit = 0;
-    var sellingPricePerUnit = it.unitPrice || it.mrp || 0;
-
-    // Priority 1: Use pre-calculated unitCost — but sanity check it
-    if (it.unitCost && it.unitCost > 0) {
-      costPerUnit = it.unitCost;
-      // Sanity: if loose item's unitCost > 3x selling price, it's likely wrong (full pack PTR stored as per-tablet)
-      if (it.loose && costPerUnit > sellingPricePerUnit * 3 && it.packQty && it.packQty > 1) {
-        costPerUnit = costPerUnit / it.packQty;
-      }
-    } else {
-      // Priority 2: Calculate from PTR
-      var ptr = it.unitPtr || 0;
-      // If no unitPtr, derive from pack ptr
-      if (!ptr && it.ptr) ptr = it.loose ? it.ptr / (it.packQty || 10) : it.ptr;
-      var purchDisc = it.purchDiscPct || 0;
-      var scheme = it.purchSchemePct || 0;
-      var freeRatio = it.purchFreeRatio || 1;
-      costPerUnit = ptr * (1 - purchDisc / 100) * (1 - scheme / 100) * (1 + (it.gstRate || 0) / 100) * freeRatio;
+    // Cost = PTR per unit (WITHOUT GST — GST is recovered via ITC)
+    // Use unitPtr (per-unit, already adjusted for loose) > ptr/packQty for loose > ptr for full
+    var ptrPerUnit = 0;
+    if (it.unitPtr && it.unitPtr > 0) {
+      ptrPerUnit = it.unitPtr;
+    } else if (it.ptr && it.ptr > 0) {
+      ptrPerUnit = it.loose ? it.ptr / (it.packQty || 10) : it.ptr;
     }
+    var purchDisc = it.purchDiscPct || 0;
+    var scheme = it.purchSchemePct || 0;
+    var freeRatio = it.purchFreeRatio || 1;
+    var costPerUnit = ptrPerUnit * (1 - purchDisc / 100) * (1 - scheme / 100) * freeRatio;
     const totalCost = costPerUnit * it.qty;
     return { netSale, totalCost, profit: netSale - totalCost, margin: netSale > 0 ? ((netSale - totalCost) / netSale * 100) : 0 };
   };
@@ -2347,30 +2331,49 @@ function ProfitPage({ bills, inv, mob, purch, saveBills }) {
       if (!cl[nk] && m.unitCost) cl[nk] = { unitCost: m.unitCost, purchDiscPct: m.purchDiscPct || 0, purchSchemePct: m.purchSchemePct || 0, purchFreeRatio: m.purchFreeRatio || 1 };
     });
 
+    // Also build lookup from CURRENT inventory (latest PTR values)
+    inv.forEach(function(m) {
+      var key = (m.name || "").toLowerCase().trim() + "|" + (m.batch || "").trim();
+      var nk = "n:" + (m.name || "").toLowerCase().trim();
+      if (!cl[nk] || m.ptr) cl[nk] = { ptr: m.ptr || 0, purchDiscPct: m.purchDiscPct || 0, purchSchemePct: m.purchSchemePct || 0, purchFreeRatio: m.purchFreeRatio || 1 };
+      if (!cl[key] || m.ptr) cl[key] = cl[nk];
+    });
+
     var fixed = 0;
     var newBills = bills.map(function(b) {
       var items = b.items.map(function(it) {
         var n = Object.assign({}, it);
         var key = (it.name || "").toLowerCase().trim() + "|" + (it.batch || "").trim();
         var cd = cl[key] || cl["n:" + (it.name || "").toLowerCase().trim()];
-        var gotCost = false;
-        if (cd) {
-          n.unitCost = Math.round((it.loose ? cd.unitCost / (it.packQty || 10) : cd.unitCost) * 100) / 100;
-          n.purchDiscPct = cd.purchDiscPct;
-          n.purchSchemePct = cd.purchSchemePct;
-          n.purchFreeRatio = cd.purchFreeRatio;
-          gotCost = true;
+
+        // Sync PTR and purchase adjustments
+        if (cd && cd.ptr) {
+          n.ptr = cd.ptr;
+          n.unitPtr = it.loose ? Math.round(cd.ptr / (it.packQty || 10) * 100) / 100 : cd.ptr;
+          n.purchDiscPct = cd.purchDiscPct || n.purchDiscPct || 0;
+          n.purchSchemePct = cd.purchSchemePct || n.purchSchemePct || 0;
+          n.purchFreeRatio = cd.purchFreeRatio || n.purchFreeRatio || 1;
           fixed++;
         }
-        if (!gotCost) {
-          var ptr = n.unitPtr || 0;
-          if (!ptr && n.ptr) { ptr = it.loose ? n.ptr / (n.packQty || 10) : n.ptr; }
-          if (ptr > 0) { n.unitCost = Math.round(ptr * (1 + (n.gstRate || 0) / 100) * 100) / 100; fixed++; }
+
+        // Also check current inventory for latest PTR
+        var invMatch = inv.find(function(m) { return m.id === it.mid; });
+        if (!invMatch) invMatch = inv.find(function(m) { return m.name === it.name && m.batch === (it.batch || ""); });
+        if (invMatch && invMatch.ptr && invMatch.ptr > 0) {
+          n.ptr = invMatch.ptr;
+          n.unitPtr = it.loose ? Math.round(invMatch.ptr / (it.packQty || invMatch.packQty || 10) * 100) / 100 : invMatch.ptr;
+          n.purchDiscPct = invMatch.purchDiscPct || n.purchDiscPct || 0;
+          n.purchSchemePct = invMatch.purchSchemePct || n.purchSchemePct || 0;
+          n.purchFreeRatio = invMatch.purchFreeRatio || n.purchFreeRatio || 1;
+          if (!n.packQty && invMatch.packQty) n.packQty = invMatch.packQty;
+          fixed++;
         }
-        var sp = n.unitPrice || n.mrp || 0;
-        if (it.loose && n.unitCost && sp > 0 && n.unitCost > sp * 3 && n.packQty && n.packQty > 1) {
-          n.unitCost = Math.round(n.unitCost / n.packQty * 100) / 100;
+
+        // Ensure unitPtr is set for loose
+        if (it.loose && (!n.unitPtr || n.unitPtr === 0) && n.ptr && n.ptr > 0) {
+          n.unitPtr = Math.round(n.ptr / (n.packQty || 10) * 100) / 100;
         }
+
         n.amount = (n.unitPrice || n.mrp) * n.qty * (1 - (n.discount || 0) / 100);
         return n;
       });
@@ -3028,19 +3031,10 @@ function ReportsPage({ bills, inv, mob, showBill }) {
 
   // Item cost calculation
   var itemCost = function(it) {
-    if (it.unitCost && it.unitCost > 0) {
-      var uc = it.unitCost;
-      // Sanity: loose item unitCost > 3x selling price means it was stored as full pack cost
-      var sp = it.unitPrice || it.mrp || 0;
-      if (it.loose && sp > 0 && uc > sp * 3 && it.packQty && it.packQty > 1) uc = uc / it.packQty;
-      return uc * it.qty;
-    }
-    var ptr = it.unitPtr || 0;
-    if (!ptr && it.ptr) ptr = it.loose ? it.ptr / (it.packQty || 10) : it.ptr;
-    var disc = it.purchDiscPct || 0;
-    var scheme = it.purchSchemePct || 0;
-    var freeR = it.purchFreeRatio || 1;
-    return ptr * (1 - disc / 100) * (1 - scheme / 100) * (1 + (it.gstRate || 0) / 100) * freeR * it.qty;
+    var p = it.unitPtr || 0;
+    if (!p && it.ptr) p = it.loose ? it.ptr / (it.packQty || 10) : it.ptr;
+    var cost = p * (1 - (it.purchDiscPct || 0) / 100) * (1 - (it.purchSchemePct || 0) / 100) * (it.purchFreeRatio || 1);
+    return cost * it.qty;
   };
 
   var itemRevenue = function(it) { return (it.unitPrice || it.mrp) * it.qty * (1 - (it.discount || 0) / 100); };
