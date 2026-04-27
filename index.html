@@ -2245,7 +2245,7 @@ function BackupPage({ inv, bills, purch, saveAll, askConfirm, saveInv, saveBills
     </div>
   );
 }
-function ProfitPage({ bills, inv, mob }) {
+function ProfitPage({ bills, inv, mob, purch, saveBills }) {
   const [view, setView] = useState("bill");
   const [fromD, setFromD] = useState("");
   const [toD, setToD] = useState("");
@@ -2293,8 +2293,64 @@ function ProfitPage({ bills, inv, mob }) {
   const totals = fl.reduce((acc, b) => { const p = calcBillProfit(b); return { sale: acc.sale + p.netSale, cost: acc.cost + p.totalCost, disc: acc.disc + p.totalDisc, profit: acc.profit + p.profit }; }, { sale: 0, cost: 0, disc: 0, profit: 0 });
   const overallMargin = totals.sale > 0 ? (totals.profit / totals.sale * 100) : 0;
 
+  var recalcAll = function() {
+    if (!purch || !saveBills) { alert("Purchase data not available"); return; }
+    // Build cost lookup from all purchases
+    var cl = {};
+    purch.forEach(function(p) {
+      (p.items || []).forEach(function(it) {
+        var key = (it.name || "").toLowerCase().trim() + "|" + (it.batch || "").trim();
+        var tu = (it.qty || 0) + (it.freeQty || 0);
+        var pq = it.qty || 0;
+        var fr = tu > 0 ? pq / tu : 1;
+        var uc = (it.ptr || 0) * (1 - (it.discPct || 0) / 100) * (1 - (it.schemePct || 0) / 100) * (1 + (it.gstRate || 0) / 100) * fr;
+        cl[key] = { unitCost: Math.round(uc * 100) / 100, purchDiscPct: it.discPct || 0, purchSchemePct: it.schemePct || 0, purchFreeRatio: Math.round(fr * 10000) / 10000 };
+        var nk = "n:" + (it.name || "").toLowerCase().trim();
+        if (!cl[nk]) cl[nk] = cl[key];
+      });
+    });
+    // Also from inventory
+    inv.forEach(function(m) {
+      var key = (m.name || "").toLowerCase().trim() + "|" + (m.batch || "").trim();
+      if (!cl[key] && m.unitCost) cl[key] = { unitCost: m.unitCost, purchDiscPct: m.purchDiscPct || 0, purchSchemePct: m.purchSchemePct || 0, purchFreeRatio: m.purchFreeRatio || 1 };
+      var nk = "n:" + (m.name || "").toLowerCase().trim();
+      if (!cl[nk] && m.unitCost) cl[nk] = { unitCost: m.unitCost, purchDiscPct: m.purchDiscPct || 0, purchSchemePct: m.purchSchemePct || 0, purchFreeRatio: m.purchFreeRatio || 1 };
+    });
+
+    var fixed = 0;
+    var newBills = bills.map(function(b) {
+      var items = b.items.map(function(it) {
+        var n = Object.assign({}, it);
+        var key = (it.name || "").toLowerCase().trim() + "|" + (it.batch || "").trim();
+        var cd = cl[key] || cl["n:" + (it.name || "").toLowerCase().trim()];
+        if (cd) {
+          n.unitCost = Math.round((it.loose ? cd.unitCost / (it.packQty || 10) : cd.unitCost) * 100) / 100;
+          n.purchDiscPct = cd.purchDiscPct;
+          n.purchSchemePct = cd.purchSchemePct;
+          n.purchFreeRatio = cd.purchFreeRatio;
+          fixed++;
+        } else if ((!n.unitCost || n.unitCost === 0) && (n.unitPtr || n.ptr)) {
+          n.unitCost = Math.round((n.unitPtr || n.ptr) * (1 + (n.gstRate || 0) / 100) * 100) / 100;
+          fixed++;
+        }
+        n.amount = (n.unitPrice || n.mrp) * n.qty * (1 - (n.discount || 0) / 100);
+        return n;
+      });
+      var tMRP = items.reduce(function(s, i) { return s + (i.unitPrice || i.mrp) * i.qty; }, 0);
+      var tDisc = items.reduce(function(s, i) { return s + (i.unitPrice || i.mrp) * i.qty * (i.discount || 0) / 100; }, 0);
+      var net = Math.max(0, Math.round(tMRP - tDisc - (b.billDiscount || 0)));
+      var tGST = items.reduce(function(s, i) { var a = (i.unitPrice || i.mrp) * i.qty * (1 - (i.discount || 0) / 100); return s + (a - a / (1 + (i.gstRate || 0) / 100)); }, 0);
+      return Object.assign({}, b, { items: items, totalMRP: tMRP, totalDiscount: tDisc, netAmount: net, cgst: tGST / 2, sgst: tGST / 2 });
+    });
+    saveBills(newBills);
+    alert("Recalculated " + bills.length + " bills (" + fixed + " items synced).\nProfit margins updated.");
+  };
+
   return (
-    <div><h2 style={hds}>Profit Margin Analysis</h2>
+    <div><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+      <h2 style={{ ...hds, marginBottom: 0 }}>Profit Margin Analysis</h2>
+      <button onClick={recalcAll} style={{ border: "none", borderRadius: 8, padding: "8px 16px", fontWeight: 600, cursor: "pointer", fontSize: 12, background: "#DC2626", color: "#fff", fontFamily: "inherit" }}>🔄 Recalculate All Bills</button>
+    </div>
       <div style={{ display: "flex", gap: 3, background: "#E8E4DD", borderRadius: 7, padding: 3, marginBottom: 16, flexWrap: "wrap" }}>
         {[["bill","All Bills"],["today","Today"],["week","Week"],["month","Month"],["year","Year"],["custom","Custom"]].map(([id, l]) => <button key={id} onClick={() => setView(id)} style={{ padding: "6px 12px", border: "none", borderRadius: 5, fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: view === id ? "#fff" : "transparent", color: view === id ? "#0D6B5B" : "#888" }}>{l}</button>)}</div>
       {view === "custom" && <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
@@ -3315,7 +3371,7 @@ function App() {
           {page === "rack" && <RackPage inv={inv} saveInv={saveInv} mob={mob} />}
           {page === "audit" && <AuditPage inv={inv} mob={mob} />}
           {page === "bill" && <BillPage inv={inv} saveInv={saveInv} addBill={addBill} mob={mob} showBill={showBill} />}
-          {page === "profit" && isO && <ProfitPage bills={bills} inv={inv} mob={mob} />}
+          {page === "profit" && isO && <ProfitPage bills={bills} inv={inv} mob={mob} purch={purch} saveBills={saveBills} />}
           {page === "stock" && <StockPage inv={inv} saveInv={saveInv} isO={isO} mob={mob} />}
           {page === "hist" && <HistPage bills={bills} showBill={showBill} saveBills={saveBills} askConfirm={askConfirm} inv={inv} saveInv={saveInv} purch={purch} />}
           {page === "reports" && <ReportsPage bills={bills} inv={inv} mob={mob} showBill={showBill} />}
