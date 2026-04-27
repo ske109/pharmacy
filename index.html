@@ -689,7 +689,19 @@ function DashPage({ inv, bills, purch, isO, mob }) {
   const ts = Math.floor(inv.reduce((s, m) => s + (m.stock || 0), 0)), low = inv.filter((m) => m.stock > 0 && m.stock < 3).length;
   const today = new Date().toDateString(), tb = bills.filter((b) => new Date(b.date).toDateString() === today);
   const tr = tb.reduce((s, b) => s + b.netAmount, 0);
-  const tc = tb.reduce((s, b) => s + b.items.reduce((ss, i) => ss + (i.unitCost || (i.unitPtr || i.ptr || 0) * (1 + (i.gstRate || 0) / 100)) * i.qty, 0), 0);
+  const tc = tb.reduce((s, b) => s + b.items.reduce((ss, i) => {
+    var uc = 0;
+    if (i.unitCost && i.unitCost > 0) {
+      uc = i.unitCost;
+      var sp = i.unitPrice || i.mrp || 0;
+      if (i.loose && sp > 0 && uc > sp * 3 && i.packQty && i.packQty > 1) uc = uc / i.packQty;
+    } else {
+      var p = i.unitPtr || 0;
+      if (!p && i.ptr) p = i.loose ? i.ptr / (i.packQty || 10) : i.ptr;
+      uc = p * (1 + (i.gstRate || 0) / 100);
+    }
+    return ss + uc * i.qty;
+  }, 0), 0);
   return (
     <div><h2 style={hds}>Dashboard</h2>
       <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(auto-fit,minmax(155px,1fr))", gap: 12, marginBottom: 20 }}>
@@ -1491,7 +1503,9 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
         newIt.purchSchemePct = cd.purchSchemePct;
         newIt.purchFreeRatio = cd.purchFreeRatio;
       } else if ((!newIt.unitCost || newIt.unitCost === 0) && (newIt.unitPtr || newIt.ptr) && (newIt.unitPtr || newIt.ptr) > 0) {
-        newIt.unitCost = Math.round((newIt.unitPtr || newIt.ptr) * (1 + (newIt.gstRate || 0) / 100) * 100) / 100;
+        var sePtr = newIt.unitPtr || newIt.ptr;
+        if (it.loose && !newIt.unitPtr && newIt.ptr) sePtr = newIt.ptr / (newIt.packQty || 10);
+        newIt.unitCost = Math.round(sePtr * (1 + (newIt.gstRate || 0) / 100) * 100) / 100;
       }
       newIt.amount = (newIt.unitPrice || newIt.mrp) * newIt.qty * (1 - (newIt.discount || 0) / 100);
       return newIt;
@@ -2127,7 +2141,9 @@ function BackupPage({ inv, bills, purch, saveAll, askConfirm, saveInv, saveBills
                 // Fallback: PTR+GST
                 if ((it.unitPtr || it.ptr) && (it.unitPtr || it.ptr) > 0) {
                   billItemsUpdated++;
-                  var fallbackCost = (it.unitPtr || it.ptr) * (1 + (it.gstRate || 0) / 100);
+                  var fbP = it.unitPtr || it.ptr;
+                  if (it.loose && !it.unitPtr && it.ptr) fbP = it.ptr / (it.packQty || 10);
+                  var fallbackCost = fbP * (1 + (it.gstRate || 0) / 100);
                   return Object.assign({}, it, { unitCost: Math.round(fallbackCost * 100) / 100, purchDiscPct: 0, purchSchemePct: 0, purchFreeRatio: 1 });
                 }
                 return it;
@@ -2211,7 +2227,9 @@ function BackupPage({ inv, bills, purch, saveAll, askConfirm, saveInv, saveBills
 
                 // Fallback: compute from PTR+GST if still no cost
                 if ((!newIt.unitCost || newIt.unitCost === 0) && (newIt.unitPtr || newIt.ptr) && (newIt.unitPtr || newIt.ptr) > 0) {
-                  newIt.unitCost = Math.round((newIt.unitPtr || newIt.ptr) * (1 + (newIt.gstRate || 0) / 100) * 100) / 100;
+                  var fbPtr = newIt.unitPtr || newIt.ptr;
+                  if (it.loose && !newIt.unitPtr && newIt.ptr) fbPtr = newIt.ptr / (newIt.packQty || 10);
+                  newIt.unitCost = Math.round(fbPtr * (1 + (newIt.gstRate || 0) / 100) * 100) / 100;
                   changed = true;
                   itemsFixed++;
                 }
@@ -2264,14 +2282,26 @@ function ProfitPage({ bills, inv, mob, purch, saveBills }) {
     const salePrice = (it.unitPrice || it.mrp) * it.qty;
     const discAmt = salePrice * (it.discount || 0) / 100;
     const netSale = salePrice - discAmt;
-    // Cost = PTR × (1-PurchDisc%) × (1-Scheme%) × (1+GST%) adjusted for free items
-    var ptr = it.unitPtr || it.ptr || 0;
-    var purchDisc = it.purchDiscPct || 0;
-    var scheme = it.purchSchemePct || 0;
-    var freeRatio = it.purchFreeRatio || 1; // ratio of paid/(paid+free), default 1 if no free
-    var costPerUnit = ptr * (1 - purchDisc / 100) * (1 - scheme / 100) * (1 + (it.gstRate || 0) / 100) * freeRatio;
-    // If unitCost is pre-calculated (from migration), use it directly
-    if (it.unitCost && it.unitCost > 0) costPerUnit = it.unitCost;
+    var costPerUnit = 0;
+    var sellingPricePerUnit = it.unitPrice || it.mrp || 0;
+
+    // Priority 1: Use pre-calculated unitCost — but sanity check it
+    if (it.unitCost && it.unitCost > 0) {
+      costPerUnit = it.unitCost;
+      // Sanity: if loose item's unitCost > 3x selling price, it's likely wrong (full pack PTR stored as per-tablet)
+      if (it.loose && costPerUnit > sellingPricePerUnit * 3 && it.packQty && it.packQty > 1) {
+        costPerUnit = costPerUnit / it.packQty;
+      }
+    } else {
+      // Priority 2: Calculate from PTR
+      var ptr = it.unitPtr || 0;
+      // If no unitPtr, derive from pack ptr
+      if (!ptr && it.ptr) ptr = it.loose ? it.ptr / (it.packQty || 10) : it.ptr;
+      var purchDisc = it.purchDiscPct || 0;
+      var scheme = it.purchSchemePct || 0;
+      var freeRatio = it.purchFreeRatio || 1;
+      costPerUnit = ptr * (1 - purchDisc / 100) * (1 - scheme / 100) * (1 + (it.gstRate || 0) / 100) * freeRatio;
+    }
     const totalCost = costPerUnit * it.qty;
     return { netSale, totalCost, profit: netSale - totalCost, margin: netSale > 0 ? ((netSale - totalCost) / netSale * 100) : 0 };
   };
@@ -2329,9 +2359,21 @@ function ProfitPage({ bills, inv, mob, purch, saveBills }) {
           n.purchSchemePct = cd.purchSchemePct;
           n.purchFreeRatio = cd.purchFreeRatio;
           fixed++;
-        } else if ((!n.unitCost || n.unitCost === 0) && (n.unitPtr || n.ptr)) {
-          n.unitCost = Math.round((n.unitPtr || n.ptr) * (1 + (n.gstRate || 0) / 100) * 100) / 100;
-          fixed++;
+        } else {
+          // No purchase match — recalculate from PTR
+          var ptr = n.unitPtr || 0;
+          if (!ptr && n.ptr) ptr = it.loose ? n.ptr / (n.packQty || 10) : n.ptr;
+          if (ptr > 0) {
+            n.unitCost = Math.round(ptr * (1 + (n.gstRate || 0) / 100) * 100) / 100;
+            fixed++;
+          }
+          // Sanity fix: if loose item has unitCost > 3x selling price, it was set from full pack PTR
+          var sp = n.unitPrice || n.mrp || 0;
+          if (it.loose && n.unitCost && sp > 0 && n.unitCost > sp * 3 && n.packQty && n.packQty > 1) {
+            n.unitCost = Math.round(n.unitCost / n.packQty * 100) / 100;
+            fixed++;
+          }
+        }
         }
         n.amount = (n.unitPrice || n.mrp) * n.qty * (1 - (n.discount || 0) / 100);
         return n;
@@ -2990,8 +3032,15 @@ function ReportsPage({ bills, inv, mob, showBill }) {
 
   // Item cost calculation
   var itemCost = function(it) {
-    if (it.unitCost && it.unitCost > 0) return it.unitCost * it.qty;
-    var ptr = it.unitPtr || it.ptr || 0;
+    if (it.unitCost && it.unitCost > 0) {
+      var uc = it.unitCost;
+      // Sanity: loose item unitCost > 3x selling price means it was stored as full pack cost
+      var sp = it.unitPrice || it.mrp || 0;
+      if (it.loose && sp > 0 && uc > sp * 3 && it.packQty && it.packQty > 1) uc = uc / it.packQty;
+      return uc * it.qty;
+    }
+    var ptr = it.unitPtr || 0;
+    if (!ptr && it.ptr) ptr = it.loose ? it.ptr / (it.packQty || 10) : it.ptr;
     var disc = it.purchDiscPct || 0;
     var scheme = it.purchSchemePct || 0;
     var freeR = it.purchFreeRatio || 1;
