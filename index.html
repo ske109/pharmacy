@@ -1593,7 +1593,7 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
         (bill.items || []).forEach(function(it) {
           var qty = Number(it.qty || 0);
           if (!qty) return;
-          var idx = nextInv.findIndex(function(m) { return (it.mid && m.id === it.mid) || (m.name === it.name && (m.batch || ) === (it.batch || )); });
+          var idx = nextInv.findIndex(function(m) { return (it.mid && m.id === it.mid) || (m.name === it.name && (m.batch || "") === (it.batch || "")); });
           if (idx >= 0) { nextInv[idx] = Object.assign({}, nextInv[idx], { stock: (Number(nextInv[idx].stock) || 0) + qty }); }
         });
         nextInv = recalcInvDerived(nextInv, purch || []);
