@@ -1522,6 +1522,25 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
     setEditBill(null);
   };
 
+  const deleteBill = function(bill) {
+    askConfirm("Delete this bill? Stock will be restored to inventory.", function() {
+      var nextBills = bills.filter(function(x) { return x.billNo !== bill.billNo; });
+      saveBills(nextBills);
+      if (inv && saveInv) {
+        var nextInv = inv.map(function(m) { return Object.assign({}, m); });
+        (bill.items || []).forEach(function(it) {
+          var qty = Number(it.qty || 0);
+          if (!qty) return;
+          var idx = nextInv.findIndex(function(m) { return (it.mid && m.id === it.mid) || (((m.name || '') === (it.name || '')) && ((m.batch || '') === (it.batch || ''))); });
+          if (idx >= 0) nextInv[idx] = Object.assign({}, nextInv[idx], { stock: (Number(nextInv[idx].stock) || 0) + qty });
+        });
+        nextInv = recalcInvDerived(nextInv, purch || []);
+        saveInv(nextInv);
+      }
+      alert("Bill deleted and stock restored to inventory.");
+    });
+  };
+
   const startBillReturn = function(bill) {
     setRetBill(bill);
     var qtys = {};
@@ -1672,12 +1691,12 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
         </div>
       )}
       {filteredBills.length === 0 ? <div style={{ ...cds, padding: 30, textAlign: "center", color: "#aaa" }}>{hFilter === "all" ? "No bills" : "No bills in this period"}</div> :
-      <HistBillTable bills={filteredBills} showBill={showBill} setEditBill={doEdit} startBillReturn={startBillReturn} askConfirm={askConfirm} saveBills={saveBills} mob={mob} />}
+      <HistBillTable bills={filteredBills} showBill={showBill} setEditBill={doEdit} startBillReturn={startBillReturn} deleteBill={deleteBill} askConfirm={askConfirm} saveBills={saveBills} mob={mob} />}
     </div>
   );
 }
 
-function HistBillTable({ bills, showBill, setEditBill, startBillReturn, askConfirm, saveBills, mob }) {
+function HistBillTable({ bills, showBill, setEditBill, startBillReturn, deleteBill, askConfirm, saveBills, mob }) {
   const [sortCol, setSortCol] = React.useState("date");
   const [sortDir, setSortDir] = React.useState("desc");
   const [expanded, setExpanded] = React.useState(null);
@@ -1745,7 +1764,7 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, askConfi
             <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
               <button onClick={function(){showBill(b, true);}} style={{ ...bts(true), padding: "7px 14px", fontSize: 12, flex: 1 }}>View</button>
               <button onClick={function(){setEditBill(b);}} style={{ ...bts(false), padding: "7px 14px", fontSize: 12, flex: 1 }}>Edit</button>
-              <button onClick={function(){startBillReturn(b);}} style={{ border: "none", borderRadius: 7, padding: "7px 14px", fontWeight: 600, cursor: "pointer", fontSize: 12, background: "#DC2626", color: "#fff", flex: 1 }}>Return</button>
+              <button onClick={function(){startBillReturn(b);}} style={{ border: "none", borderRadius: 7, padding: "7px 14px", fontWeight: 600, cursor: "pointer", fontSize: 12, background: "#DC2626", color: "#fff", flex: 1 }}>Return</button><button onClick={function(){deleteBill(b);}} style={{ border: "none", borderRadius: 7, padding: "7px 14px", fontWeight: 600, cursor: "pointer", fontSize: 12, background: "#7F1D1D", color: "#fff", flex: 1 }}>Delete</button>
             </div>
           </div>;
         })}
@@ -1780,7 +1799,7 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, askConfi
                       <td style={tds}><button onClick={() => setExpanded(isOpen ? null : b.billNo)} style={{ ...bts(false), padding: "4px 10px", fontSize: 11, background: isOpen ? "#D1FAE5" : undefined, color: isOpen ? "#065F46" : undefined }}>{isOpen ? "▲ Hide" : "▼ " + b.items.length + " items"}</button></td>
                       <td style={tds}><button onClick={() => showBill(b, true)} style={{ ...bts(true), padding: "5px 12px", fontSize: 11 }}>View</button></td>
                       <td style={tds}><button onClick={() => setEditBill(b)} style={{ ...bts(false), padding: "5px 12px", fontSize: 11 }}>Edit</button></td>
-                      <td style={tds}><button onClick={function() { startBillReturn(b); }} style={{ border: "none", borderRadius: 7, padding: "5px 12px", fontWeight: 600, cursor: "pointer", fontSize: 11, background: "#DC2626", color: "#fff" }}>Return</button></td>
+                      <td style={tds}><button onClick={function() { startBillReturn(b); }} style={{ border: "none", borderRadius: 7, padding: "5px 12px", fontWeight: 600, cursor: "pointer", fontSize: 11, background: "#DC2626", color: "#fff" }}>Return</button></td><td style={tds}><button onClick={function() { deleteBill(b); }} style={{ border: "none", borderRadius: 7, padding: "5px 12px", fontWeight: 600, cursor: "pointer", fontSize: 11, background: "#7F1D1D", color: "#fff" }}>Delete</button></td>
                     </tr>
                     {isOpen && (
                       <tr>
@@ -2766,7 +2785,7 @@ function AuditPage({ inv, mob }) {
 // ══════════════════════════════════════════════
 // RETURNS PAGE
 // ══════════════════════════════════════════════
-function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm }) {
+function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm, bills, saveBills }) {
   const [retPurch, setRetPurch] = useState(null);
   const [retQtys, setRetQtys] = useState({});
   const [returns, setReturns] = useState([]);
@@ -2789,10 +2808,27 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm }) {
     setRetQtys(qtys);
   };
 
+  const cancelPurchaseReturn = function(r) {
+    askConfirm("Cancel this purchase return? Stock will be added back.", function() {
+      var nextReturns = returns.filter(function(x) { return x.id !== r.id; });
+      saveReturns(nextReturns);
+      var nextInv = (inv || []).map(function(m) { return Object.assign({}, m); });
+      (r.items || []).forEach(function(it) {
+        var qty = Number(it.returnQty || it.qty || 0);
+        if (!qty) return;
+        var idx = nextInv.findIndex(function(m) { return ((m.name || '') === (it.name || '')) && ((m.batch || '') === (it.batch || '')); });
+        if (idx >= 0) nextInv[idx] = Object.assign({}, nextInv[idx], { stock: (Number(nextInv[idx].stock) || 0) + qty });
+      });
+      nextInv = recalcInvDerived(nextInv, purch || []);
+      saveInv(nextInv);
+      if (bills && saveBills) saveBills(syncBillFinancialsFromInventory(bills, nextInv));
+      db.ref("returns/" + r.id).remove();
+      alert("Purchase return cancelled.");
+    });
+  };
 
   const cancelBillReturn = function(r) {
     askConfirm("Cancel this customer return? Stock will be reduced again.", function() {
-      db.ref("billReturns/" + r.id).remove();
       var nextInv = (inv || []).map(function(m) { return Object.assign({}, m); });
       (r.items || []).forEach(function(it) {
         var qty = Number(it.qty || 0);
@@ -2803,6 +2839,7 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm }) {
       nextInv = recalcInvDerived(nextInv, purch || []);
       saveInv(nextInv);
       if (bills && saveBills) saveBills(syncBillFinancialsFromInventory(bills, nextInv));
+      db.ref("billReturns/" + r.id).remove();
       alert("Bill return cancelled.");
     });
   };
@@ -2874,10 +2911,10 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm }) {
 
       {returns.length > 0 && <div style={cds}><b>Purchase Return History ({returns.length})</b>
         <div style={{ overflowX: "auto", marginTop: 10 }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
-          {["Date","Supplier","Invoice","Items","Amount"].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
+          {["Date","Supplier","Invoice","Items","Amount","Action"].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
           {[...returns].reverse().map((r) => (<tr key={r.id}>
             <td style={tds}>{fD(r.date)}</td><td style={tds}>{r.supplier}</td><td style={tds}>{r.invoiceNo || "-"}</td>
-            <td style={tds}>{r.items.length}</td><td style={{ ...tds, fontWeight: 700, color: "#DC2626" }}>Rs.{f2(r.totalAmount)}</td>
+            <td style={tds}>{r.items.length}</td><td style={{ ...tds, fontWeight: 700, color: "#DC2626" }}>Rs.{f2(r.totalAmount)}</td><td style={tds}><button onClick={function(){cancelPurchaseReturn(r);}} style={{ border: "none", borderRadius: 7, padding: "5px 10px", fontWeight: 600, cursor: "pointer", fontSize: 11, background: "#7F1D1D", color: "#fff" }}>Cancel Return</button></td>
           </tr>))}</tbody></table></div></div>}
 
       {billReturns.length > 0 && <div style={{ ...cds, borderLeft: "4px solid #DC2626" }}><b>Customer / Bill Return History ({billReturns.length})</b>
@@ -3524,7 +3561,7 @@ function App() {
         <div style={{ flex: 1, padding: mob ? 14 : 24, overflow: "auto" }}>
           {page === "dash" && <DashPage inv={inv} bills={bills} purch={purch} isO={isO} mob={mob} />}
           {page === "purch" && <PurchPage purch={purch} addPurchase={addPurchase} deletePurchase={deletePurchase} mob={mob} askConfirm={askConfirm} inv={inv} saveInv={saveInv} bills={bills} saveBills={saveBills} />}
-          {page === "returns" && <ReturnsPage purch={purch} inv={inv} saveInv={saveInv} savePurch={savePurch} mob={mob} askConfirm={askConfirm} />}
+          {page === "returns" && <ReturnsPage purch={purch} inv={inv} saveInv={saveInv} savePurch={savePurch} mob={mob} askConfirm={askConfirm} bills={bills} saveBills={saveBills} />}
           {page === "inv" && <InvPage inv={inv} saveInv={saveInv} isO={isO} mob={mob} askConfirm={askConfirm} bills={bills} showBill={showBill} />}
           {page === "rack" && <RackPage inv={inv} saveInv={saveInv} mob={mob} />}
           {page === "audit" && <AuditPage inv={inv} mob={mob} />}
