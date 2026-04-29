@@ -1411,7 +1411,7 @@ function recalcInvDerived(invList, purchList) {
     var exact = null;
     (purchList || []).forEach(function(p) {
       (p.items || []).forEach(function(it) {
-        if ((it.name || '') === (m.name || '') && ((it.batch || '') === (m.batch || ''))) exact = it;
+        if ((it.name || '') === (m.name || '') && (it.batch || '') === (m.batch || '')) exact = it;
       });
     });
     var patch = {};
@@ -2869,6 +2869,35 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm, bills, s
     setRetQtys(qtys);
   };
 
+  const cancelPurchaseReturn = (r) => {
+    askConfirm("Cancel this purchase return?", () => {
+      const updatedReturns = returns.filter((x) => x.id !== r.id);
+      saveReturns(updatedReturns);
+      const nextInv = inv.map((m) => {
+        const hit = (r.items || []).find((it) => (m.name.toLowerCase() === (it.name || '').toLowerCase()) && ((m.batch || '') === (it.batch || '')));
+        if (hit) return { ...m, stock: (m.stock || 0) + (hit.returnQty || 0) };
+        return m;
+      });
+      const recalcInv = recalcInvDerived(nextInv, purch || []);
+      saveInv(recalcInv);
+      if (bills && saveBills) saveBills(syncBillFinancialsFromInventory(bills, recalcInv));
+    });
+  };
+
+  const cancelBillReturn = (r) => {
+    askConfirm("Cancel this bill return?", () => {
+      db.ref("billReturns/" + r.id).remove();
+      const nextInv = inv.map((m) => {
+        const hit = (r.items || []).find((it) => ((it.mid && m.id === it.mid) || (((m.name || '') === (it.name || '')) && ((m.batch || '') === (it.batch || '')))));
+        if (hit) return { ...m, stock: Math.max(0, (m.stock || 0) - (hit.qty || 0)) };
+        return m;
+      });
+      const recalcInv = recalcInvDerived(nextInv, purch || []);
+      saveInv(recalcInv);
+      if (bills && saveBills) saveBills(syncBillFinancialsFromInventory(bills, recalcInv));
+    });
+  };
+
   const processReturn = () => {
     if (!retPurch) return;
     const returnItems = [];
@@ -2936,10 +2965,10 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm, bills, s
 
       {returns.length > 0 && <div style={cds}><b>Purchase Return History ({returns.length})</b>
         <div style={{ overflowX: "auto", marginTop: 10 }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
-          {["Date","Supplier","Invoice","Items","Amount"].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
+          {["Date","Supplier","Invoice","Items","Amount","Action"].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
           {[...returns].reverse().map((r) => (<tr key={r.id}>
             <td style={tds}>{fD(r.date)}</td><td style={tds}>{r.supplier}</td><td style={tds}>{r.invoiceNo || "-"}</td>
-            <td style={tds}>{r.items.length}</td><td style={{ ...tds, fontWeight: 700, color: "#DC2626" }}>Rs.{f2(r.totalAmount)}</td>
+            <td style={tds}>{r.items.length}</td><td style={{ ...tds, fontWeight: 700, color: "#DC2626" }}>Rs.{f2(r.totalAmount)}</td><td style={tds}><button onClick={() => cancelPurchaseReturn(r)} style={{ border: "none", borderRadius: 7, padding: "5px 10px", fontWeight: 600, cursor: "pointer", fontSize: 11, background: "#7F1D1D", color: "#fff" }}>Cancel Return</button></td>
           </tr>))}</tbody></table></div></div>}
 
       {billReturns.length > 0 && <div style={{ ...cds, borderLeft: "4px solid #DC2626" }}><b>Customer / Bill Return History ({billReturns.length})</b>
