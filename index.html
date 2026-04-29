@@ -919,7 +919,6 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm, inv, s
             </div>
             <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
               <button onClick={function() { setTab("csv"); setDistSite(null); }} style={bts(true)}>Upload Downloaded Invoice</button>
-              <button onClick={function(){deleteBill(b);}} style={{ border: "none", borderRadius: 7, padding: "7px 14px", fontWeight: 600, cursor: "pointer", fontSize: 12, background: "#7F1D1D", color: "#fff", flex: 1 }}>Delete</button>
             </div>
           </div>}
         </div>}
@@ -1405,14 +1404,14 @@ function calcPurchaseUnitCost(it) {
   var totalUnits = (it.qty || 0) + (it.freeQty || 0);
   var paidQty = it.qty || 0;
   var freeRatio = totalUnits > 0 ? paidQty / totalUnits : 1;
-  return Math.round((((it.ptr || 0) * (1 - (it.discPct || 0) / 100) * (1 - (it.schemePct || 0) / 100) / (1 + (it.gstRate || 0) / 100) * freeRatio) || 0) * 100) / 100;
+  return Math.round((((it.ptr || 0) * (1 - (it.discPct || 0) / 100) * (1 - (it.schemePct || 0) / 100) * (1 + (it.gstRate || 0) / 100) * freeRatio) || 0) * 100) / 100;
 }
 function recalcInvDerived(invList, purchList) {
   return (invList || []).map(function(m) {
     var exact = null;
     (purchList || []).forEach(function(p) {
       (p.items || []).forEach(function(it) {
-        if (it.name === m.name && (it.batch || '') === (m.batch || '')) exact = it;
+        if ((it.name || '') === (m.name || '') && ((it.batch || '') === (m.batch || ''))) exact = it;
       });
     });
     var patch = {};
@@ -1428,7 +1427,7 @@ function recalcInvDerived(invList, purchList) {
       patch.purchFreeRatio = totalUnits > 0 ? Math.round((paidQty / totalUnits) * 10000) / 10000 : 1;
       patch.unitCost = calcPurchaseUnitCost(exact);
     } else if ((m.ptr || 0) > 0) {
-      patch.unitCost = Math.round(((m.ptr || 0) / (1 + (m.gstRate || 0) / 100)) * 100) / 100;
+      patch.unitCost = Math.round(((m.ptr || 0) * (1 + (m.gstRate || 0) / 100)) * 100) / 100;
       patch.purchDiscPct = m.purchDiscPct || 0;
       patch.purchSchemePct = m.purchSchemePct || 0;
       patch.purchFreeRatio = m.purchFreeRatio || 1;
@@ -1439,7 +1438,7 @@ function recalcInvDerived(invList, purchList) {
 function syncBillFinancialsFromInventory(billsList, invList) {
   return (billsList || []).map(function(b) {
     var items = (b.items || []).map(function(it) {
-      var invMatch = (invList || []).find(function(m) { return (it.mid && m.id === it.mid) || (m.name === it.name && (m.batch || '') === (it.batch || '')); });
+      var invMatch = (invList || []).find(function(m) { return (it.mid && m.id === it.mid) || (((m.name || '') === (it.name || '')) && ((m.batch || '') === (it.batch || ''))); });
       var n = Object.assign({}, it);
       if (invMatch) {
         n.ptr = invMatch.ptr || n.ptr;
@@ -1593,8 +1592,8 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
         (bill.items || []).forEach(function(it) {
           var qty = Number(it.qty || 0);
           if (!qty) return;
-          var idx = nextInv.findIndex(function(m) { return (it.mid && m.id === it.mid) || (m.name === it.name && (m.batch || "") === (it.batch || "")); });
-          if (idx >= 0) { nextInv[idx] = Object.assign({}, nextInv[idx], { stock: (Number(nextInv[idx].stock) || 0) + qty }); }
+          var idx = nextInv.findIndex(function(m) { return (it.mid && m.id === it.mid) || (((m.name || '') === (it.name || '')) && ((m.batch || '') === (it.batch || ''))); });
+          if (idx >= 0) nextInv[idx] = Object.assign({}, nextInv[idx], { stock: (Number(nextInv[idx].stock) || 0) + qty });
         });
         nextInv = recalcInvDerived(nextInv, purch || []);
         saveInv(nextInv);
@@ -1826,7 +1825,7 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, deleteBi
             <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
               <button onClick={function(){showBill(b, true);}} style={{ ...bts(true), padding: "7px 14px", fontSize: 12, flex: 1 }}>View</button>
               <button onClick={function(){setEditBill(b);}} style={{ ...bts(false), padding: "7px 14px", fontSize: 12, flex: 1 }}>Edit</button>
-              <button onClick={function(){startBillReturn(b);}} style={{ border: "none", borderRadius: 7, padding: "7px 14px", fontWeight: 600, cursor: "pointer", fontSize: 12, background: "#DC2626", color: "#fff", flex: 1 }}>Return</button>
+              <button onClick={function(){startBillReturn(b);}} style={{ border: "none", borderRadius: 7, padding: "7px 14px", fontWeight: 600, cursor: "pointer", fontSize: 12, background: "#DC2626", color: "#fff", flex: 1 }}>Return</button><button onClick={function(){deleteBill(b);}} style={{ border: "none", borderRadius: 7, padding: "7px 14px", fontWeight: 600, cursor: "pointer", fontSize: 12, background: "#7F1D1D", color: "#fff", flex: 1 }}>Delete</button>
             </div>
           </div>;
         })}
@@ -1861,8 +1860,7 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, deleteBi
                       <td style={tds}><button onClick={() => setExpanded(isOpen ? null : b.billNo)} style={{ ...bts(false), padding: "4px 10px", fontSize: 11, background: isOpen ? "#D1FAE5" : undefined, color: isOpen ? "#065F46" : undefined }}>{isOpen ? "▲ Hide" : "▼ " + b.items.length + " items"}</button></td>
                       <td style={tds}><button onClick={() => showBill(b, true)} style={{ ...bts(true), padding: "5px 12px", fontSize: 11 }}>View</button></td>
                       <td style={tds}><button onClick={() => setEditBill(b)} style={{ ...bts(false), padding: "5px 12px", fontSize: 11 }}>Edit</button></td>
-                      <td style={tds}><button onClick={function() { startBillReturn(b); }} style={{ border: "none", borderRadius: 7, padding: "5px 12px", fontWeight: 600, cursor: "pointer", fontSize: 11, background: "#DC2626", color: "#fff" }}>Return</button></td>
-                      <td style={tds}><button onClick={function() { deleteBill(b); }} style={{ border: "none", borderRadius: 7, padding: "5px 12px", fontWeight: 600, cursor: "pointer", fontSize: 11, background: "#7F1D1D", color: "#fff" }}>Delete</button></td>
+                      <td style={tds}><button onClick={function() { startBillReturn(b); }} style={{ border: "none", borderRadius: 7, padding: "5px 12px", fontWeight: 600, cursor: "pointer", fontSize: 11, background: "#DC2626", color: "#fff" }}>Return</button></td><td style={tds}><button onClick={function() { deleteBill(b); }} style={{ border: "none", borderRadius: 7, padding: "5px 12px", fontWeight: 600, cursor: "pointer", fontSize: 11, background: "#7F1D1D", color: "#fff" }}>Delete</button></td>
                     </tr>
                     {isOpen && (
                       <tr>
