@@ -1547,7 +1547,6 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
           var idx = nextInv.findIndex(function(m) { return (it.mid && m.id === it.mid) || (((m.name || '') === (it.name || '')) && ((m.batch || '') === (it.batch || ''))); });
           if (idx >= 0) nextInv[idx] = Object.assign({}, nextInv[idx], { stock: (Number(nextInv[idx].stock) || 0) + qty });
         });
-        nextInv = recalcInvDerived(nextInv, purch || []);
         saveInv(nextInv);
       }
     });
@@ -2831,9 +2830,7 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm, bills, s
         var idx = nextInv.findIndex(function(m) { return ((m.name || '') === (it.name || '')) && ((m.batch || '') === (it.batch || '')); });
         if (idx >= 0) nextInv[idx] = Object.assign({}, nextInv[idx], { stock: (Number(nextInv[idx].stock) || 0) + qty });
       });
-      nextInv = recalcInvDerived(nextInv, purch || []);
       saveInv(nextInv);
-      if (bills && saveBills) saveBills(syncBillFinancialsFromInventory(bills, nextInv));
       db.ref("returns/" + r.id).remove();
       alert("Purchase return cancelled.");
     });
@@ -2848,9 +2845,7 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm, bills, s
         var idx = nextInv.findIndex(function(m) { return (it.mid && m.id === it.mid) || (((m.name || '') === (it.name || '')) && ((m.batch || '') === (it.batch || ''))); });
         if (idx >= 0) nextInv[idx] = Object.assign({}, nextInv[idx], { stock: Math.max(0, (Number(nextInv[idx].stock) || 0) - qty) });
       });
-      nextInv = recalcInvDerived(nextInv, purch || []);
       saveInv(nextInv);
-      if (bills && saveBills) saveBills(syncBillFinancialsFromInventory(bills, nextInv));
       db.ref("billReturns/" + r.id).remove();
       alert("Bill return cancelled.");
     });
