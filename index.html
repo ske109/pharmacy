@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>A to Z Pharma</title>
+<title>A to Z Pharmacy</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💊</text></svg>">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
 
@@ -85,7 +85,7 @@ const CLAUDE_HEADERS = { "Content-Type": "application/json" };
 // ══════════════════════════════════════════════
 // PHARMACY INFO
 // ══════════════════════════════════════════════
-const PH = { name: 'A to Z Pharma', addr: 'SY NO 11/14 SHOP NO 9 ,GR. FL. Vibez Gully, Kondasapura Whitefield main road, Bidarahalli hobli, BANGALORE 560067', mob: '7619639377', dl: 'KA-B61-269146, KA-B61-269147', gstin: '29ACFFA9109D1ZH', upi: 'atozpharmacyupi' };;
+const PH = { name: "A to Z Pharmacy", addr: "SY NO 11/14 SHOP NO 9 ,GR. FL. Vibez Gully, Kondasapura Whitefield main road, Bidarahalli hobli, BANGALORE 560067", mob: "9663995818", dl: "KA-B61-262772, KA-B61-262773", gstin: "29ACFFA9109D1ZH", upi: "atozpharmacy@upi" };
 const ROLES = { "owner@atozpharmacy.com": "owner", "staff@atozpharmacy.com": "staff" };
 const ROLE_NAMES = { "owner@atozpharmacy.com": "Pharmacy Owner", "staff@atozpharmacy.com": "Staff Member" };
 
@@ -561,7 +561,27 @@ function BillView({ bill, onClose, fromHistory }) {
   const makePdf = () => {
     const el = document.getElementById("bill-print-area");
     if (!el) return;
-    const html = "<html><head><title>Bill_" + bill.billNo + "</title><style>body{font-family:monospace;font-size:10px;padding:12px;max-width:800px;margin:0 auto}table{width:100%;border-collapse:collapse}th,td{border:1px solid #333;padding:2px 3px;font-size:9px}th{background:#eee;text-align:center}</style></head><body>" + el.innerHTML + "</body></html>";
+    const html = `
+<html><head><title>Bill_${bill.billNo}</title>
+<style>
+  body { font-family: 'DM Sans', sans-serif; padding: 30px; }
+  .header { text-align: center; background: #0C2E24; color: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+  .title { font-size: 28px; font-weight: 800; font-family: 'Playfair Display', serif; }
+  .addr { font-size: 13px; margin-top: 5px; opacity: 0.9; }
+  table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+  th { background: #f4f4f4; padding: 12px; border: 1px solid #ddd; text-align: center; }
+  td { padding: 10px; border: 1px solid #ddd; text-align: center; }
+  .footer { margin-top: 20px; text-align: right; font-weight: 700; font-size: 16px; }
+</style></head>
+<body>
+  <div class="header">
+    <div class="title">${PH.name}</div>
+    <div class="addr">${PH.addr}</div>
+    <div class="addr">Ph: ${PH.mob} | DL: ${PH.dl} | GSTIN: ${PH.gstin}</div>
+  </div>
+  ${el.innerHTML}
+</body></html>
+` + bill.billNo + "</title><style>body{font-family:monospace;font-size:10px;padding:12px;max-width:800px;margin:0 auto}table{width:100%;border-collapse:collapse}th,td{border:1px solid #333;padding:2px 3px;font-size:9px}th{background:#eee;text-align:center}</style></head><body>" + el.innerHTML + "</body></html>";
     setDlLink(URL.createObjectURL(new Blob([html], { type: "text/html" })));
   };
   return (
@@ -640,7 +660,7 @@ function Login({ onLogin }) {
       <div style={{ background: "#fff", borderRadius: 16, padding: 36, width: "100%", maxWidth: 400, boxShadow: "0 20px 60px rgba(0,0,0,.3)" }}>
         <div style={{ textAlign: "center", marginBottom: 28 }}>
           <div style={{ width: 56, height: 56, background: "linear-gradient(135deg,#0D6B5B,#34D399)", borderRadius: 14, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 26, marginBottom: 12 }}>💊</div>
-          <div style={{ fontSize: 22, fontWeight: 800, fontFamily: "'Playfair Display',serif", color: "#0C2E24" }}>A to Z Pharma</div>
+          <div style={{ fontSize: 22, fontWeight: 800, fontFamily: "'Playfair Display',serif", color: "#0C2E24" }}>A to Z Pharmacy</div>
           <div style={{ fontSize: 12.5, color: "#999", marginTop: 4 }}>Management System</div></div>
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <div><label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Email</label>
@@ -3135,7 +3155,7 @@ function ReportsPage({ bills, inv, mob, showBill }) {
   var printReport = function() {
     var pLabel = period === "today" ? "Today" : period === "week" ? "This Week" : period === "month" ? "This Month" : from + " to " + to;
     var html = "<html><head><title>Sales Report - " + pLabel + "</title><style>body{font-family:sans-serif;font-size:11px;padding:20px;max-width:950px;margin:0 auto}table{width:100%;border-collapse:collapse;margin:10px 0}th,td{border:1px solid #999;padding:4px 6px;text-align:left;font-size:10px}th{background:#eee}h2{margin:6px 0}h3{margin:12px 0 4px}.summary{display:flex;gap:14px;margin:10px 0;flex-wrap:wrap}.scard{padding:8px 14px;border:1px solid #ddd;border-radius:6px}.right{text-align:right}.green{color:#059669}.red{color:#DC2626}</style></head><body>";
-    html += "<h2>A to Z Pharma — Sales & Profit Report</h2>";
+    html += "<h2>A to Z Pharmacy — Sales & Profit Report</h2>";
     html += "<p>Period: <b>" + pLabel + "</b> | Generated: " + new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) + "</p>";
     html += "<div class='summary'><div class='scard'><b>" + filtered.length + "</b> Bills</div><div class='scard'>Revenue: <b>Rs." + f2(totalRevenue) + "</b></div><div class='scard'>Cost: Rs." + f2(totalCost) + "</div><div class='scard'>Discounts: Rs." + f2(totalDisc) + "</div><div class='scard'>Profit: <b class='" + (totalProfit >= 0 ? "green" : "red") + "'>Rs." + f2(totalProfit) + "</b> (" + f2(totalMargin) + "%)</div></div>";
 
@@ -3178,7 +3198,7 @@ function ReportsPage({ bills, inv, mob, showBill }) {
 
   var sendWhatsApp = function() {
     var pLabel = period === "today" ? "Today" : period === "week" ? "This Week" : period === "month" ? "This Month" : from + " to " + to;
-    var msg = "*A to Z Pharma — Sales Report*\n";
+    var msg = "*A to Z Pharmacy — Sales Report*\n";
     msg += "Period: " + pLabel + "\nGenerated: " + new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) + "\n\n";
     msg += "*Summary*\n";
     msg += "Bills: " + filtered.length + "\n";
@@ -3556,7 +3576,7 @@ function App() {
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
         {mob && <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", background: "#fff", borderBottom: "1px solid #E5E2DB", flexShrink: 0 }}>
           <button onClick={() => setSideOpen(true)} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer" }}>☰</button>
-          <div style={{ fontWeight: 700, fontFamily: "'Playfair Display',serif", fontSize: 15, color: "#0C2E24" }}>A to Z Pharma</div>
+          <div style={{ fontWeight: 700, fontFamily: "'Playfair Display',serif", fontSize: 15, color: "#0C2E24" }}>A to Z Pharmacy</div>
           <div style={{ width: 30, height: 30, borderRadius: 7, background: "#E8E4DD", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13 }}>{isO ? "👑" : "👤"}</div></div>}
         <div style={{ flex: 1, padding: mob ? 14 : 24, overflow: "auto" }}>
           {page === "dash" && <DashPage inv={inv} bills={bills} purch={purch} isO={isO} mob={mob} />}
@@ -3584,7 +3604,7 @@ function SetupScreen() {
       <div style={{ background: "#fff", borderRadius: 16, padding: 36, width: "100%", maxWidth: 600, boxShadow: "0 20px 60px rgba(0,0,0,.3)" }}>
         <div style={{ textAlign: "center", marginBottom: 24 }}>
           <div style={{ width: 56, height: 56, background: "linear-gradient(135deg,#0D6B5B,#34D399)", borderRadius: 14, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 26, marginBottom: 12 }}>💊</div>
-          <div style={{ fontSize: 22, fontWeight: 800, fontFamily: "'Playfair Display',serif", color: "#0C2E24" }}>A to Z Pharma</div>
+          <div style={{ fontSize: 22, fontWeight: 800, fontFamily: "'Playfair Display',serif", color: "#0C2E24" }}>A to Z Pharmacy</div>
           <div style={{ fontSize: 14, color: "#DC2626", marginTop: 8, fontWeight: 600 }}>Setup Required</div></div>
         <div style={{ fontSize: 13, lineHeight: 1.8, color: "#555" }}>
           <p style={{ marginBottom: 12 }}>This app needs a Firebase database to store your data. Follow these steps:</p>
