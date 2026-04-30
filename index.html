@@ -48,33 +48,7 @@ input,select,button,textarea{font-family:inherit;-webkit-appearance:none}
   .mob-card-list{display:none !important}
   .desk-show{display:block !important}
 }
-
-/* Professional Bill Styles */
-.bill-print-container {
-    padding: 40px;
-    background: #fff;
-    max-width: 800px;
-    margin: 0 auto;
-    font-family: 'DM Sans', sans-serif;
-    color: #333;
-}
-.bill-print-header {
-    background: linear-gradient(135deg, #0C2E24 0%, #154737 100%);
-    color: #fff;
-    padding: 24px;
-    border-radius: 12px;
-    margin-bottom: 24px;
-}
-.bill-print-title { font-size: 28px; font-weight: 800; font-family: 'Playfair Display', serif; margin: 0; }
-.bill-print-addr { font-size: 13px; opacity: 0.9; margin: 8px 0; }
-.bill-print-info { font-size: 12px; display: flex; justify-content: space-between; margin-top: 12px; opacity: 0.9; }
-.bill-print-table { width: 100%; border-collapse: collapse; margin: 24px 0; }
-.bill-print-table th { background: #f4f4f4; padding: 12px; text-align: left; font-size: 13px; border-bottom: 2px solid #0C2E24; }
-.bill-print-table td { padding: 12px; border-bottom: 1px solid #eee; font-size: 14px; }
-.bill-print-totals { float: right; width: 250px; }
-.bill-print-total-row { display: flex; justify-content: space-between; padding: 8px 0; }
-.bill-print-grand-total { border-top: 2px solid #0C2E24; padding-top: 8px; font-weight: 800; font-size: 18px; }
-
+.bill-print-container { padding: 40px; background: #fff; max-width: 800px; margin: 0 auto; } .bill-print-header { background: #0C2E24; color: #fff; padding: 20px; text-align: center; } .bill-print-table { width: 100%; border-collapse: collapse; } .bill-print-table th { background: #eee; padding: 10px; border: 1px solid #333; } .bill-print-table td { padding: 8px; border: 1px solid #333; }
 </style>
 </head>
 <body>
@@ -588,33 +562,7 @@ function BillView({ bill, onClose, fromHistory }) {
   const makePdf = () => {
     const el = document.getElementById("bill-print-area");
     if (!el) return;
-    const html = "<html><head><title>Bill_" + bill.billNo + "</title><style>body{font-family:monospace;font-size:10px;padding:12px;max-width:800px;margin:0 auto}table{width:100%;border-collapse:collapse}th,td{border:1px solid #333;padding:2px 3px;font-size:9px}th{background:#eee;text-align:center}
-/* Professional Bill Styles */
-.bill-print-container {
-    padding: 40px;
-    background: #fff;
-    max-width: 800px;
-    margin: 0 auto;
-    font-family: 'DM Sans', sans-serif;
-    color: #333;
-}
-.bill-print-header {
-    background: linear-gradient(135deg, #0C2E24 0%, #154737 100%);
-    color: #fff;
-    padding: 24px;
-    border-radius: 12px;
-    margin-bottom: 24px;
-}
-.bill-print-title { font-size: 28px; font-weight: 800; font-family: 'Playfair Display', serif; margin: 0; }
-.bill-print-addr { font-size: 13px; opacity: 0.9; margin: 8px 0; }
-.bill-print-info { font-size: 12px; display: flex; justify-content: space-between; margin-top: 12px; opacity: 0.9; }
-.bill-print-table { width: 100%; border-collapse: collapse; margin: 24px 0; }
-.bill-print-table th { background: #f4f4f4; padding: 12px; text-align: left; font-size: 13px; border-bottom: 2px solid #0C2E24; }
-.bill-print-table td { padding: 12px; border-bottom: 1px solid #eee; font-size: 14px; }
-.bill-print-totals { float: right; width: 250px; }
-.bill-print-total-row { display: flex; justify-content: space-between; padding: 8px 0; }
-.bill-print-grand-total { border-top: 2px solid #0C2E24; padding-top: 8px; font-weight: 800; font-size: 18px; }
-
+    const html = "<html><head><title>Bill_" + bill.billNo + "</title><style>body{font-family:monospace;font-size:10px;padding:12px;max-width:800px;margin:0 auto}table{width:100%;border-collapse:collapse}th,td{border:1px solid #333;padding:2px 3px;font-size:9px}th{background:#eee;text-align:center}.bill-print-container { padding: 40px; background: #fff; max-width: 800px; margin: 0 auto; } .bill-print-header { background: #0C2E24; color: #fff; padding: 20px; text-align: center; } .bill-print-table { width: 100%; border-collapse: collapse; } .bill-print-table th { background: #eee; padding: 10px; border: 1px solid #333; } .bill-print-table td { padding: 8px; border: 1px solid #333; }
 </style></head><body>" + el.innerHTML + "</body></html>";
     setDlLink(URL.createObjectURL(new Blob([html], { type: "text/html" })));
   };
@@ -3188,33 +3136,7 @@ function ReportsPage({ bills, inv, mob, showBill }) {
   // Print report
   var printReport = function() {
     var pLabel = period === "today" ? "Today" : period === "week" ? "This Week" : period === "month" ? "This Month" : from + " to " + to;
-    var html = "<html><head><title>Sales Report - " + pLabel + "</title><style>body{font-family:sans-serif;font-size:11px;padding:20px;max-width:950px;margin:0 auto}table{width:100%;border-collapse:collapse;margin:10px 0}th,td{border:1px solid #999;padding:4px 6px;text-align:left;font-size:10px}th{background:#eee}h2{margin:6px 0}h3{margin:12px 0 4px}.summary{display:flex;gap:14px;margin:10px 0;flex-wrap:wrap}.scard{padding:8px 14px;border:1px solid #ddd;border-radius:6px}.right{text-align:right}.green{color:#059669}.red{color:#DC2626}
-/* Professional Bill Styles */
-.bill-print-container {
-    padding: 40px;
-    background: #fff;
-    max-width: 800px;
-    margin: 0 auto;
-    font-family: 'DM Sans', sans-serif;
-    color: #333;
-}
-.bill-print-header {
-    background: linear-gradient(135deg, #0C2E24 0%, #154737 100%);
-    color: #fff;
-    padding: 24px;
-    border-radius: 12px;
-    margin-bottom: 24px;
-}
-.bill-print-title { font-size: 28px; font-weight: 800; font-family: 'Playfair Display', serif; margin: 0; }
-.bill-print-addr { font-size: 13px; opacity: 0.9; margin: 8px 0; }
-.bill-print-info { font-size: 12px; display: flex; justify-content: space-between; margin-top: 12px; opacity: 0.9; }
-.bill-print-table { width: 100%; border-collapse: collapse; margin: 24px 0; }
-.bill-print-table th { background: #f4f4f4; padding: 12px; text-align: left; font-size: 13px; border-bottom: 2px solid #0C2E24; }
-.bill-print-table td { padding: 12px; border-bottom: 1px solid #eee; font-size: 14px; }
-.bill-print-totals { float: right; width: 250px; }
-.bill-print-total-row { display: flex; justify-content: space-between; padding: 8px 0; }
-.bill-print-grand-total { border-top: 2px solid #0C2E24; padding-top: 8px; font-weight: 800; font-size: 18px; }
-
+    var html = "<html><head><title>Sales Report - " + pLabel + "</title><style>body{font-family:sans-serif;font-size:11px;padding:20px;max-width:950px;margin:0 auto}table{width:100%;border-collapse:collapse;margin:10px 0}th,td{border:1px solid #999;padding:4px 6px;text-align:left;font-size:10px}th{background:#eee}h2{margin:6px 0}h3{margin:12px 0 4px}.summary{display:flex;gap:14px;margin:10px 0;flex-wrap:wrap}.scard{padding:8px 14px;border:1px solid #ddd;border-radius:6px}.right{text-align:right}.green{color:#059669}.red{color:#DC2626}.bill-print-container { padding: 40px; background: #fff; max-width: 800px; margin: 0 auto; } .bill-print-header { background: #0C2E24; color: #fff; padding: 20px; text-align: center; } .bill-print-table { width: 100%; border-collapse: collapse; } .bill-print-table th { background: #eee; padding: 10px; border: 1px solid #333; } .bill-print-table td { padding: 8px; border: 1px solid #333; }
 </style></head><body>";
     html += "<h2>A to Z Pharmacy — Sales & Profit Report</h2>";
     html += "<p>Period: <b>" + pLabel + "</b> | Generated: " + new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) + "</p>";
