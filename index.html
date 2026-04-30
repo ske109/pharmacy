@@ -48,6 +48,33 @@ input,select,button,textarea{font-family:inherit;-webkit-appearance:none}
   .mob-card-list{display:none !important}
   .desk-show{display:block !important}
 }
+
+/* Professional Bill Styles */
+.bill-print-container {
+    padding: 40px;
+    background: #fff;
+    max-width: 800px;
+    margin: 0 auto;
+    font-family: 'DM Sans', sans-serif;
+    color: #333;
+}
+.bill-print-header {
+    background: linear-gradient(135deg, #0C2E24 0%, #154737 100%);
+    color: #fff;
+    padding: 24px;
+    border-radius: 12px;
+    margin-bottom: 24px;
+}
+.bill-print-title { font-size: 28px; font-weight: 800; font-family: 'Playfair Display', serif; margin: 0; }
+.bill-print-addr { font-size: 13px; opacity: 0.9; margin: 8px 0; }
+.bill-print-info { font-size: 12px; display: flex; justify-content: space-between; margin-top: 12px; opacity: 0.9; }
+.bill-print-table { width: 100%; border-collapse: collapse; margin: 24px 0; }
+.bill-print-table th { background: #f4f4f4; padding: 12px; text-align: left; font-size: 13px; border-bottom: 2px solid #0C2E24; }
+.bill-print-table td { padding: 12px; border-bottom: 1px solid #eee; font-size: 14px; }
+.bill-print-totals { float: right; width: 250px; }
+.bill-print-total-row { display: flex; justify-content: space-between; padding: 8px 0; }
+.bill-print-grand-total { border-top: 2px solid #0C2E24; padding-top: 8px; font-weight: 800; font-size: 18px; }
+
 </style>
 </head>
 <body>
@@ -561,7 +588,34 @@ function BillView({ bill, onClose, fromHistory }) {
   const makePdf = () => {
     const el = document.getElementById("bill-print-area");
     if (!el) return;
-    const html = "<html><head><title>Bill_" + bill.billNo + "</title><style>body{font-family:monospace;font-size:10px;padding:12px;max-width:800px;margin:0 auto}table{width:100%;border-collapse:collapse}th,td{border:1px solid #333;padding:2px 3px;font-size:9px}th{background:#eee;text-align:center}</style></head><body>" + el.innerHTML + "</body></html>";
+    const html = "<html><head><title>Bill_" + bill.billNo + "</title><style>body{font-family:monospace;font-size:10px;padding:12px;max-width:800px;margin:0 auto}table{width:100%;border-collapse:collapse}th,td{border:1px solid #333;padding:2px 3px;font-size:9px}th{background:#eee;text-align:center}
+/* Professional Bill Styles */
+.bill-print-container {
+    padding: 40px;
+    background: #fff;
+    max-width: 800px;
+    margin: 0 auto;
+    font-family: 'DM Sans', sans-serif;
+    color: #333;
+}
+.bill-print-header {
+    background: linear-gradient(135deg, #0C2E24 0%, #154737 100%);
+    color: #fff;
+    padding: 24px;
+    border-radius: 12px;
+    margin-bottom: 24px;
+}
+.bill-print-title { font-size: 28px; font-weight: 800; font-family: 'Playfair Display', serif; margin: 0; }
+.bill-print-addr { font-size: 13px; opacity: 0.9; margin: 8px 0; }
+.bill-print-info { font-size: 12px; display: flex; justify-content: space-between; margin-top: 12px; opacity: 0.9; }
+.bill-print-table { width: 100%; border-collapse: collapse; margin: 24px 0; }
+.bill-print-table th { background: #f4f4f4; padding: 12px; text-align: left; font-size: 13px; border-bottom: 2px solid #0C2E24; }
+.bill-print-table td { padding: 12px; border-bottom: 1px solid #eee; font-size: 14px; }
+.bill-print-totals { float: right; width: 250px; }
+.bill-print-total-row { display: flex; justify-content: space-between; padding: 8px 0; }
+.bill-print-grand-total { border-top: 2px solid #0C2E24; padding-top: 8px; font-weight: 800; font-size: 18px; }
+
+</style></head><body>" + el.innerHTML + "</body></html>";
     setDlLink(URL.createObjectURL(new Blob([html], { type: "text/html" })));
   };
   return (
@@ -1920,24 +1974,6 @@ function runPurchaseTraceMigration(data) {
 // ══════════════════════════════════════════════
 // BACKUP PAGE
 // ══════════════════════════════════════════════
-
-const migrateBillsToNewAddr = async () => {
-  if (!confirm('Update ALL existing bills with new address?')) return;
-  const allBills = await fbGet('bills');
-  if (!allBills) return alert('No bills found');
-  const updated = {};
-  let count = 0;
-  Object.entries(allBills).forEach(([id, bill]) => {
-    if (typeof bill === 'object') {
-      bill.header = `${PH.name}\n${PH.addr}\nPh: ${PH.mob} | DL: ${PH.dl} | GSTIN: ${PH.gstin}`;
-      updated[id] = bill;
-      count++;
-    }
-  });
-  await fbSet('bills', updated);
-  alert(`Migrated ${count} bills!`);
-};
-
 function BackupPage({ inv, bills, purch, saveAll, askConfirm, saveInv, saveBills }) {
   const [backupLink, setBackupLink] = useState(null);
   const [returns, setReturns] = useState([]);
@@ -2025,7 +2061,6 @@ function BackupPage({ inv, bills, purch, saveAll, askConfirm, saveInv, saveBills
 
   return (
     <div><h2 style={hds}>Backup, Restore, Reset</h2>
-<button onClick={migrateBillsToNewAddr} style={{background: "#34D399", color: "#064E3B", padding: "10px", borderRadius: "8px", border: "none", cursor: "pointer", marginBottom: "20px", display: "block"}}>🚀 Migrate Bills to New Address</button>
       <div style={{ ...cds, marginBottom: 14, fontSize: 12, color: "#555" }}>
         <b>Data Summary:</b> {inv.length} medicines, {bills.length} bills, {purch.length} purchases, {returns.length} purchase returns, {billReturns.length} bill returns
       </div>
@@ -3153,7 +3188,34 @@ function ReportsPage({ bills, inv, mob, showBill }) {
   // Print report
   var printReport = function() {
     var pLabel = period === "today" ? "Today" : period === "week" ? "This Week" : period === "month" ? "This Month" : from + " to " + to;
-    var html = "<html><head><title>Sales Report - " + pLabel + "</title><style>body{font-family:sans-serif;font-size:11px;padding:20px;max-width:950px;margin:0 auto}table{width:100%;border-collapse:collapse;margin:10px 0}th,td{border:1px solid #999;padding:4px 6px;text-align:left;font-size:10px}th{background:#eee}h2{margin:6px 0}h3{margin:12px 0 4px}.summary{display:flex;gap:14px;margin:10px 0;flex-wrap:wrap}.scard{padding:8px 14px;border:1px solid #ddd;border-radius:6px}.right{text-align:right}.green{color:#059669}.red{color:#DC2626}</style></head><body>";
+    var html = "<html><head><title>Sales Report - " + pLabel + "</title><style>body{font-family:sans-serif;font-size:11px;padding:20px;max-width:950px;margin:0 auto}table{width:100%;border-collapse:collapse;margin:10px 0}th,td{border:1px solid #999;padding:4px 6px;text-align:left;font-size:10px}th{background:#eee}h2{margin:6px 0}h3{margin:12px 0 4px}.summary{display:flex;gap:14px;margin:10px 0;flex-wrap:wrap}.scard{padding:8px 14px;border:1px solid #ddd;border-radius:6px}.right{text-align:right}.green{color:#059669}.red{color:#DC2626}
+/* Professional Bill Styles */
+.bill-print-container {
+    padding: 40px;
+    background: #fff;
+    max-width: 800px;
+    margin: 0 auto;
+    font-family: 'DM Sans', sans-serif;
+    color: #333;
+}
+.bill-print-header {
+    background: linear-gradient(135deg, #0C2E24 0%, #154737 100%);
+    color: #fff;
+    padding: 24px;
+    border-radius: 12px;
+    margin-bottom: 24px;
+}
+.bill-print-title { font-size: 28px; font-weight: 800; font-family: 'Playfair Display', serif; margin: 0; }
+.bill-print-addr { font-size: 13px; opacity: 0.9; margin: 8px 0; }
+.bill-print-info { font-size: 12px; display: flex; justify-content: space-between; margin-top: 12px; opacity: 0.9; }
+.bill-print-table { width: 100%; border-collapse: collapse; margin: 24px 0; }
+.bill-print-table th { background: #f4f4f4; padding: 12px; text-align: left; font-size: 13px; border-bottom: 2px solid #0C2E24; }
+.bill-print-table td { padding: 12px; border-bottom: 1px solid #eee; font-size: 14px; }
+.bill-print-totals { float: right; width: 250px; }
+.bill-print-total-row { display: flex; justify-content: space-between; padding: 8px 0; }
+.bill-print-grand-total { border-top: 2px solid #0C2E24; padding-top: 8px; font-weight: 800; font-size: 18px; }
+
+</style></head><body>";
     html += "<h2>A to Z Pharmacy — Sales & Profit Report</h2>";
     html += "<p>Period: <b>" + pLabel + "</b> | Generated: " + new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) + "</p>";
     html += "<div class='summary'><div class='scard'><b>" + filtered.length + "</b> Bills</div><div class='scard'>Revenue: <b>Rs." + f2(totalRevenue) + "</b></div><div class='scard'>Cost: Rs." + f2(totalCost) + "</div><div class='scard'>Discounts: Rs." + f2(totalDisc) + "</div><div class='scard'>Profit: <b class='" + (totalProfit >= 0 ? "green" : "red") + "'>Rs." + f2(totalProfit) + "</b> (" + f2(totalMargin) + "%)</div></div>";
