@@ -85,29 +85,7 @@ const CLAUDE_HEADERS = { "Content-Type": "application/json" };
 // ══════════════════════════════════════════════
 // PHARMACY INFO
 // ══════════════════════════════════════════════
-const PH = {
-  name: "A to Z Pharma",
-  addr: "SY NO 11/14 SHOP NO 9 ,GR. FL. Vibez Gully, Kondasapura Whitefield main road, Bidarahalli hobli, BANGALORE 560067",
-  mob: "7619639377",
-  dl: "KA-B61-269146, KA-B61-269147",
-  gstin: "29ACFFA9109D1ZH",
-  upi: "atozpharmacyupi"
-}
-
-if (window.migrateHeaders) {
-  fbGet('bills').then(bills => {
-    if (bills) {
-      const updated = {};
-      Object.keys(bills).forEach(id => {
-        updated[id] = {...bills[id]};
-      });
-      fbSet('bills', updated);
-      alert('Migration complete: Added pharmacyHeader to all existing bills.');
-      window.migrateHeaders = false;
-    }
-  });
-}
-
+const PH = { name: "A to Z Pharmacy", addr: "SHOP NO 1, GROUND FLOOR DODDANEKKUNDI, NEAR HP PETROL BUNK OUTER RING ROAD BANGALORE 560037", mob: "9663995818", dl: "KA-B61-262772, KA-B61-262773", gstin: "29ACFFA9109D1ZH", upi: "atozpharmacy@upi" };
 const ROLES = { "owner@atozpharmacy.com": "owner", "staff@atozpharmacy.com": "staff" };
 const ROLE_NAMES = { "owner@atozpharmacy.com": "Pharmacy Owner", "staff@atozpharmacy.com": "Staff Member" };
 
@@ -583,7 +561,7 @@ function BillView({ bill, onClose, fromHistory }) {
   const makePdf = () => {
     const el = document.getElementById("bill-print-area");
     if (!el) return;
-    const html = "<html><head><title>Bill_" + bill.billNo + "</title><style>body{font-family:sans-serif;font-size:12px;padding:0;max-width:800px;margin:0 auto}table{width:100%;border-collapse:collapse}th,td{border:1px solid #333;padding:8px;font-size:12px}th{background:#f2f2f2;text-align:left}</style></head><body>" + el.innerHTML + "</body></html>";
+    const html = "<html><head><title>Bill_" + bill.billNo + "</title><style>body{font-family:monospace;font-size:10px;padding:12px;max-width:800px;margin:0 auto}table{width:100%;border-collapse:collapse}th,td{border:1px solid #333;padding:2px 3px;font-size:9px}th{background:#eee;text-align:center}</style></head><body>" + el.innerHTML + "</body></html>";
     setDlLink(URL.createObjectURL(new Blob([html], { type: "text/html" })));
   };
   return (
@@ -596,56 +574,43 @@ function BillView({ bill, onClose, fromHistory }) {
             {fromHistory && dlLink && <a href={dlLink} download={"Bill_" + bill.billNo + ".html"} style={{ padding: "8px 16px", background: "#059669", color: "#fff", borderRadius: 7, fontSize: 13, fontWeight: 600, textDecoration: "none" }}>Download PDF</a>}
             <button onClick={() => { setDlLink(null); onClose(); }} style={{ ...bts(false) }}>Close</button>
           </div></div>
-        <div id="bill-print-area" style={{ fontFamily: "sans-serif", fontSize: 12, border: "1px solid #ccc" }}>
-          {/* Dark header */}
-          <div style={{ background: "#0C2E24", color: "#fff", padding: "16px 20px", textAlign: "center" }}>
-            <div style={{ fontSize: 20, fontWeight: "bold", margin: 0 }}>{PH.name}</div>
-            <div style={{ fontSize: 11, marginTop: 4 }}>{PH.addr}</div>
-            <div style={{ fontSize: 11, marginTop: 4 }}>Ph: {PH.mob} | DL: {PH.dl} | GSTIN: {PH.gstin}</div>
-          </div>
-          {/* Body */}
-          <div style={{ padding: 20 }}>
-            <h2 style={{ textAlign: "center", margin: "10px 0", fontSize: 15 }}>TAX INVOICE</h2>
-            <div style={{ display: "flex", justifyContent: "space-between", borderBottom: "1px solid #ccc", padding: "5px 0", fontSize: 12 }}>
-              <div><b>Bill:</b> {bill.billNo} | <b>Date:</b> {bill.dateIST || fDT(bill.date)}</div>
-              <div><b>Payment:</b> {bill.paymentMode}</div>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", borderBottom: "1px solid #ccc", fontSize: 12 }}>
-              <div><b>Patient:</b> {bill.patient} | <b>Contact:</b> {bill.patientContact || "-"}</div>
-              <div><b>Doctor:</b> {bill.doctor || "-"}</div>
-            </div>
-            <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 15, fontSize: 12 }}>
-              <thead>
-                <tr style={{ background: "#f2f2f2" }}>
-                  {["#","Item","Batch","Exp","Qty","Price","Dis%","GST","Amt"].map((h) => <th key={h} style={{ border: "1px solid #333", padding: "8px", textAlign: "left" }}>{h}</th>)}
-                </tr>
-              </thead>
-              <tbody>
-                {bill.items.map((it, i) => (
-                  <tr key={i}>
-                    <td style={{ border: "1px solid #333", padding: "8px" }}>{i + 1}</td>
-                    <td style={{ border: "1px solid #333", padding: "8px" }}>{it.loose ? "[L] " : ""}{it.name}</td>
-                    <td style={{ border: "1px solid #333", padding: "8px" }}>{it.batch}</td>
-                    <td style={{ border: "1px solid #333", padding: "8px" }}>{it.expiry}</td>
-                    <td style={{ border: "1px solid #333", padding: "8px" }}>{it.qty}{it.loose ? "pc" : ""}</td>
-                    <td style={{ border: "1px solid #333", padding: "8px" }}>{f2(it.unitPrice || it.mrp)}</td>
-                    <td style={{ border: "1px solid #333", padding: "8px" }}>{it.discount || 0}%</td>
-                    <td style={{ border: "1px solid #333", padding: "8px" }}>{it.gstRate}%</td>
-                    <td style={{ border: "1px solid #333", padding: "8px" }}>{f2(it.amount)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div style={{ textAlign: "right", marginTop: 20 }}>
-              <p style={{ margin: 0, fontSize: 13 }}>Total: Rs.{f2(bill.totalMRP)} | Discount: Rs.{f2(bill.totalDiscount + (bill.billDiscount || 0))}</p>
-              {bill.billDiscount > 0 && <p style={{ margin: "2px 0", fontSize: 12, color: "#555" }}>Bill Discount: Rs.{f2(bill.billDiscount)}</p>}
-              <h3 style={{ margin: "5px 0", fontSize: 16 }}>Net Amount: Rs. {f2(bill.netAmount)}</h3>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 16, paddingTop: 10, borderTop: "1px solid #ccc", fontSize: 10, color: "#555" }}>
-              <div><b>Terms:</b> E and OE. Goods once sold cannot be returned. Subject to Bangalore Jurisdiction.</div>
-              <div style={{ textAlign: "right" }}>Pharmacist Sign</div>
-            </div>
-          </div>
+        <div id="bill-print-area" style={{ fontFamily: "Courier New, monospace", fontSize: 10, lineHeight: 1.4 }}>
+          <div style={{ textAlign: "center", borderBottom: "2px solid #000", paddingBottom: 6, marginBottom: 6 }}>
+            <div style={{ fontSize: 16, fontWeight: "bold" }}>{PH.name}</div>
+            <div style={{ fontSize: 9 }}>{PH.addr}</div>
+            <div style={{ fontSize: 9 }}>Ph: {PH.mob} | DL: {PH.dl} | GSTIN: {PH.gstin}</div>
+            <div style={{ fontWeight: "bold", marginTop: 3 }}>TAX INVOICE</div></div>
+          <div style={{ display: "flex", justifyContent: "space-between", borderBottom: "1px solid #000", padding: "4px 0", fontSize: 9.5 }}>
+            <div><b>Bill:</b> {bill.billNo}<br/><b>Date:</b> {bill.dateIST || fDT(bill.date)}</div>
+            <div><b>Payment:</b> {bill.paymentMode}</div></div>
+          <div style={{ borderBottom: "1px solid #000", padding: "4px 0", fontSize: 9.5 }}>
+            <b>Patient:</b> {bill.patient} | <b>Contact:</b> {bill.patientContact || "-"}<br/><b>Doctor:</b> {bill.doctor || "-"}</div>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 8.5, margin: "6px 0" }}>
+            <thead><tr>{["#","Item","Pack","Batch","Exp","Qty","Price","Dis%","GST","Amt"].map((h) => <th key={h} style={{ border: "1px solid #333", padding: "2px 3px", background: "#eee", textAlign: "center" }}>{h}</th>)}</tr></thead>
+            <tbody>{bill.items.map((it, i) => (
+              <tr key={i}>
+                <td style={{ border: "1px solid #333", padding: "2px 3px", textAlign: "center" }}>{i + 1}</td>
+                <td style={{ border: "1px solid #333", padding: "2px 3px" }}>{it.loose ? "[L] " : ""}{it.name}</td>
+                <td style={{ border: "1px solid #333", padding: "2px 3px" }}>{it.pack || ""}</td>
+                <td style={{ border: "1px solid #333", padding: "2px 3px" }}>{it.batch}</td>
+                <td style={{ border: "1px solid #333", padding: "2px 3px" }}>{it.expiry}</td>
+                <td style={{ border: "1px solid #333", padding: "2px 3px", textAlign: "center" }}>{it.qty}{it.loose ? "pc" : ""}</td>
+                <td style={{ border: "1px solid #333", padding: "2px 3px", textAlign: "right" }}>{f2(it.unitPrice || it.mrp)}</td>
+                <td style={{ border: "1px solid #333", padding: "2px 3px", textAlign: "center" }}>{it.discount || 0}%</td>
+                <td style={{ border: "1px solid #333", padding: "2px 3px", textAlign: "center" }}>{it.gstRate}%</td>
+                <td style={{ border: "1px solid #333", padding: "2px 3px", textAlign: "right" }}>{f2(it.amount)}</td>
+              </tr>))}</tbody></table>
+          {bill.billDiscount > 0 && <div style={{ textAlign: "right", fontSize: 10 }}>Bill Discount: <b>Rs.{f2(bill.billDiscount)}</b></div>}
+          <div style={{ display: "flex", justifyContent: "space-between", borderTop: "2px solid #000", paddingTop: 6, marginTop: 4 }}>
+            <div style={{ border: "1px solid #333", padding: "4px 8px", fontSize: 9 }}>
+              <div>CGST: Rs.{f2(bill.cgst)}</div><div>SGST: Rs.{f2(bill.sgst)}</div><div><b>T.GST: Rs.{f2(bill.cgst + bill.sgst)}</b></div></div>
+            <div style={{ textAlign: "right", fontSize: 10 }}>
+              <div>Total: <b>Rs.{f2(bill.totalMRP)}</b></div>
+              <div>Disc: <b>Rs.{f2(bill.totalDiscount + (bill.billDiscount || 0))}</b></div>
+              <div style={{ fontSize: 14, borderTop: "1px solid #000", paddingTop: 3, marginTop: 3 }}>Net: <b>Rs.{f2(bill.netAmount)}</b></div></div></div>
+          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, borderTop: "1px solid #000", paddingTop: 6, fontSize: 7.5 }}>
+            <div style={{ maxWidth: "50%" }}><b>Terms:</b> E and OE. Goods once sold cannot be returned. Subject to Bangalore Jurisdiction.</div>
+            <div style={{ textAlign: "right", fontSize: 9 }}>Pharmacist Sign</div></div>
         </div></div></div>
   );
 }
@@ -1569,8 +1534,10 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
           var idx = nextInv.findIndex(function(m) { return (it.mid && m.id === it.mid) || (((m.name || '') === (it.name || '')) && ((m.batch || '') === (it.batch || ''))); });
           if (idx >= 0) nextInv[idx] = Object.assign({}, nextInv[idx], { stock: (Number(nextInv[idx].stock) || 0) + qty });
         });
+        nextInv = recalcInvDerived(nextInv, purch || []);
         saveInv(nextInv);
       }
+      alert("Bill deleted and stock restored to inventory.");
     });
   };
 
@@ -2852,7 +2819,9 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm, bills, s
         var idx = nextInv.findIndex(function(m) { return ((m.name || '') === (it.name || '')) && ((m.batch || '') === (it.batch || '')); });
         if (idx >= 0) nextInv[idx] = Object.assign({}, nextInv[idx], { stock: (Number(nextInv[idx].stock) || 0) + qty });
       });
+      nextInv = recalcInvDerived(nextInv, purch || []);
       saveInv(nextInv);
+      if (bills && saveBills) saveBills(syncBillFinancialsFromInventory(bills, nextInv));
       db.ref("returns/" + r.id).remove();
       alert("Purchase return cancelled.");
     });
@@ -2867,7 +2836,9 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm, bills, s
         var idx = nextInv.findIndex(function(m) { return (it.mid && m.id === it.mid) || (((m.name || '') === (it.name || '')) && ((m.batch || '') === (it.batch || ''))); });
         if (idx >= 0) nextInv[idx] = Object.assign({}, nextInv[idx], { stock: Math.max(0, (Number(nextInv[idx].stock) || 0) - qty) });
       });
+      nextInv = recalcInvDerived(nextInv, purch || []);
       saveInv(nextInv);
+      if (bills && saveBills) saveBills(syncBillFinancialsFromInventory(bills, nextInv));
       db.ref("billReturns/" + r.id).remove();
       alert("Bill return cancelled.");
     });
@@ -3517,11 +3488,7 @@ function App() {
   const logout = () => { auth.signOut(); fbSet("sessions/" + (user ? user.id : ""), null); setUser(null); setPage("dash"); };
 
   const addBill = useCallback((bill) => {
-    setBills((p) => { const next = [...p, bill]; const nextWithHeader = {
-  ...next,
-  pharmacyHeader: `${PH.name}<br>${PH.addr}<br>Ph:&nbsp;${PH.mob}&nbsp;|&nbsp;DL:&nbsp;${PH.dl}&nbsp;|&nbsp;GSTIN:&nbsp;${PH.gstin}`
-};
-saveBill(nextWithHeader); return next; });
+    setBills((p) => { const next = [...p, bill]; saveBills(next); return next; });
   }, [saveBills]);
 
   const addPurchase = useCallback((rev) => {
