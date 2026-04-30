@@ -48,12 +48,6 @@ input,select,button,textarea{font-family:inherit;-webkit-appearance:none}
   .mob-card-list{display:none !important}
   .desk-show{display:block !important}
 }
-
-.bill-print-container { padding: 40px; background: #fff; max-width: 800px; margin: 0 auto; font-family: 'DM Sans', sans-serif; }
-.bill-print-header { background: linear-gradient(135deg, #0C2E24 0%, #154737 100%); color: #fff; padding: 24px; border-radius: 12px; margin-bottom: 24px; text-align: center; }
-.bill-print-table { width: 100%; border-collapse: collapse; margin: 20px 0; }
-.bill-print-table th { background: #f4f4f4; padding: 12px; border: 1px solid #ddd; text-align: center; }
-.bill-print-table td { padding: 10px; border: 1px solid #ddd; text-align: center; }
 </style>
 </head>
 <body>
@@ -91,7 +85,7 @@ const CLAUDE_HEADERS = { "Content-Type": "application/json" };
 // ══════════════════════════════════════════════
 // PHARMACY INFO
 // ══════════════════════════════════════════════
-const PH = { name: "A to Z Pharma", addr: "SY NO 11/14  SHOP NO 9 ,GR. FL. Vibez Gully, Kondasapura Whitefield main road, Bidarahalli hobli, BANGALORE 560067", mob: "7619639377", dl: "KA-B61-269146, KA-B61-269147", gstin: "29ACFFA9109D1ZH", upi: "atozpharmacy@upi" };
+const PH = { name: "A to Z Pharma", addr: "SY NO 11/14 SHOP NO 9 ,GR. FL. Vibez Gully, Kondasapura Whitefield main road, Bidarahalli hobli, BANGALORE 560067", mob: "7619639377", dl: "KA-B61-269146, KA-B61-269147", gstin: "29ACFFA9109D1ZH", upi: "atozpharmacy@upi" };
 const ROLES = { "owner@atozpharmacy.com": "owner", "staff@atozpharmacy.com": "staff" };
 const ROLE_NAMES = { "owner@atozpharmacy.com": "Pharmacy Owner", "staff@atozpharmacy.com": "Staff Member" };
 
