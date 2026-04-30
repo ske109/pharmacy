@@ -2025,6 +2025,7 @@ function BackupPage({ inv, bills, purch, saveAll, askConfirm, saveInv, saveBills
 
   return (
     <div><h2 style={hds}>Backup, Restore, Reset</h2>
+<button onClick={migrateBillsToNewAddr} style={{background: "#34D399", color: "#064E3B", padding: "10px", borderRadius: "8px", border: "none", cursor: "pointer", marginBottom: "20px", display: "block"}}>🚀 Migrate Bills to New Address</button>
       <div style={{ ...cds, marginBottom: 14, fontSize: 12, color: "#555" }}>
         <b>Data Summary:</b> {inv.length} medicines, {bills.length} bills, {purch.length} purchases, {returns.length} purchase returns, {billReturns.length} bill returns
       </div>
