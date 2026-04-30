@@ -1920,6 +1920,24 @@ function runPurchaseTraceMigration(data) {
 // ══════════════════════════════════════════════
 // BACKUP PAGE
 // ══════════════════════════════════════════════
+
+const migrateBillsToNewAddr = async () => {
+  if (!confirm('Update ALL existing bills with new address?')) return;
+  const allBills = await fbGet('bills');
+  if (!allBills) return alert('No bills found');
+  const updated = {};
+  let count = 0;
+  Object.entries(allBills).forEach(([id, bill]) => {
+    if (typeof bill === 'object') {
+      bill.header = `${PH.name}\n${PH.addr}\nPh: ${PH.mob} | DL: ${PH.dl} | GSTIN: ${PH.gstin}`;
+      updated[id] = bill;
+      count++;
+    }
+  });
+  await fbSet('bills', updated);
+  alert(`Migrated ${count} bills!`);
+};
+
 function BackupPage({ inv, bills, purch, saveAll, askConfirm, saveInv, saveBills }) {
   const [backupLink, setBackupLink] = useState(null);
   const [returns, setReturns] = useState([]);
