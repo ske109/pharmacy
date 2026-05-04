@@ -85,14 +85,7 @@ const CLAUDE_HEADERS = { "Content-Type": "application/json" };
 // ══════════════════════════════════════════════
 // PHARMACY INFO
 // ══════════════════════════════════════════════
-const PH = {
-  name: "A to Z Pharma",
-  addr: "SY NO 11/14 SHOP NO 9 ,GR. FL. Vibez Gully, Kondasapura Whitefield main road, Bidarahalli hobli, BANGALORE 560067",
-  mob: "7619639377",
-  dl: "KA-B61-269146, KA-B61-269147",
-  gstin: "29ACFFA9109D1ZH",
-  upi: "atozpharmacyupi"
-};
+const PH = { name: "A to Z Pharmacy", addr: "SHOP NO 1, GROUND FLOOR DODDANEKKUNDI, NEAR HP PETROL BUNK OUTER RING ROAD BANGALORE 560037", mob: "9663995818", dl: "KA-B61-262772, KA-B61-262773", gstin: "29ACFFA9109D1ZH", upi: "atozpharmacy@upi" };
 const ROLES = { "owner@atozpharmacy.com": "owner", "staff@atozpharmacy.com": "staff" };
 const ROLE_NAMES = { "owner@atozpharmacy.com": "Pharmacy Owner", "staff@atozpharmacy.com": "Staff Member" };
 
@@ -568,7 +561,7 @@ function BillView({ bill, onClose, fromHistory }) {
   const makePdf = () => {
     const el = document.getElementById("bill-print-area");
     if (!el) return;
-    const html = "<html><head><title>Bill_" + bill.billNo + "</title><style>body{font-family:sans-serif;font-size:12px;padding:0;max-width:800px;margin:0 auto}table{width:100%;border-collapse:collapse}th,td{border:1px solid #333;padding:8px;font-size:12px}th{background:#f2f2f2;text-align:left}</style></head><body>" + el.innerHTML + "</body></html>";
+    const html = "<html><head><title>Bill_" + bill.billNo + "</title><style>body{font-family:monospace;font-size:10px;padding:12px;max-width:800px;margin:0 auto}table{width:100%;border-collapse:collapse}th,td{border:1px solid #333;padding:2px 3px;font-size:9px}th{background:#eee;text-align:center}</style></head><body>" + el.innerHTML + "</body></html>";
     setDlLink(URL.createObjectURL(new Blob([html], { type: "text/html" })));
   };
   return (
@@ -581,56 +574,43 @@ function BillView({ bill, onClose, fromHistory }) {
             {fromHistory && dlLink && <a href={dlLink} download={"Bill_" + bill.billNo + ".html"} style={{ padding: "8px 16px", background: "#059669", color: "#fff", borderRadius: 7, fontSize: 13, fontWeight: 600, textDecoration: "none" }}>Download PDF</a>}
             <button onClick={() => { setDlLink(null); onClose(); }} style={{ ...bts(false) }}>Close</button>
           </div></div>
-        <div id="bill-print-area" style={{ fontFamily: "sans-serif", fontSize: 12, border: "1px solid #ccc" }}>
-          {/* Dark header */}
-          <div style={{ background: "#0C2E24", color: "#fff", padding: "16px 20px", textAlign: "center" }}>
-            <div style={{ fontSize: 20, fontWeight: "bold", margin: 0 }}>{PH.name}</div>
-            <div style={{ fontSize: 11, marginTop: 4 }}>{PH.addr}</div>
-            <div style={{ fontSize: 11, marginTop: 4 }}>Ph: {PH.mob} | DL: {PH.dl} | GSTIN: {PH.gstin}</div>
-          </div>
-          {/* Body */}
-          <div style={{ padding: 20 }}>
-            <h2 style={{ textAlign: "center", margin: "10px 0", fontSize: 15 }}>TAX INVOICE</h2>
-            <div style={{ display: "flex", justifyContent: "space-between", borderBottom: "1px solid #ccc", padding: "5px 0", fontSize: 12 }}>
-              <div><b>Bill:</b> {bill.billNo} | <b>Date:</b> {bill.dateIST || fDT(bill.date)}</div>
-              <div><b>Payment:</b> {bill.paymentMode}</div>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", borderBottom: "1px solid #ccc", fontSize: 12 }}>
-              <div><b>Patient:</b> {bill.patient} | <b>Contact:</b> {bill.patientContact || "-"}</div>
-              <div><b>Doctor:</b> {bill.doctor || "-"}</div>
-            </div>
-            <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 15, fontSize: 12 }}>
-              <thead>
-                <tr style={{ background: "#f2f2f2" }}>
-                  {["#","Item","Batch","Exp","Qty","Price","Dis%","GST","Amt"].map((h) => <th key={h} style={{ border: "1px solid #333", padding: "8px", textAlign: "left" }}>{h}</th>)}
-                </tr>
-              </thead>
-              <tbody>
-                {bill.items.map((it, i) => (
-                  <tr key={i}>
-                    <td style={{ border: "1px solid #333", padding: "8px" }}>{i + 1}</td>
-                    <td style={{ border: "1px solid #333", padding: "8px" }}>{it.loose ? "[L] " : ""}{it.name}</td>
-                    <td style={{ border: "1px solid #333", padding: "8px" }}>{it.batch}</td>
-                    <td style={{ border: "1px solid #333", padding: "8px" }}>{it.expiry}</td>
-                    <td style={{ border: "1px solid #333", padding: "8px" }}>{it.qty}{it.loose ? "pc" : ""}</td>
-                    <td style={{ border: "1px solid #333", padding: "8px" }}>{f2(it.unitPrice || it.mrp)}</td>
-                    <td style={{ border: "1px solid #333", padding: "8px" }}>{it.discount || 0}%</td>
-                    <td style={{ border: "1px solid #333", padding: "8px" }}>{it.gstRate}%</td>
-                    <td style={{ border: "1px solid #333", padding: "8px" }}>{f2(it.amount)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div style={{ textAlign: "right", marginTop: 20 }}>
-              <p style={{ margin: 0, fontSize: 13 }}>Total: Rs.{f2(bill.totalMRP)} | Discount: Rs.{f2(bill.totalDiscount + (bill.billDiscount || 0))}</p>
-              {bill.billDiscount > 0 && <p style={{ margin: "2px 0", fontSize: 12, color: "#555" }}>Bill Discount: Rs.{f2(bill.billDiscount)}</p>}
-              <h3 style={{ margin: "5px 0", fontSize: 16 }}>Net Amount: Rs. {f2(bill.netAmount)}</h3>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 16, paddingTop: 10, borderTop: "1px solid #ccc", fontSize: 10, color: "#555" }}>
-              <div><b>Terms:</b> E and OE. Goods once sold cannot be returned. Subject to Bangalore Jurisdiction.</div>
-              <div style={{ textAlign: "right" }}>Pharmacist Sign</div>
-            </div>
-          </div>
+        <div id="bill-print-area" style={{ fontFamily: "Courier New, monospace", fontSize: 10, lineHeight: 1.4 }}>
+          <div style={{ textAlign: "center", borderBottom: "2px solid #000", paddingBottom: 6, marginBottom: 6 }}>
+            <div style={{ fontSize: 16, fontWeight: "bold" }}>{PH.name}</div>
+            <div style={{ fontSize: 9 }}>{PH.addr}</div>
+            <div style={{ fontSize: 9 }}>Ph: {PH.mob} | DL: {PH.dl} | GSTIN: {PH.gstin}</div>
+            <div style={{ fontWeight: "bold", marginTop: 3 }}>TAX INVOICE</div></div>
+          <div style={{ display: "flex", justifyContent: "space-between", borderBottom: "1px solid #000", padding: "4px 0", fontSize: 9.5 }}>
+            <div><b>Bill:</b> {bill.billNo}<br/><b>Date:</b> {bill.dateIST || fDT(bill.date)}</div>
+            <div><b>Payment:</b> {bill.paymentMode}</div></div>
+          <div style={{ borderBottom: "1px solid #000", padding: "4px 0", fontSize: 9.5 }}>
+            <b>Patient:</b> {bill.patient} | <b>Contact:</b> {bill.patientContact || "-"}<br/><b>Doctor:</b> {bill.doctor || "-"}</div>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 8.5, margin: "6px 0" }}>
+            <thead><tr>{["#","Item","Pack","Batch","Exp","Qty","Price","Dis%","GST","Amt"].map((h) => <th key={h} style={{ border: "1px solid #333", padding: "2px 3px", background: "#eee", textAlign: "center" }}>{h}</th>)}</tr></thead>
+            <tbody>{bill.items.map((it, i) => (
+              <tr key={i}>
+                <td style={{ border: "1px solid #333", padding: "2px 3px", textAlign: "center" }}>{i + 1}</td>
+                <td style={{ border: "1px solid #333", padding: "2px 3px" }}>{it.loose ? "[L] " : ""}{it.name}</td>
+                <td style={{ border: "1px solid #333", padding: "2px 3px" }}>{it.pack || ""}</td>
+                <td style={{ border: "1px solid #333", padding: "2px 3px" }}>{it.batch}</td>
+                <td style={{ border: "1px solid #333", padding: "2px 3px" }}>{it.expiry}</td>
+                <td style={{ border: "1px solid #333", padding: "2px 3px", textAlign: "center" }}>{it.qty}{it.loose ? "pc" : ""}</td>
+                <td style={{ border: "1px solid #333", padding: "2px 3px", textAlign: "right" }}>{f2(it.unitPrice || it.mrp)}</td>
+                <td style={{ border: "1px solid #333", padding: "2px 3px", textAlign: "center" }}>{it.discount || 0}%</td>
+                <td style={{ border: "1px solid #333", padding: "2px 3px", textAlign: "center" }}>{it.gstRate}%</td>
+                <td style={{ border: "1px solid #333", padding: "2px 3px", textAlign: "right" }}>{f2(it.amount)}</td>
+              </tr>))}</tbody></table>
+          {bill.billDiscount > 0 && <div style={{ textAlign: "right", fontSize: 10 }}>Bill Discount: <b>Rs.{f2(bill.billDiscount)}</b></div>}
+          <div style={{ display: "flex", justifyContent: "space-between", borderTop: "2px solid #000", paddingTop: 6, marginTop: 4 }}>
+            <div style={{ border: "1px solid #333", padding: "4px 8px", fontSize: 9 }}>
+              <div>CGST: Rs.{f2(bill.cgst)}</div><div>SGST: Rs.{f2(bill.sgst)}</div><div><b>T.GST: Rs.{f2(bill.cgst + bill.sgst)}</b></div></div>
+            <div style={{ textAlign: "right", fontSize: 10 }}>
+              <div>Total: <b>Rs.{f2(bill.totalMRP)}</b></div>
+              <div>Disc: <b>Rs.{f2(bill.totalDiscount + (bill.billDiscount || 0))}</b></div>
+              <div style={{ fontSize: 14, borderTop: "1px solid #000", paddingTop: 3, marginTop: 3 }}>Net: <b>Rs.{f2(bill.netAmount)}</b></div></div></div>
+          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, borderTop: "1px solid #000", paddingTop: 6, fontSize: 7.5 }}>
+            <div style={{ maxWidth: "50%" }}><b>Terms:</b> E and OE. Goods once sold cannot be returned. Subject to Bangalore Jurisdiction.</div>
+            <div style={{ textAlign: "right", fontSize: 9 }}>Pharmacist Sign</div></div>
         </div></div></div>
   );
 }
@@ -679,7 +659,7 @@ function Login({ onLogin }) {
 // ══════════════════════════════════════════════
 function Sidebar({ page, setPage, user, onLogout, counts, mob, sideOpen, setSideOpen }) {
   const isO = user.role === "owner";
-  const nav = [{ id: "dash", i: "📊", l: "Dashboard" }, { id: "purch", i: "📦", l: "Purchases" }, { id: "returns", i: "↩️", l: "Returns" }, { id: "inv", i: "💊", l: "Inventory" }, { id: "rack", i: "🗄", l: "Racks" }, { id: "audit", i: "📝", l: "Audit" }, { id: "bill", i: "🧾", l: "New Bill" }, ...(isO ? [{ id: "profit", i: "💹", l: "Profit Margin" }] : []), { id: "stock", i: "📋", l: "Stock" }, { id: "hist", i: "🗂", l: "Bills" }, { id: "reports", i: "📑", l: "Reports" }, { id: "ency", i: "📚", l: "Encyclopedia" }, ...(isO ? [{ id: "users", i: "👥", l: "Users" }, { id: "backup", i: "💾", l: "Backup" }] : [])];
+  const nav = [{ id: "dash", i: "📊", l: "Dashboard" }, ...(isO ? [{ id: "purch", i: "📦", l: "Purchases" }, { id: "returns", i: "↩️", l: "Returns" }] : []), { id: "inv", i: "💊", l: "Inventory" }, { id: "rack", i: "🗄", l: "Racks" }, ...(isO ? [{ id: "audit", i: "📝", l: "Audit" }] : []), { id: "bill", i: "🧾", l: "New Bill" }, ...(isO ? [{ id: "profit", i: "💹", l: "Profit Margin" }] : []), { id: "stock", i: "📋", l: "Stock" }, { id: "hist", i: "🗂", l: "Bills" }, ...(isO ? [{ id: "reports", i: "📑", l: "Reports" }] : []), { id: "ency", i: "📚", l: "Encyclopedia" }, ...(isO ? [{ id: "users", i: "👥", l: "Users" }, { id: "backup", i: "💾", l: "Backup" }] : [])];
   if (mob && !sideOpen) return null;
   return (
     <div>
@@ -709,12 +689,7 @@ function DashPage({ inv, bills, purch, isO, mob }) {
   const ts = Math.floor(inv.reduce((s, m) => s + (m.stock || 0), 0)), low = inv.filter((m) => m.stock > 0 && m.stock < 3).length;
   const today = new Date().toDateString(), tb = bills.filter((b) => new Date(b.date).toDateString() === today);
   const tr = tb.reduce((s, b) => s + b.netAmount, 0);
-  const tc = tb.reduce((s, b) => s + b.items.reduce((ss, i) => {
-    var p = i.unitPtr || 0;
-    if (!p && i.ptr) p = i.loose ? i.ptr / (i.packQty || 10) : i.ptr;
-    var cost = p * (1 - (i.purchDiscPct || 0) / 100) * (1 - (i.purchSchemePct || 0) / 100) * (i.purchFreeRatio || 1);
-    return ss + cost * i.qty;
-  }, 0), 0);
+  const tc = tb.reduce((s, b) => s + b.items.reduce((ss, i) => ss + (i.unitCost || (i.unitPtr || i.ptr || 0) * (1 + (i.gstRate || 0) / 100)) * i.qty, 0), 0);
   return (
     <div><h2 style={hds}>Dashboard</h2>
       <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(auto-fit,minmax(155px,1fr))", gap: 12, marginBottom: 20 }}>
@@ -1171,6 +1146,7 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
 // ══════════════════════════════════════════════
 function BillPage({ inv, saveInv, addBill, mob, showBill }) {
   const [pt, setPt] = useState(""); const [pc, setPc] = useState(""); const [pa, setPa] = useState(""); const [doc, setDoc] = useState(""); const [dc, setDc] = useState(""); const [pm, setPm] = useState("Cash");
+  const [billDate, setBillDate] = useState(new Date().toISOString().slice(0, 10));
   const [items, setItems] = useState([]); const [sq, setSq] = useState(""); const [so, setSo] = useState(false); const [billDisc, setBillDisc] = useState(0);
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState(null);
@@ -1259,15 +1235,16 @@ function BillPage({ inv, saveInv, addBill, mob, showBill }) {
         }
       }
     }
-    const bill = { billNo: mkBill(), date: new Date(getIST()).toISOString(), dateIST: new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true }), patient: pt, patientContact: pc, patientAddress: pa, doctor: doc, doctorContact: dc, paymentMode: pm, items: items.map((i) => ({ ...i, amount: ca(i) })), totalMRP: tMRP, totalDiscount: tDisc, billDiscount: billDisc, netAmount: net, cgst: tGST / 2, sgst: tGST / 2 };
+    var chosenDate = billDate ? new Date(billDate + "T" + new Date().toLocaleTimeString("en-US", { hour12: false, timeZone: "Asia/Kolkata" })) : new Date(getIST());
+    const bill = { billNo: mkBill(), date: chosenDate.toISOString(), dateIST: chosenDate.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true }), patient: pt, patientContact: pc, patientAddress: pa, doctor: doc, doctorContact: dc, paymentMode: pm, items: items.map((i) => ({ ...i, amount: ca(i) })), totalMRP: tMRP, totalDiscount: tDisc, billDiscount: billDisc, netAmount: net, cgst: tGST / 2, sgst: tGST / 2 };
     const updInv = inv.map((m) => { const sold = items.filter((i) => i.mid === m.id); if (!sold.length) return m; const totalSold = sold.reduce((s, i) => i.loose ? s + (i.qty / (i.packQty || 10)) : s + i.qty, 0); var newMrp = m.mrp; var fullPack = sold.find(function(i) { return !i.loose && i.unitPrice !== m.mrp; }); if (fullPack) newMrp = fullPack.unitPrice; return { ...m, stock: Math.max(0, Math.round((m.stock - totalSold) * 10000) / 10000), mrp: newMrp }; });
-    saveInv(updInv); addBill(bill); showBill(bill); setPt(""); setPc(""); setPa(""); setDoc(""); setDc(""); setItems([]); setPm("Cash"); setBillDisc(0); setBillDiscPct(0); };
+    saveInv(updInv); addBill(bill); showBill(bill); setPt(""); setPc(""); setPa(""); setDoc(""); setDc(""); setItems([]); setPm("Cash"); setBillDisc(0); setBillDiscPct(0); setBillDate(new Date().toISOString().slice(0, 10)); };
 
   return (
     <div><h2 style={hds}>New Bill</h2>
       <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 14, marginBottom: 14 }}>
         <div style={cds}><b style={{ color: "#0D6B5B", fontSize: 13 }}>Patient</b><div style={{ display: "grid", gap: 8, marginTop: 10 }}><input value={pt} onChange={(e) => setPt(e.target.value)} placeholder="Patient Name *" style={inps} /><input value={pc} onChange={(e) => setPc(e.target.value)} placeholder="Contact" style={inps} /><input value={pa} onChange={(e) => setPa(e.target.value)} placeholder="Address" style={inps} /></div></div>
-        <div style={cds}><b style={{ color: "#0D6B5B", fontSize: 13 }}>Doctor and Payment</b><div style={{ display: "grid", gap: 8, marginTop: 10 }}><input value={doc} onChange={(e) => setDoc(e.target.value)} placeholder="Doctor" style={inps} /><input value={dc} onChange={(e) => setDc(e.target.value)} placeholder="Doctor Contact" style={inps} /><select value={pm} onChange={(e) => setPm(e.target.value)} style={{ ...inps, background: "#fff" }}>{["Cash","UPI","Card","Credit"].map((m) => <option key={m}>{m}</option>)}</select></div></div></div>
+        <div style={cds}><b style={{ color: "#0D6B5B", fontSize: 13 }}>Doctor, Payment & Date</b><div style={{ display: "grid", gap: 8, marginTop: 10 }}><input value={doc} onChange={(e) => setDoc(e.target.value)} placeholder="Doctor" style={inps} /><input value={dc} onChange={(e) => setDc(e.target.value)} placeholder="Doctor Contact" style={inps} /><select value={pm} onChange={(e) => setPm(e.target.value)} style={{ ...inps, background: "#fff" }}>{"Cash,UPI,Card,Credit".split(",").map((m) => <option key={m}>{m}</option>)}</select><div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Bill Date (IST)</label><input type="date" value={billDate} onChange={(e) => setBillDate(e.target.value)} style={inps} /></div></div></div></div>
       <div style={cds}><b style={{ color: "#0D6B5B", fontSize: 13 }}>Add Medicines</b>
         <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
           <div style={{ flex: 1, position: "relative", minWidth: 200 }}>
@@ -1420,7 +1397,7 @@ function StockPage({ inv, saveInv, isO, mob }) {
 // ══════════════════════════════════════════════
 // BILL HISTORY
 // ══════════════════════════════════════════════
-function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch }) {
+function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv }) {
   const [editBill, setEditBill] = useState(null);
   const [retBill, setRetBill] = useState(null);
   const [retQtys, setRetQtys] = useState({});
@@ -1444,7 +1421,7 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
   const editAddItem = function(med) {
     if (!editBill) return;
     var items = editBill.items.slice();
-    items.push({ mid: med.id, name: med.name, batch: med.batch, expiry: med.expiry, mrp: med.mrp, unitPrice: med.mrp, ptr: med.ptr || 0, unitPtr: med.ptr || 0, gstRate: med.gstRate || 5, qty: 1, discount: 0, loose: false, packQty: med.packQty || 0, uid: med.uid || "", purchaseBillNo: med.purchaseBillNo || "", purchaseDistributor: med.purchaseDistributor || med.distributor || "", purchaseDate: med.purchaseDate || "", unitCost: med.unitCost || 0, purchDiscPct: med.purchDiscPct || 0, purchSchemePct: med.purchSchemePct || 0, purchFreeRatio: med.purchFreeRatio || 1 });
+    items.push({ mid: med.id, name: med.name, batch: med.batch, expiry: med.expiry, mrp: med.mrp, unitPrice: med.mrp, ptr: med.ptr || 0, unitPtr: med.ptr || 0, gstRate: med.gstRate || 5, qty: 1, discount: 0, loose: false, packQty: med.packQty || 0, uid: med.uid || "", purchaseBillNo: med.purchaseBillNo || "", purchaseDistributor: med.purchaseDistributor || med.distributor || "", purchaseDate: med.purchaseDate || "" });
     setEditBill(Object.assign({}, editBill, { items: items }));
     setEditAddQ("");
   };
@@ -1452,24 +1429,6 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
   const editDelItem = function(idx) {
     if (!editBill || editBill.items.length <= 1) { alert("Bill must have at least 1 item"); return; }
     var items = editBill.items.filter(function(_, i) { return i !== idx; });
-    setEditBill(Object.assign({}, editBill, { items: items }));
-  };
-
-  const editToggleLoose = function(idx) {
-    var items = editBill.items.map(function(it, i) {
-      if (i !== idx) return it;
-      var loose = !it.loose;
-      var pq = it.packQty || 10;
-      if (loose) {
-        var looseCost = (it.unitCost || 0) > 0 ? it.unitCost / pq : 0;
-        return Object.assign({}, it, { loose: true, unitPrice: it.mrp / pq, unitPtr: (it.ptr || 0) / pq, unitCost: Math.round(looseCost * 100) / 100, qty: 1 });
-      } else {
-        var origM = inv ? inv.find(function(m) { return m.id === it.mid; }) : null;
-        var origMrp = origM ? origM.mrp : it.mrp * pq;
-        var origCost = origM ? (origM.unitCost || 0) : (it.unitCost || 0) * pq;
-        return Object.assign({}, it, { loose: false, unitPrice: origMrp, mrp: origMrp, unitPtr: origM ? (origM.ptr || 0) : (it.ptr || 0), unitCost: Math.round(origCost * 100) / 100, qty: 1 });
-      }
-    });
     setEditBill(Object.assign({}, editBill, { items: items }));
   };
 
@@ -1483,80 +1442,23 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
 
   const saveEditedBill = () => {
     if (!editBill) return;
-
-    // Build cost lookup from purchases + inventory
-    var costLookup = {};
-    if (purch) purch.forEach(function(p) {
-      (p.items || []).forEach(function(it) {
-        var key = (it.name || "").toLowerCase().trim() + "|" + (it.batch || "").trim();
-        var totalUnits = (it.qty || 0) + (it.freeQty || 0);
-        var paidQty = it.qty || 0;
-        var freeRatio = totalUnits > 0 ? paidQty / totalUnits : 1;
-        var uc = (it.ptr || 0) * (1 - (it.discPct || 0) / 100) * (1 - (it.schemePct || 0) / 100) * (1 + (it.gstRate || 0) / 100) * freeRatio;
-        costLookup[key] = { unitCost: Math.round(uc * 100) / 100, purchDiscPct: it.discPct || 0, purchSchemePct: it.schemePct || 0, purchFreeRatio: Math.round(freeRatio * 10000) / 10000 };
-        var nk = "n:" + (it.name || "").toLowerCase().trim();
-        if (!costLookup[nk]) costLookup[nk] = costLookup[key];
-      });
-    });
-    if (inv) inv.forEach(function(m) {
-      var key = (m.name || "").toLowerCase().trim() + "|" + (m.batch || "").trim();
-      if (!costLookup[key] && m.unitCost) costLookup[key] = { unitCost: m.unitCost, purchDiscPct: m.purchDiscPct || 0, purchSchemePct: m.purchSchemePct || 0, purchFreeRatio: m.purchFreeRatio || 1 };
-      var nk = "n:" + (m.name || "").toLowerCase().trim();
-      if (!costLookup[nk] && m.unitCost) costLookup[nk] = { unitCost: m.unitCost, purchDiscPct: m.purchDiscPct || 0, purchSchemePct: m.purchSchemePct || 0, purchFreeRatio: m.purchFreeRatio || 1 };
-    });
-
-    // Sync cost data into each item — ensure unitPtr is correct
-    var syncedItems = editBill.items.map(function(it) {
-      var newIt = Object.assign({}, it);
-      var key = (it.name || "").toLowerCase().trim() + "|" + (it.batch || "").trim();
-      var cd = costLookup[key] || costLookup["n:" + (it.name || "").toLowerCase().trim()];
-      if (cd) {
-        newIt.purchDiscPct = cd.purchDiscPct;
-        newIt.purchSchemePct = cd.purchSchemePct;
-        newIt.purchFreeRatio = cd.purchFreeRatio;
-      }
-      // Ensure unitPtr is correct for loose items
-      if (it.loose && (!newIt.unitPtr || newIt.unitPtr === 0) && newIt.ptr && newIt.ptr > 0) {
-        newIt.unitPtr = Math.round(newIt.ptr / (newIt.packQty || 10) * 100) / 100;
-      }
-      newIt.amount = (newIt.unitPrice || newIt.mrp) * newIt.qty * (1 - (newIt.discount || 0) / 100);
-      return newIt;
-    });
-
-    const tMRP = syncedItems.reduce((s, i) => s + (i.unitPrice || i.mrp) * i.qty, 0);
-    const tDisc = syncedItems.reduce((s, i) => s + (i.unitPrice || i.mrp) * i.qty * (i.discount || 0) / 100, 0);
-    const tGST = syncedItems.reduce((s, i) => { const a = (i.unitPrice || i.mrp) * i.qty * (1 - (i.discount || 0) / 100); return s + (a - a / (1 + (i.gstRate || 0) / 100)); }, 0);
+    const tMRP = editBill.items.reduce((s, i) => s + (i.unitPrice || i.mrp) * i.qty, 0);
+    const tDisc = editBill.items.reduce((s, i) => s + (i.unitPrice || i.mrp) * i.qty * (i.discount || 0) / 100, 0);
+    const tGST = editBill.items.reduce((s, i) => { const a = (i.unitPrice || i.mrp) * i.qty * (1 - (i.discount || 0) / 100); return s + (a - a / (1 + (i.gstRate || 0) / 100)); }, 0);
     const net = Math.max(0, Math.round(tMRP - tDisc - (editBill.billDiscount || 0)));
-    const updated = { ...editBill, totalMRP: tMRP, totalDiscount: tDisc, netAmount: net, cgst: tGST / 2, sgst: tGST / 2, items: syncedItems };
+    const updated = { ...editBill, totalMRP: tMRP, totalDiscount: tDisc, netAmount: net, cgst: tGST / 2, sgst: tGST / 2, items: editBill.items.map((i) => ({ ...i, amount: (i.unitPrice || i.mrp) * i.qty * (1 - (i.discount || 0) / 100) })) };
     const next = bills.map((b) => b.billNo === updated.billNo ? updated : b);
     saveBills(next);
     if (inv && saveInv) {
       var changed = false;
       var updInv = inv.map(function(m) {
-        var match = syncedItems.find(function(i) { return i.mid === m.id && !i.loose && (i.unitPrice || i.mrp) !== m.mrp; });
+        var match = editBill.items.find(function(i) { return i.mid === m.id && !i.loose && (i.unitPrice || i.mrp) !== m.mrp; });
         if (match) { changed = true; return Object.assign({}, m, { mrp: match.unitPrice || match.mrp }); }
         return m;
       });
       if (changed) saveInv(updInv);
     }
     setEditBill(null);
-  };
-
-  const deleteBill = function(bill) {
-    askConfirm("Delete this bill? Stock will be restored to inventory.", function() {
-      var nextBills = bills.filter(function(x) { return x.billNo !== bill.billNo; });
-      saveBills(nextBills);
-      if (inv && saveInv) {
-        var nextInv = inv.map(function(m) { return Object.assign({}, m); });
-        (bill.items || []).forEach(function(it) {
-          var qty = Number(it.qty || 0);
-          if (!qty) return;
-          var idx = nextInv.findIndex(function(m) { return (it.mid && m.id === it.mid) || (((m.name || '') === (it.name || '')) && ((m.batch || '') === (it.batch || ''))); });
-          if (idx >= 0) nextInv[idx] = Object.assign({}, nextInv[idx], { stock: (Number(nextInv[idx].stock) || 0) + qty });
-        });
-        saveInv(nextInv);
-      }
-    });
   };
 
   const startBillReturn = function(bill) {
@@ -1649,7 +1551,7 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
             <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Doctor</label><input value={editBill.doctor || ""} onChange={(e) => setEditBill((p) => ({ ...p, doctor: e.target.value }))} style={inps} /></div>
             <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Payment</label><select value={editBill.paymentMode} onChange={(e) => setEditBill((p) => ({ ...p, paymentMode: e.target.value }))} style={{ ...inps, background: "#fff" }}>{["Cash","UPI","Card","Credit"].map((m) => <option key={m}>{m}</option>)}</select></div></div>
           <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: 650 }}><thead><tr>
-            {["Medicine","Type","Qty","Price","Disc%","Disc Rs","GST%","Amt",""].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
+            {["Medicine","Qty","Price","Disc%","Disc Rs","GST%","Amt",""].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
             {editBill.items.map((it, i) => {
               const baseAmt = (it.unitPrice || it.mrp) * it.qty;
               const discRs = it.discountRs !== undefined ? it.discountRs : baseAmt * (it.discount || 0) / 100;
@@ -1657,8 +1559,7 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
               const updEditDiscRs = (rs) => { const v = Math.max(0, parseFloat(rs) || 0); const pct = baseAmt > 0 ? Math.min(100, Math.round(v / baseAmt * 10000) / 100) : 0; const items = [...editBill.items]; items[i] = { ...items[i], discountRs: v, discount: pct }; setEditBill((p) => ({ ...p, items })); };
               return (
               <tr key={i}>
-                <td style={{ ...tds, fontWeight: 500 }}>{it.name}</td>
-                <td style={tds}><button onClick={function() { editToggleLoose(i); }} style={{ padding: "3px 8px", fontSize: 10, borderRadius: 4, border: "none", cursor: "pointer", fontWeight: 600, background: it.loose ? "#FDBA74" : "#E8E4DD", color: it.loose ? "#7C2D12" : "#555" }}>{it.loose ? "LOOSE" : "FULL"}</button></td>
+                <td style={{ ...tds, fontWeight: 500 }}>{it.name}{it.loose && <span style={{ color: "#B45309", fontSize: 9, marginLeft: 4 }}>[L]</span>}</td>
                 <td style={{ padding: "4px" }}><input type="number" min="1" value={it.qty} onChange={(e) => { const items = [...editBill.items]; items[i] = { ...items[i], qty: Math.max(1, parseInt(e.target.value) || 1) }; setEditBill((p) => ({ ...p, items })); }} style={{ ...smis, width: 55 }} /></td>
                 <td style={{ padding: "4px" }}><input type="number" min="0" step="0.01" value={it.unitPrice || it.mrp} onChange={(e) => { const items = [...editBill.items]; items[i] = { ...items[i], unitPrice: Math.max(0, parseFloat(e.target.value) || 0), mrp: Math.max(0, parseFloat(e.target.value) || 0) }; setEditBill((p) => ({ ...p, items })); }} style={{ ...smis, width: 70, textAlign: "right" }} /></td>
                 <td style={{ padding: "4px" }}>
@@ -1709,12 +1610,12 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
         </div>
       )}
       {filteredBills.length === 0 ? <div style={{ ...cds, padding: 30, textAlign: "center", color: "#aaa" }}>{hFilter === "all" ? "No bills" : "No bills in this period"}</div> :
-      <HistBillTable bills={filteredBills} showBill={showBill} setEditBill={doEdit} startBillReturn={startBillReturn} deleteBill={deleteBill} askConfirm={askConfirm} saveBills={saveBills} mob={mob} />}
+      <HistBillTable bills={filteredBills} showBill={showBill} setEditBill={doEdit} startBillReturn={startBillReturn} askConfirm={askConfirm} saveBills={saveBills} mob={mob} />}
     </div>
   );
 }
 
-function HistBillTable({ bills, showBill, setEditBill, startBillReturn, deleteBill, askConfirm, saveBills, mob }) {
+function HistBillTable({ bills, showBill, setEditBill, startBillReturn, askConfirm, saveBills, mob }) {
   const [sortCol, setSortCol] = React.useState("date");
   const [sortDir, setSortDir] = React.useState("desc");
   const [expanded, setExpanded] = React.useState(null);
@@ -1782,7 +1683,7 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, deleteBi
             <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
               <button onClick={function(){showBill(b, true);}} style={{ ...bts(true), padding: "7px 14px", fontSize: 12, flex: 1 }}>View</button>
               <button onClick={function(){setEditBill(b);}} style={{ ...bts(false), padding: "7px 14px", fontSize: 12, flex: 1 }}>Edit</button>
-              <button onClick={function(){startBillReturn(b);}} style={{ border: "none", borderRadius: 7, padding: "7px 14px", fontWeight: 600, cursor: "pointer", fontSize: 12, background: "#DC2626", color: "#fff", flex: 1 }}>Return</button><button onClick={function(){deleteBill(b);}} style={{ border: "none", borderRadius: 7, padding: "7px 14px", fontWeight: 600, cursor: "pointer", fontSize: 12, background: "#7F1D1D", color: "#fff", flex: 1 }}>Delete</button>
+              <button onClick={function(){startBillReturn(b);}} style={{ border: "none", borderRadius: 7, padding: "7px 14px", fontWeight: 600, cursor: "pointer", fontSize: 12, background: "#DC2626", color: "#fff", flex: 1 }}>Return</button>
             </div>
           </div>;
         })}
@@ -1817,7 +1718,7 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, deleteBi
                       <td style={tds}><button onClick={() => setExpanded(isOpen ? null : b.billNo)} style={{ ...bts(false), padding: "4px 10px", fontSize: 11, background: isOpen ? "#D1FAE5" : undefined, color: isOpen ? "#065F46" : undefined }}>{isOpen ? "▲ Hide" : "▼ " + b.items.length + " items"}</button></td>
                       <td style={tds}><button onClick={() => showBill(b, true)} style={{ ...bts(true), padding: "5px 12px", fontSize: 11 }}>View</button></td>
                       <td style={tds}><button onClick={() => setEditBill(b)} style={{ ...bts(false), padding: "5px 12px", fontSize: 11 }}>Edit</button></td>
-                      <td style={tds}><button onClick={function() { startBillReturn(b); }} style={{ border: "none", borderRadius: 7, padding: "5px 12px", fontWeight: 600, cursor: "pointer", fontSize: 11, background: "#DC2626", color: "#fff" }}>Return</button></td><td style={tds}><button onClick={function() { deleteBill(b); }} style={{ border: "none", borderRadius: 7, padding: "5px 12px", fontWeight: 600, cursor: "pointer", fontSize: 11, background: "#7F1D1D", color: "#fff" }}>Delete</button></td>
+                      <td style={tds}><button onClick={function() { startBillReturn(b); }} style={{ border: "none", borderRadius: 7, padding: "5px 12px", fontWeight: 600, cursor: "pointer", fontSize: 11, background: "#DC2626", color: "#fff" }}>Return</button></td>
                     </tr>
                     {isOpen && (
                       <tr>
@@ -2170,9 +2071,7 @@ function BackupPage({ inv, bills, purch, saveAll, askConfirm, saveInv, saveBills
                 // Fallback: PTR+GST
                 if ((it.unitPtr || it.ptr) && (it.unitPtr || it.ptr) > 0) {
                   billItemsUpdated++;
-                  var fbP = it.unitPtr || it.ptr;
-                  if (it.loose && !it.unitPtr && it.ptr) fbP = it.ptr / (it.packQty || 10);
-                  var fallbackCost = fbP * (1 + (it.gstRate || 0) / 100);
+                  var fallbackCost = (it.unitPtr || it.ptr) * (1 + (it.gstRate || 0) / 100);
                   return Object.assign({}, it, { unitCost: Math.round(fallbackCost * 100) / 100, purchDiscPct: 0, purchSchemePct: 0, purchFreeRatio: 1 });
                 }
                 return it;
@@ -2190,109 +2089,10 @@ function BackupPage({ inv, bills, purch, saveAll, askConfirm, saveInv, saveBills
           Formula: unitCost = PTR x (1 - Disc%) x (1 - Scheme%) x (1 + GST%) x PaidQty / (PaidQty + FreeQty)
         </div>
       </div>
-
-      {/* ── BILL SYNC MIGRATION ── */}
-      <div style={{ ...cds, border: "2px solid #2563EB", marginTop: 14 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-          <span style={{ fontSize: 28 }}>🔄</span>
-          <div>
-            <b style={{ color: "#2563EB", fontSize: 14 }}>Bill Recalculation & Sync</b>
-            <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>Recalculates all bill totals and syncs cost data from purchases into every bill item. Run this after editing bills to fix Profit Margin.</div>
-          </div>
-        </div>
-        <button onClick={function() {
-          askConfirm("Recalculate all " + bills.length + " bills and sync cost data from " + purch.length + " purchases?", function() {
-            // Build cost lookup from purchases
-            var costLookup = {};
-            purch.forEach(function(p) {
-              (p.items || []).forEach(function(it) {
-                var key = (it.name || "").toLowerCase().trim() + "|" + (it.batch || "").trim();
-                var totalUnits = (it.qty || 0) + (it.freeQty || 0);
-                var paidQty = it.qty || 0;
-                var freeRatio = totalUnits > 0 ? paidQty / totalUnits : 1;
-                var uc = (it.ptr || 0) * (1 - (it.discPct || 0) / 100) * (1 - (it.schemePct || 0) / 100) * (1 + (it.gstRate || 0) / 100) * freeRatio;
-                costLookup[key] = { unitCost: Math.round(uc * 100) / 100, purchDiscPct: it.discPct || 0, purchSchemePct: it.schemePct || 0, purchFreeRatio: Math.round(freeRatio * 10000) / 10000 };
-                // Also store name-only key for fallback
-                var nameKey = (it.name || "").toLowerCase().trim();
-                if (!costLookup["n:" + nameKey]) costLookup["n:" + nameKey] = costLookup[key];
-              });
-            });
-
-            // Build cost lookup from inventory as secondary source
-            inv.forEach(function(m) {
-              var key = (m.name || "").toLowerCase().trim() + "|" + (m.batch || "").trim();
-              if (!costLookup[key] && m.unitCost) {
-                costLookup[key] = { unitCost: m.unitCost, purchDiscPct: m.purchDiscPct || 0, purchSchemePct: m.purchSchemePct || 0, purchFreeRatio: m.purchFreeRatio || 1 };
-              }
-              var nameKey = "n:" + (m.name || "").toLowerCase().trim();
-              if (!costLookup[nameKey] && m.unitCost) {
-                costLookup[nameKey] = { unitCost: m.unitCost, purchDiscPct: m.purchDiscPct || 0, purchSchemePct: m.purchSchemePct || 0, purchFreeRatio: m.purchFreeRatio || 1 };
-              }
-            });
-
-            var billsFixed = 0;
-            var itemsFixed = 0;
-
-            var newBills = bills.map(function(b) {
-              var changed = false;
-              var items = b.items.map(function(it) {
-                // Try to find cost data
-                var cd = null;
-                var key = (it.name || "").toLowerCase().trim() + "|" + (it.batch || "").trim();
-                cd = costLookup[key] || costLookup["n:" + (it.name || "").toLowerCase().trim()];
-
-                var newIt = Object.assign({}, it);
-
-                // Sync cost data if found and missing or zero
-                if (cd && (!it.unitCost || it.unitCost === 0)) {
-                  var uc = it.loose ? cd.unitCost / (it.packQty || 10) : cd.unitCost;
-                  newIt.unitCost = Math.round(uc * 100) / 100;
-                  newIt.purchDiscPct = cd.purchDiscPct;
-                  newIt.purchSchemePct = cd.purchSchemePct;
-                  newIt.purchFreeRatio = cd.purchFreeRatio;
-                  changed = true;
-                  itemsFixed++;
-                }
-
-                // Fallback: compute from PTR+GST if still no cost
-                if ((!newIt.unitCost || newIt.unitCost === 0) && (newIt.unitPtr || newIt.ptr) && (newIt.unitPtr || newIt.ptr) > 0) {
-                  var fbPtr = newIt.unitPtr || newIt.ptr;
-                  if (it.loose && !newIt.unitPtr && newIt.ptr) fbPtr = newIt.ptr / (newIt.packQty || 10);
-                  newIt.unitCost = Math.round(fbPtr * (1 + (newIt.gstRate || 0) / 100) * 100) / 100;
-                  changed = true;
-                  itemsFixed++;
-                }
-
-                // Recalculate item amount
-                newIt.amount = (newIt.unitPrice || newIt.mrp) * newIt.qty * (1 - (newIt.discount || 0) / 100);
-                return newIt;
-              });
-
-              // Recalculate bill totals
-              var tMRP = items.reduce(function(s, i) { return s + (i.unitPrice || i.mrp) * i.qty; }, 0);
-              var tDisc = items.reduce(function(s, i) { return s + (i.unitPrice || i.mrp) * i.qty * (i.discount || 0) / 100; }, 0);
-              var tGST = items.reduce(function(s, i) { var a = (i.unitPrice || i.mrp) * i.qty * (1 - (i.discount || 0) / 100); return s + (a - a / (1 + (i.gstRate || 0) / 100)); }, 0);
-              var net = Math.max(0, Math.round(tMRP - tDisc - (b.billDiscount || 0)));
-
-              if (changed || net !== b.netAmount) billsFixed++;
-
-              return Object.assign({}, b, { items: items, totalMRP: tMRP, totalDiscount: tDisc, netAmount: net, cgst: tGST / 2, sgst: tGST / 2 });
-            });
-
-            saveBills(newBills);
-            alert("Bill sync complete!\n\n" + billsFixed + " bills recalculated\n" + itemsFixed + " items got cost data\n\nProfit Margin and Reports will now show accurate data.");
-          });
-        }} style={{ ...bts(true), background: "#2563EB", padding: "10px 20px" }}>
-          Run Bill Sync
-        </button>
-        <div style={{ fontSize: 11, color: "#888", marginTop: 8 }}>
-          Does 3 things: (1) Syncs unitCost from purchases into all bill items, (2) Recalculates bill totals (MRP, discounts, net), (3) Fixes items missing cost data. Run after editing bills.
-        </div>
-      </div>
     </div>
   );
 }
-function ProfitPage({ bills, inv, mob, purch, saveBills }) {
+function ProfitPage({ bills, inv, mob }) {
   const [view, setView] = useState("bill");
   const [fromD, setFromD] = useState("");
   const [toD, setToD] = useState("");
@@ -2311,18 +2111,14 @@ function ProfitPage({ bills, inv, mob, purch, saveBills }) {
     const salePrice = (it.unitPrice || it.mrp) * it.qty;
     const discAmt = salePrice * (it.discount || 0) / 100;
     const netSale = salePrice - discAmt;
-    // Cost = PTR per unit (WITHOUT GST — GST is recovered via ITC)
-    // Use unitPtr (per-unit, already adjusted for loose) > ptr/packQty for loose > ptr for full
-    var ptrPerUnit = 0;
-    if (it.unitPtr && it.unitPtr > 0) {
-      ptrPerUnit = it.unitPtr;
-    } else if (it.ptr && it.ptr > 0) {
-      ptrPerUnit = it.loose ? it.ptr / (it.packQty || 10) : it.ptr;
-    }
+    // Cost = PTR × (1-PurchDisc%) × (1-Scheme%) × (1+GST%) adjusted for free items
+    var ptr = it.unitPtr || it.ptr || 0;
     var purchDisc = it.purchDiscPct || 0;
     var scheme = it.purchSchemePct || 0;
-    var freeRatio = it.purchFreeRatio || 1;
-    var costPerUnit = ptrPerUnit * (1 - purchDisc / 100) * (1 - scheme / 100) * freeRatio;
+    var freeRatio = it.purchFreeRatio || 1; // ratio of paid/(paid+free), default 1 if no free
+    var costPerUnit = ptr * (1 - purchDisc / 100) * (1 - scheme / 100) * (1 + (it.gstRate || 0) / 100) * freeRatio;
+    // If unitCost is pre-calculated (from migration), use it directly
+    if (it.unitCost && it.unitCost > 0) costPerUnit = it.unitCost;
     const totalCost = costPerUnit * it.qty;
     return { netSale, totalCost, profit: netSale - totalCost, margin: netSale > 0 ? ((netSale - totalCost) / netSale * 100) : 0 };
   };
@@ -2344,91 +2140,8 @@ function ProfitPage({ bills, inv, mob, purch, saveBills }) {
   const totals = fl.reduce((acc, b) => { const p = calcBillProfit(b); return { sale: acc.sale + p.netSale, cost: acc.cost + p.totalCost, disc: acc.disc + p.totalDisc, profit: acc.profit + p.profit }; }, { sale: 0, cost: 0, disc: 0, profit: 0 });
   const overallMargin = totals.sale > 0 ? (totals.profit / totals.sale * 100) : 0;
 
-  var recalcAll = function() {
-    if (!purch || !saveBills) { alert("Purchase data not available"); return; }
-    // Build cost lookup from all purchases
-    var cl = {};
-    purch.forEach(function(p) {
-      (p.items || []).forEach(function(it) {
-        var key = (it.name || "").toLowerCase().trim() + "|" + (it.batch || "").trim();
-        var tu = (it.qty || 0) + (it.freeQty || 0);
-        var pq = it.qty || 0;
-        var fr = tu > 0 ? pq / tu : 1;
-        var uc = (it.ptr || 0) * (1 - (it.discPct || 0) / 100) * (1 - (it.schemePct || 0) / 100) * (1 + (it.gstRate || 0) / 100) * fr;
-        cl[key] = { unitCost: Math.round(uc * 100) / 100, purchDiscPct: it.discPct || 0, purchSchemePct: it.schemePct || 0, purchFreeRatio: Math.round(fr * 10000) / 10000 };
-        var nk = "n:" + (it.name || "").toLowerCase().trim();
-        if (!cl[nk]) cl[nk] = cl[key];
-      });
-    });
-    // Also from inventory
-    inv.forEach(function(m) {
-      var key = (m.name || "").toLowerCase().trim() + "|" + (m.batch || "").trim();
-      if (!cl[key] && m.unitCost) cl[key] = { unitCost: m.unitCost, purchDiscPct: m.purchDiscPct || 0, purchSchemePct: m.purchSchemePct || 0, purchFreeRatio: m.purchFreeRatio || 1 };
-      var nk = "n:" + (m.name || "").toLowerCase().trim();
-      if (!cl[nk] && m.unitCost) cl[nk] = { unitCost: m.unitCost, purchDiscPct: m.purchDiscPct || 0, purchSchemePct: m.purchSchemePct || 0, purchFreeRatio: m.purchFreeRatio || 1 };
-    });
-
-    // Also build lookup from CURRENT inventory (latest PTR values)
-    inv.forEach(function(m) {
-      var key = (m.name || "").toLowerCase().trim() + "|" + (m.batch || "").trim();
-      var nk = "n:" + (m.name || "").toLowerCase().trim();
-      if (!cl[nk] || m.ptr) cl[nk] = { ptr: m.ptr || 0, purchDiscPct: m.purchDiscPct || 0, purchSchemePct: m.purchSchemePct || 0, purchFreeRatio: m.purchFreeRatio || 1 };
-      if (!cl[key] || m.ptr) cl[key] = cl[nk];
-    });
-
-    var fixed = 0;
-    var newBills = bills.map(function(b) {
-      var items = b.items.map(function(it) {
-        var n = Object.assign({}, it);
-        var key = (it.name || "").toLowerCase().trim() + "|" + (it.batch || "").trim();
-        var cd = cl[key] || cl["n:" + (it.name || "").toLowerCase().trim()];
-
-        // Sync PTR and purchase adjustments
-        if (cd && cd.ptr) {
-          n.ptr = cd.ptr;
-          n.unitPtr = it.loose ? Math.round(cd.ptr / (it.packQty || 10) * 100) / 100 : cd.ptr;
-          n.purchDiscPct = cd.purchDiscPct || n.purchDiscPct || 0;
-          n.purchSchemePct = cd.purchSchemePct || n.purchSchemePct || 0;
-          n.purchFreeRatio = cd.purchFreeRatio || n.purchFreeRatio || 1;
-          fixed++;
-        }
-
-        // Also check current inventory for latest PTR
-        var invMatch = inv.find(function(m) { return m.id === it.mid; });
-        if (!invMatch) invMatch = inv.find(function(m) { return m.name === it.name && m.batch === (it.batch || ""); });
-        if (invMatch && invMatch.ptr && invMatch.ptr > 0) {
-          n.ptr = invMatch.ptr;
-          n.unitPtr = it.loose ? Math.round(invMatch.ptr / (it.packQty || invMatch.packQty || 10) * 100) / 100 : invMatch.ptr;
-          n.purchDiscPct = invMatch.purchDiscPct || n.purchDiscPct || 0;
-          n.purchSchemePct = invMatch.purchSchemePct || n.purchSchemePct || 0;
-          n.purchFreeRatio = invMatch.purchFreeRatio || n.purchFreeRatio || 1;
-          if (!n.packQty && invMatch.packQty) n.packQty = invMatch.packQty;
-          fixed++;
-        }
-
-        // Ensure unitPtr is set for loose
-        if (it.loose && (!n.unitPtr || n.unitPtr === 0) && n.ptr && n.ptr > 0) {
-          n.unitPtr = Math.round(n.ptr / (n.packQty || 10) * 100) / 100;
-        }
-
-        n.amount = (n.unitPrice || n.mrp) * n.qty * (1 - (n.discount || 0) / 100);
-        return n;
-      });
-      var tMRP = items.reduce(function(s, i) { return s + (i.unitPrice || i.mrp) * i.qty; }, 0);
-      var tDisc = items.reduce(function(s, i) { return s + (i.unitPrice || i.mrp) * i.qty * (i.discount || 0) / 100; }, 0);
-      var net = Math.max(0, Math.round(tMRP - tDisc - (b.billDiscount || 0)));
-      var tGST = items.reduce(function(s, i) { var a = (i.unitPrice || i.mrp) * i.qty * (1 - (i.discount || 0) / 100); return s + (a - a / (1 + (i.gstRate || 0) / 100)); }, 0);
-      return Object.assign({}, b, { items: items, totalMRP: tMRP, totalDiscount: tDisc, netAmount: net, cgst: tGST / 2, sgst: tGST / 2 });
-    });
-    saveBills(newBills);
-    alert("Recalculated " + bills.length + " bills (" + fixed + " items synced).\nProfit margins updated.");
-  };
-
   return (
-    <div><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
-      <h2 style={{ ...hds, marginBottom: 0 }}>Profit Margin Analysis</h2>
-      <button onClick={recalcAll} style={{ border: "none", borderRadius: 8, padding: "8px 16px", fontWeight: 600, cursor: "pointer", fontSize: 12, background: "#DC2626", color: "#fff", fontFamily: "inherit" }}>🔄 Recalculate All Bills</button>
-    </div>
+    <div><h2 style={hds}>Profit Margin Analysis</h2>
       <div style={{ display: "flex", gap: 3, background: "#E8E4DD", borderRadius: 7, padding: 3, marginBottom: 16, flexWrap: "wrap" }}>
         {[["bill","All Bills"],["today","Today"],["week","Week"],["month","Month"],["year","Year"],["custom","Custom"]].map(([id, l]) => <button key={id} onClick={() => setView(id)} style={{ padding: "6px 12px", border: "none", borderRadius: 5, fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: view === id ? "#fff" : "transparent", color: view === id ? "#0D6B5B" : "#888" }}>{l}</button>)}</div>
       {view === "custom" && <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
@@ -2477,6 +2190,7 @@ function RackPage({ inv, saveInv, mob }) {
   var letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
   letters.forEach(function(l) { for (var i = 1; i <= 100; i++) ALL_RACKS.push(l + i); });
   for (var i = 1; i <= 100; i++) ALL_RACKS.push("BH-" + i);
+  ALL_RACKS.push("Refrigerator(Fridge)");
 
   // Get racks that have medicines
   var usedRacks = {};
@@ -2803,7 +2517,7 @@ function AuditPage({ inv, mob }) {
 // ══════════════════════════════════════════════
 // RETURNS PAGE
 // ══════════════════════════════════════════════
-function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm, bills, saveBills }) {
+function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm }) {
   const [retPurch, setRetPurch] = useState(null);
   const [retQtys, setRetQtys] = useState({});
   const [returns, setReturns] = useState([]);
@@ -2824,38 +2538,6 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm, bills, s
     const qtys = {};
     p.items.forEach((it, i) => { qtys[i] = 0; });
     setRetQtys(qtys);
-  };
-
-  const cancelPurchaseReturn = function(r) {
-    askConfirm("Cancel this purchase return? Stock will be added back.", function() {
-      var nextReturns = returns.filter(function(x) { return x.id !== r.id; });
-      saveReturns(nextReturns);
-      var nextInv = (inv || []).map(function(m) { return Object.assign({}, m); });
-      (r.items || []).forEach(function(it) {
-        var qty = Number(it.returnQty || it.qty || 0);
-        if (!qty) return;
-        var idx = nextInv.findIndex(function(m) { return ((m.name || '') === (it.name || '')) && ((m.batch || '') === (it.batch || '')); });
-        if (idx >= 0) nextInv[idx] = Object.assign({}, nextInv[idx], { stock: (Number(nextInv[idx].stock) || 0) + qty });
-      });
-      saveInv(nextInv);
-      db.ref("returns/" + r.id).remove();
-      alert("Purchase return cancelled.");
-    });
-  };
-
-  const cancelBillReturn = function(r) {
-    askConfirm("Cancel this customer return? Stock will be reduced again.", function() {
-      var nextInv = (inv || []).map(function(m) { return Object.assign({}, m); });
-      (r.items || []).forEach(function(it) {
-        var qty = Number(it.qty || 0);
-        if (!qty) return;
-        var idx = nextInv.findIndex(function(m) { return (it.mid && m.id === it.mid) || (((m.name || '') === (it.name || '')) && ((m.batch || '') === (it.batch || ''))); });
-        if (idx >= 0) nextInv[idx] = Object.assign({}, nextInv[idx], { stock: Math.max(0, (Number(nextInv[idx].stock) || 0) - qty) });
-      });
-      saveInv(nextInv);
-      db.ref("billReturns/" + r.id).remove();
-      alert("Bill return cancelled.");
-    });
   };
 
   const processReturn = () => {
@@ -2925,10 +2607,10 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm, bills, s
 
       {returns.length > 0 && <div style={cds}><b>Purchase Return History ({returns.length})</b>
         <div style={{ overflowX: "auto", marginTop: 10 }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
-          {["Date","Supplier","Invoice","Items","Amount","Action"].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
+          {["Date","Supplier","Invoice","Items","Amount"].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
           {[...returns].reverse().map((r) => (<tr key={r.id}>
             <td style={tds}>{fD(r.date)}</td><td style={tds}>{r.supplier}</td><td style={tds}>{r.invoiceNo || "-"}</td>
-            <td style={tds}>{r.items.length}</td><td style={{ ...tds, fontWeight: 700, color: "#DC2626" }}>Rs.{f2(r.totalAmount)}</td><td style={tds}><button onClick={function(){cancelPurchaseReturn(r);}} style={{ border: "none", borderRadius: 7, padding: "5px 10px", fontWeight: 600, cursor: "pointer", fontSize: 11, background: "#7F1D1D", color: "#fff" }}>Cancel Return</button></td>
+            <td style={tds}>{r.items.length}</td><td style={{ ...tds, fontWeight: 700, color: "#DC2626" }}>Rs.{f2(r.totalAmount)}</td>
           </tr>))}</tbody></table></div></div>}
 
       {billReturns.length > 0 && <div style={{ ...cds, borderLeft: "4px solid #DC2626" }}><b>Customer / Bill Return History ({billReturns.length})</b>
@@ -3073,353 +2755,6 @@ function EncyclopediaPage({ inv, mob }) {
           })}
         </div>
       </div>}
-    </div>
-  );
-}
-
-// ══════════════════════════════════════════════
-// REPORTS PAGE (with Profit Margin)
-// ══════════════════════════════════════════════
-function ReportsPage({ bills, inv, mob, showBill }) {
-  const [period, setPeriod] = useState("today");
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
-  const [expanded, setExpanded] = useState(null);
-
-  var now = new Date();
-  var filtered = bills.filter(function(b) {
-    var d = new Date(b.date);
-    if (period === "today") return d.toDateString() === now.toDateString();
-    if (period === "week") { var w = new Date(now); w.setDate(w.getDate() - 7); return d >= w; }
-    if (period === "month") return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-    if (period === "custom" && from && to) return d >= new Date(from) && d <= new Date(to + "T23:59:59");
-    return true;
-  });
-
-  var sorted = [].concat(filtered).sort(function(a, b) { return new Date(b.date) - new Date(a.date); });
-
-  // Item cost calculation
-  var itemCost = function(it) {
-    var p = it.unitPtr || 0;
-    if (!p && it.ptr) p = it.loose ? it.ptr / (it.packQty || 10) : it.ptr;
-    var cost = p * (1 - (it.purchDiscPct || 0) / 100) * (1 - (it.purchSchemePct || 0) / 100) * (it.purchFreeRatio || 1);
-    return cost * it.qty;
-  };
-
-  var itemRevenue = function(it) { return (it.unitPrice || it.mrp) * it.qty * (1 - (it.discount || 0) / 100); };
-
-  // Summary
-  var totalRevenue = filtered.reduce(function(s, b) { return s + b.netAmount; }, 0);
-  var totalQty = filtered.reduce(function(s, b) { return s + b.items.reduce(function(ss, i) { return ss + i.qty; }, 0); }, 0);
-  var totalDisc = filtered.reduce(function(s, b) { return s + (b.totalDiscount || 0) + (b.billDiscount || 0); }, 0);
-  var totalCost = filtered.reduce(function(s, b) { return s + b.items.reduce(function(ss, i) { return ss + itemCost(i); }, 0); }, 0);
-  var totalProfit = totalRevenue - totalCost;
-  var totalMargin = totalRevenue > 0 ? (totalProfit / totalRevenue * 100) : 0;
-
-  // ALL medicines sold (not just top)
-  var medSales = {};
-  filtered.forEach(function(b) {
-    b.items.forEach(function(it) {
-      var key = it.name;
-      if (!medSales[key]) medSales[key] = { name: it.name, mid: it.mid, qty: 0, revenue: 0, cost: 0, bills: 0 };
-      medSales[key].qty += it.qty;
-      medSales[key].revenue += itemRevenue(it);
-      medSales[key].cost += itemCost(it);
-      medSales[key].bills += 1;
-    });
-  });
-  var allMeds = Object.values(medSales).sort(function(a, b) { return b.revenue - a.revenue; });
-
-  var getStock = function(name, mid) {
-    var m = inv.find(function(x) { return x.id === mid; });
-    if (m) return fStock(m.stock, m.packQty);
-    m = inv.find(function(x) { return x.name === name; });
-    if (m) return fStock(m.stock, m.packQty);
-    return "0";
-  };
-
-  // Bill-level profit
-  var billProfit = function(b) {
-    var rev = b.netAmount;
-    var cost = b.items.reduce(function(s, i) { return s + itemCost(i); }, 0);
-    return { rev: rev, cost: cost, profit: rev - cost, margin: rev > 0 ? ((rev - cost) / rev * 100) : 0 };
-  };
-
-  // Print report
-  var printReport = function() {
-    var pLabel = period === "today" ? "Today" : period === "week" ? "This Week" : period === "month" ? "This Month" : from + " to " + to;
-    var html = "<html><head><title>Sales Report - " + pLabel + "</title><style>body{font-family:sans-serif;font-size:11px;padding:20px;max-width:950px;margin:0 auto}table{width:100%;border-collapse:collapse;margin:10px 0}th,td{border:1px solid #999;padding:4px 6px;text-align:left;font-size:10px}th{background:#eee}h2{margin:6px 0}h3{margin:12px 0 4px}.summary{display:flex;gap:14px;margin:10px 0;flex-wrap:wrap}.scard{padding:8px 14px;border:1px solid #ddd;border-radius:6px}.right{text-align:right}.green{color:#059669}.red{color:#DC2626}</style></head><body>";
-    html += "<h2>A to Z Pharmacy — Sales & Profit Report</h2>";
-    html += "<p>Period: <b>" + pLabel + "</b> | Generated: " + new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) + "</p>";
-    html += "<div class='summary'><div class='scard'><b>" + filtered.length + "</b> Bills</div><div class='scard'>Revenue: <b>Rs." + f2(totalRevenue) + "</b></div><div class='scard'>Cost: Rs." + f2(totalCost) + "</div><div class='scard'>Discounts: Rs." + f2(totalDisc) + "</div><div class='scard'>Profit: <b class='" + (totalProfit >= 0 ? "green" : "red") + "'>Rs." + f2(totalProfit) + "</b> (" + f2(totalMargin) + "%)</div></div>";
-
-    // All medicines table with profit
-    html += "<h3>All Medicines Sold (" + allMeds.length + ")</h3><table><tr><th>#</th><th>Medicine</th><th>Qty</th><th>Revenue</th><th>Cost</th><th>Profit</th><th>Margin%</th><th>Bills</th><th>Stock Left</th></tr>";
-    allMeds.forEach(function(m, i) {
-      var pr = m.revenue - m.cost; var mg = m.revenue > 0 ? (pr / m.revenue * 100) : 0;
-      html += "<tr><td>" + (i + 1) + "</td><td>" + m.name + "</td><td>" + m.qty + "</td><td class='right'>Rs." + f2(m.revenue) + "</td><td class='right'>Rs." + f2(m.cost) + "</td><td class='right " + (pr >= 0 ? "green" : "red") + "'>Rs." + f2(pr) + "</td><td>" + f2(mg) + "%</td><td>" + m.bills + "</td><td>" + getStock(m.name, m.mid) + "</td></tr>";
-    });
-    html += "</table>";
-
-    // Bill details with profit
-    html += "<h3>Bill Details</h3>";
-    sorted.forEach(function(b) {
-      var bp = billProfit(b);
-      html += "<table><tr><th colspan='8'>" + b.billNo + " | " + (b.dateIST || fDT(b.date)) + " | " + b.patient + " | " + b.paymentMode + " | Net: Rs." + f2(b.netAmount) + " | Profit: <span class='" + (bp.profit >= 0 ? "green" : "red") + "'>Rs." + f2(bp.profit) + " (" + f2(bp.margin) + "%)</span></th></tr>";
-      html += "<tr><th>Medicine</th><th>Type</th><th>Qty</th><th>Price</th><th>Disc%</th><th>Amount</th><th>Cost</th><th>Profit</th></tr>";
-      b.items.forEach(function(it) {
-        var rev = itemRevenue(it); var cost = itemCost(it); var pr = rev - cost;
-        html += "<tr><td>" + it.name + "</td><td>" + (it.loose ? "Loose" : "Pack") + "</td><td>" + it.qty + "</td><td class='right'>Rs." + f2(it.unitPrice || it.mrp) + "</td><td>" + (it.discount || 0) + "%</td><td class='right'>Rs." + f2(rev) + "</td><td class='right'>Rs." + f2(cost) + "</td><td class='right " + (pr >= 0 ? "green" : "red") + "'>Rs." + f2(pr) + "</td></tr>";
-      });
-      html += "</table>";
-    });
-
-    html += "</body></html>";
-    // Add zero stock section before closing
-    var zeroItems = inv.filter(function(m) { return !m.stock || m.stock <= 0; });
-    if (zeroItems.length > 0) {
-      var zeroHtml = "<h3>Out of Stock Items (" + zeroItems.length + ")</h3><table><tr><th>#</th><th>Medicine</th><th>Batch</th><th>MRP</th><th>Distributor</th><th>Sold in Period</th><th>Last Purchase</th></tr>";
-      zeroItems.forEach(function(m, i) {
-        var wasSold = allMeds.find(function(s) { return s.name === m.name; });
-        zeroHtml += "<tr style='background:#FEF2F2'><td>" + (i+1) + "</td><td>" + m.name + "</td><td>" + (m.batch||"-") + "</td><td>Rs." + f2(m.mrp) + "</td><td>" + (m.purchaseDistributor||m.distributor||"-") + "</td><td>" + (wasSold ? wasSold.qty + " units (Rs." + f2(wasSold.revenue) + ")" : "None") + "</td><td>" + (m.purchaseDate ? fD(m.purchaseDate) : "-") + "</td></tr>";
-      });
-      zeroHtml += "</table>";
-      html = html.replace("</body>", zeroHtml + "</body>");
-    }
-    var w = window.open("", "_blank");
-    if (w) { w.document.write(html); w.document.close(); w.print(); }
-  };
-
-  var sendWhatsApp = function() {
-    var pLabel = period === "today" ? "Today" : period === "week" ? "This Week" : period === "month" ? "This Month" : from + " to " + to;
-    var msg = "*A to Z Pharmacy — Sales Report*\n";
-    msg += "Period: " + pLabel + "\nGenerated: " + new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) + "\n\n";
-    msg += "*Summary*\n";
-    msg += "Bills: " + filtered.length + "\n";
-    msg += "Revenue: Rs." + f2(totalRevenue) + "\n";
-    msg += "Cost: Rs." + f2(totalCost) + "\n";
-    msg += "Discounts: Rs." + f2(totalDisc) + "\n";
-    msg += "Profit: Rs." + f2(totalProfit) + " (" + f2(totalMargin) + "%)\n\n";
-
-    if (allMeds.length > 0) {
-      msg += "*Medicines Sold (" + allMeds.length + ")*\n";
-      allMeds.forEach(function(m, i) {
-        var pr = m.revenue - m.cost;
-        var stockLeft = getStock(m.name, m.mid);
-        msg += (i + 1) + ". " + m.name + " — Qty: " + m.qty + " | Rev: Rs." + f2(m.revenue) + " | Profit: Rs." + f2(pr) + " | Stock: " + stockLeft + "\n";
-      });
-      msg += "\n";
-    }
-
-    if (sorted.length > 0) {
-      msg += "*Bill Details (" + sorted.length + ")*\n";
-      sorted.forEach(function(b) {
-        var bp = billProfit(b);
-        msg += b.billNo + " | " + (b.dateIST || fDT(b.date)) + " | " + b.patient + " | Rs." + f2(b.netAmount) + " | Profit: Rs." + f2(bp.profit) + "\n";
-        b.items.forEach(function(it) {
-          var rev = itemRevenue(it);
-          msg += "  - " + it.name + (it.loose ? " [L]" : "") + " x" + it.qty + " @ Rs." + f2(it.unitPrice || it.mrp) + " = Rs." + f2(rev) + "\n";
-        });
-      });
-      msg += "\n";
-    }
-
-    var zeroItems = inv.filter(function(m) { return !m.stock || m.stock <= 0; });
-    if (zeroItems.length > 0) {
-      msg += "*Out of Stock (" + zeroItems.length + ")*\n";
-      zeroItems.forEach(function(m, i) {
-        var wasSold = allMeds.find(function(s) { return s.name === m.name; });
-        msg += (i + 1) + ". " + m.name + " | MRP: Rs." + f2(m.mrp) + (wasSold ? " | Sold: " + wasSold.qty + " units" : "") + " | " + (m.purchaseDistributor || m.distributor || "-") + "\n";
-      });
-    }
-
-    var url = "https://wa.me/918884762255?text=" + encodeURIComponent(msg);
-    window.open(url, "_blank");
-  };
-
-
-  return (
-    <div><h2 style={hds}>Sales & Profit Reports</h2>
-
-      <div style={{ display: "flex", gap: 3, background: "#E8E4DD", borderRadius: 7, padding: 3, marginBottom: 12, flexWrap: "wrap" }}>
-        {[["today","Today"],["week","This Week"],["month","This Month"],["custom","Custom Range"]].map(function(x) { return <button key={x[0]} onClick={function(){setPeriod(x[0]);}} style={{ padding: "7px 14px", border: "none", borderRadius: 5, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: period === x[0] ? "#fff" : "transparent", color: period === x[0] ? "#0D6B5B" : "#888" }}>{x[1]}</button>; })}
-      </div>
-      {period === "custom" && <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
-        <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>From</label><input type="date" value={from} onChange={function(e){setFrom(e.target.value);}} style={inps} /></div>
-        <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>To</label><input type="date" value={to} onChange={function(e){setTo(e.target.value);}} style={inps} /></div>
-      </div>}
-
-      <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(6,1fr)", gap: 10, marginBottom: 20 }}>
-        <Stat icon="🧾" label="Bills" value={filtered.length} color="#2563EB" />
-        <Stat icon="💰" label="Revenue" value={"Rs." + f2(totalRevenue)} color="#059669" />
-        <Stat icon="📦" label="Cost" value={"Rs." + f2(totalCost)} color="#B45309" />
-        <Stat icon="🏷" label="Discounts" value={"Rs." + f2(totalDisc)} color="#DC2626" />
-        <Stat icon="📈" label={"Profit (" + f2(totalMargin) + "%)"} value={"Rs." + f2(totalProfit)} color={totalProfit >= 0 ? "#059669" : "#DC2626"} />
-        <Stat icon="🚫" label="Out of Stock" value={inv.filter(function(m) { return !m.stock || m.stock <= 0; }).length} color="#DC2626" />
-      </div>
-
-      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-        <button onClick={printReport} style={{ ...bts(true), padding: "10px 20px", fontSize: 13 }}>🖨 Print Report</button>
-        <button onClick={sendWhatsApp} style={{ border: "none", borderRadius: 8, padding: "10px 20px", fontWeight: 600, cursor: "pointer", fontSize: 13, background: "#25D366", color: "#fff", fontFamily: "inherit" }}>📱 Send to WhatsApp</button>
-      </div>
-
-      {/* ALL medicines sold */}
-      {allMeds.length > 0 && <div style={{ ...cds, marginBottom: 16 }}>
-        <b style={{ fontSize: 14 }}>All Medicines Sold ({allMeds.length})</b>
-        {mob ? <div style={{ marginTop: 10 }}>
-          {allMeds.map(function(m, i) {
-            var pr = m.revenue - m.cost; var mg = m.revenue > 0 ? (pr / m.revenue * 100) : 0;
-            var stockLeft = getStock(m.name, m.mid);
-            return <div key={i} style={{ padding: 10, marginBottom: 6, borderRadius: 10, border: "1px solid #eee", background: "#FAFAF7", borderLeft: "3px solid " + (pr >= 0 ? "#059669" : "#DC2626") }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <div style={{ flex: 1 }}><span style={{ fontWeight: 700, fontSize: 13 }}>{i + 1}. {m.name}</span></div>
-                <div style={{ textAlign: "right" }}><div style={{ fontWeight: 800, color: pr >= 0 ? "#059669" : "#DC2626" }}>Rs.{f2(pr)}</div><div style={{ fontSize: 10, color: "#888" }}>{f2(mg)}%</div></div>
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#888", marginTop: 4 }}>
-                <span>Qty: {m.qty} | Rev: Rs.{f2(m.revenue)} | Cost: Rs.{f2(m.cost)}</span>
-                <span style={{ fontWeight: 600, color: stockLeft === "0" ? "#DC2626" : "#059669" }}>Stock: {stockLeft}</span>
-              </div>
-            </div>;
-          })}
-        </div> :
-        <div style={{ overflowX: "auto", marginTop: 10 }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
-          {["#","Medicine","Qty","Revenue","Cost","Profit","Margin%","Bills","Stock Left"].map(function(h) { return <th key={h} style={ths}>{h}</th>; })}</tr></thead><tbody>
-          {allMeds.map(function(m, i) {
-            var pr = m.revenue - m.cost; var mg = m.revenue > 0 ? (pr / m.revenue * 100) : 0;
-            var stockLeft = getStock(m.name, m.mid);
-            return <tr key={i}>
-              <td style={{ ...tds, color: "#888" }}>{i + 1}</td>
-              <td style={{ ...tds, fontWeight: 600 }}>{m.name}</td>
-              <td style={tds}>{m.qty}</td>
-              <td style={{ ...tds, fontWeight: 600 }}>Rs.{f2(m.revenue)}</td>
-              <td style={{ ...tds, color: "#B45309" }}>Rs.{f2(m.cost)}</td>
-              <td style={{ ...tds, fontWeight: 700, color: pr >= 0 ? "#059669" : "#DC2626" }}>Rs.{f2(pr)}</td>
-              <td style={{ ...tds, fontWeight: 600, color: mg >= 20 ? "#059669" : mg >= 10 ? "#D97706" : "#DC2626" }}>{f2(mg)}%</td>
-              <td style={tds}>{m.bills}</td>
-              <td style={tds}><span style={{ fontWeight: 600, color: stockLeft === "0" ? "#DC2626" : "#059669" }}>{stockLeft}</span></td>
-            </tr>;
-          })}</tbody></table></div>}
-      </div>}
-
-      {/* Bill details with profit */}
-      {sorted.length > 0 && <div style={cds}>
-        <b style={{ fontSize: 14 }}>Bill Details ({sorted.length})</b>
-        <div style={{ marginTop: 10 }}>
-          {sorted.map(function(b) {
-            var isExp = expanded === b.billNo;
-            var bp = billProfit(b);
-            return <div key={b.billNo} style={{ marginBottom: 8, borderRadius: 10, border: "1px solid #eee", overflow: "hidden" }}>
-              <div onClick={function() { setExpanded(isExp ? null : b.billNo); }} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: mob ? "10px 12px" : "10px 14px", background: isExp ? "#F0FDF4" : "#FAFAF7", cursor: "pointer", borderLeft: "3px solid #0D6B5B", flexWrap: "wrap", gap: 4 }}>
-                <div>
-                  <span style={{ fontFamily: "monospace", fontWeight: 700, color: "#0D6B5B", fontSize: 13 }}>{b.billNo}</span>
-                  <span style={{ color: "#888", fontSize: 11, marginLeft: 8 }}>{b.dateIST || fDT(b.date)}</span>
-                  {!mob && <span style={{ marginLeft: 8, fontSize: 12 }}>{b.patient}</span>}
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  {!mob && <Tag bg={b.paymentMode === "Cash" ? "#D1FAE5" : "#DBEAFE"} fg={b.paymentMode === "Cash" ? "#065F46" : "#1E40AF"}>{b.paymentMode}</Tag>}
-                  <b style={{ fontSize: 13, color: "#0C2E24" }}>Rs.{f2(b.netAmount)}</b>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: bp.profit >= 0 ? "#059669" : "#DC2626" }}>P: Rs.{f2(bp.profit)}</span>
-                  <span style={{ fontSize: 11, color: "#888" }}>{f2(bp.margin)}%</span>
-                  <span style={{ fontSize: 12, color: "#888" }}>{isExp ? "▲" : "▼"}</span>
-                </div>
-              </div>
-              {mob && !isExp && <div style={{ padding: "4px 12px 8px", background: "#FAFAF7", fontSize: 11, color: "#888", display: "flex", justifyContent: "space-between" }}>
-                <span>{b.patient}</span><Tag bg={b.paymentMode === "Cash" ? "#D1FAE5" : "#DBEAFE"} fg={b.paymentMode === "Cash" ? "#065F46" : "#1E40AF"}>{b.paymentMode}</Tag>
-              </div>}
-              {isExp && <div style={{ padding: mob ? 10 : 14, background: "#fff" }}>
-                {mob ? <div>
-                  {b.items.map(function(it, i) {
-                    var rev = itemRevenue(it); var cost = itemCost(it); var pr = rev - cost;
-                    var stockLeft = getStock(it.name, it.mid);
-                    return <div key={i} style={{ padding: "8px 0", borderBottom: i < b.items.length - 1 ? "1px solid #eee" : "none", fontSize: 12 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <div><b>{it.name}</b>{it.loose && <span style={{ color: "#B45309", fontSize: 10, marginLeft: 4 }}>[L]</span>}</div>
-                        <b>Rs.{f2(rev)}</b>
-                      </div>
-                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#888", marginTop: 2 }}>
-                        <span>Qty: {it.qty} @ Rs.{f2(it.unitPrice || it.mrp)}{it.discount ? " (-" + it.discount + "%)" : ""}</span>
-                        <span style={{ fontWeight: 600, color: stockLeft === "0" ? "#DC2626" : "#059669" }}>Stock: {stockLeft}</span>
-                      </div>
-                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginTop: 2 }}>
-                        <span style={{ color: "#B45309" }}>Cost: Rs.{f2(cost)}</span>
-                        <span style={{ fontWeight: 700, color: pr >= 0 ? "#059669" : "#DC2626" }}>Profit: Rs.{f2(pr)}</span>
-                      </div>
-                    </div>;
-                  })}
-                </div> :
-                <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
-                  {["Medicine","Type","Qty","Price","Disc%","Revenue","Cost","Profit","Stock Left"].map(function(h) { return <th key={h} style={{ ...ths, fontSize: 11, background: "#DCFCE7" }}>{h}</th>; })}</tr></thead><tbody>
-                  {b.items.map(function(it, i) {
-                    var rev = itemRevenue(it); var cost = itemCost(it); var pr = rev - cost;
-                    var stockLeft = getStock(it.name, it.mid);
-                    return <tr key={i}>
-                      <td style={{ ...tds, fontWeight: 500 }}>{it.name}</td>
-                      <td style={tds}>{it.loose ? <Tag bg="#FEF3C7" fg="#92400E">Loose</Tag> : <Tag bg="#DBEAFE" fg="#1E40AF">Pack</Tag>}</td>
-                      <td style={tds}>{it.qty}{it.loose ? " pcs" : ""}</td>
-                      <td style={tds}>Rs.{f2(it.unitPrice || it.mrp)}</td>
-                      <td style={tds}>{it.discount || 0}%</td>
-                      <td style={{ ...tds, fontWeight: 600 }}>Rs.{f2(rev)}</td>
-                      <td style={{ ...tds, color: "#B45309" }}>Rs.{f2(cost)}</td>
-                      <td style={{ ...tds, fontWeight: 700, color: pr >= 0 ? "#059669" : "#DC2626" }}>Rs.{f2(pr)}</td>
-                      <td style={tds}><span style={{ fontWeight: 600, color: stockLeft === "0" ? "#DC2626" : "#059669" }}>{stockLeft}</span></td>
-                    </tr>;
-                  })}</tbody></table>}
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8, paddingTop: 8, borderTop: "1px solid #eee", flexWrap: "wrap", gap: 6 }}>
-                  <button onClick={function() { showBill(b, true); }} style={{ ...bts(true), padding: "6px 14px", fontSize: 11 }}>View Full Bill</button>
-                  <div style={{ fontSize: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
-                    <span>Rev: <b>Rs.{f2(bp.rev)}</b></span>
-                    <span style={{ color: "#B45309" }}>Cost: Rs.{f2(bp.cost)}</span>
-                    <span style={{ fontWeight: 800, color: bp.profit >= 0 ? "#059669" : "#DC2626" }}>Profit: Rs.{f2(bp.profit)} ({f2(bp.margin)}%)</span>
-                  </div>
-                </div>
-              </div>}
-            </div>;
-          })}
-        </div>
-      </div>}
-
-      {sorted.length === 0 && <div style={{ ...cds, textAlign: "center", padding: 40, color: "#888" }}>
-        <div style={{ fontSize: 40, marginBottom: 12, opacity: 0.3 }}>📑</div>
-        <div style={{ fontSize: 14 }}>No sales found for the selected period</div>
-      </div>}
-
-      {/* Zero Stock Items */}
-      {(function() {
-        var zeroItems = inv.filter(function(m) { return !m.stock || m.stock <= 0; });
-        if (zeroItems.length === 0) return null;
-        return <div style={{ ...cds, marginTop: 16, borderLeft: "4px solid #DC2626" }}>
-          <b style={{ fontSize: 14, color: "#DC2626" }}>Out of Stock ({zeroItems.length})</b>
-          <div style={{ fontSize: 11, color: "#888", marginBottom: 10 }}>Items with zero inventory — need reorder</div>
-          {mob ? <div>
-            {zeroItems.map(function(m) {
-              var wasSold = allMeds.find(function(s) { return s.name === m.name; });
-              return <div key={m.id} style={{ padding: 10, marginBottom: 6, borderRadius: 10, border: "1px solid #FEE2E2", background: "#FEF2F2", borderLeft: "3px solid #DC2626" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div><span style={{ fontWeight: 700, fontSize: 13 }}>{m.name}</span>
-                    <div style={{ fontSize: 11, color: "#888" }}>{m.batch || "-"} | {m.distributor || "-"}</div></div>
-                  <div style={{ textAlign: "right" }}>
-                    <div style={{ fontWeight: 700, color: "#DC2626" }}>Out of Stock</div>
-                    {wasSold && <div style={{ fontSize: 11, color: "#B45309" }}>Sold {wasSold.qty} in period</div>}
-                  </div>
-                </div>
-              </div>;
-            })}
-          </div> :
-          <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
-            {["Medicine","Batch","MRP","Distributor","Sold in Period","Last Purchase"].map(function(h) { return <th key={h} style={ths}>{h}</th>; })}</tr></thead><tbody>
-            {zeroItems.map(function(m) {
-              var wasSold = allMeds.find(function(s) { return s.name === m.name; });
-              return <tr key={m.id} style={{ background: "#FEF2F2" }}>
-                <td style={{ ...tds, fontWeight: 600 }}>{m.name}</td>
-                <td style={{ ...tds, fontFamily: "monospace", fontSize: 11 }}>{m.batch || "-"}</td>
-                <td style={tds}>Rs.{f2(m.mrp)}</td>
-                <td style={{ ...tds, fontSize: 11, color: "#888" }}>{m.purchaseDistributor || m.distributor || "-"}</td>
-                <td style={tds}>{wasSold ? <span style={{ fontWeight: 600, color: "#B45309" }}>{wasSold.qty} units (Rs.{f2(wasSold.revenue)})</span> : <span style={{ color: "#aaa" }}>None</span>}</td>
-                <td style={{ ...tds, fontSize: 11, color: "#888" }}>{m.purchaseDate ? fD(m.purchaseDate) : "-"}</td>
-              </tr>;
-            })}</tbody></table></div>}
-        </div>;
-      })()}
     </div>
   );
 }
@@ -3574,16 +2909,15 @@ function App() {
           <div style={{ width: 30, height: 30, borderRadius: 7, background: "#E8E4DD", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13 }}>{isO ? "👑" : "👤"}</div></div>}
         <div style={{ flex: 1, padding: mob ? 14 : 24, overflow: "auto" }}>
           {page === "dash" && <DashPage inv={inv} bills={bills} purch={purch} isO={isO} mob={mob} />}
-          {page === "purch" && <PurchPage purch={purch} addPurchase={addPurchase} deletePurchase={deletePurchase} mob={mob} askConfirm={askConfirm} inv={inv} saveInv={saveInv} bills={bills} saveBills={saveBills} />}
-          {page === "returns" && <ReturnsPage purch={purch} inv={inv} saveInv={saveInv} savePurch={savePurch} mob={mob} askConfirm={askConfirm} bills={bills} saveBills={saveBills} />}
+          {page === "purch" && isO && <PurchPage purch={purch} addPurchase={addPurchase} deletePurchase={deletePurchase} mob={mob} askConfirm={askConfirm} inv={inv} saveInv={saveInv} bills={bills} saveBills={saveBills} />}
+          {page === "returns" && isO && <ReturnsPage purch={purch} inv={inv} saveInv={saveInv} savePurch={savePurch} mob={mob} askConfirm={askConfirm} />}
           {page === "inv" && <InvPage inv={inv} saveInv={saveInv} isO={isO} mob={mob} askConfirm={askConfirm} bills={bills} showBill={showBill} />}
           {page === "rack" && <RackPage inv={inv} saveInv={saveInv} mob={mob} />}
-          {page === "audit" && <AuditPage inv={inv} mob={mob} />}
+          {page === "audit" && isO && <AuditPage inv={inv} mob={mob} />}
           {page === "bill" && <BillPage inv={inv} saveInv={saveInv} addBill={addBill} mob={mob} showBill={showBill} />}
-          {page === "profit" && isO && <ProfitPage bills={bills} inv={inv} mob={mob} purch={purch} saveBills={saveBills} />}
+          {page === "profit" && isO && <ProfitPage bills={bills} inv={inv} mob={mob} />}
           {page === "stock" && <StockPage inv={inv} saveInv={saveInv} isO={isO} mob={mob} />}
-          {page === "hist" && <HistPage bills={bills} showBill={showBill} saveBills={saveBills} askConfirm={askConfirm} inv={inv} saveInv={saveInv} purch={purch} />}
-          {page === "reports" && <ReportsPage bills={bills} inv={inv} mob={mob} showBill={showBill} />}
+          {page === "hist" && <HistPage bills={bills} showBill={showBill} saveBills={saveBills} askConfirm={askConfirm} inv={inv} saveInv={saveInv} />}
           {page === "ency" && <EncyclopediaPage inv={inv} mob={mob} />}
           {page === "users" && isO && <UsersPage sessions={sessions} mob={mob} />}
           {page === "backup" && isO && <BackupPage inv={inv} bills={bills} purch={purch} saveAll={saveAll} askConfirm={askConfirm} saveInv={saveInv} saveBills={saveBills} />}
