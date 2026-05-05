@@ -712,7 +712,7 @@ function DashPage({ inv, bills, purch, isO, mob }) {
   const tc = tb.reduce((s, b) => s + b.items.reduce((ss, i) => {
     var p = i.unitPtr || 0;
     if (!p && i.ptr) p = i.loose ? i.ptr / (i.packQty || 10) : i.ptr;
-    var cost = p * (1 - (i.purchDiscPct || 0) / 100) * (1 - (i.purchSchemePct || 0) / 100) * (i.purchFreeRatio || 1);
+    var cost = p * (1 - (i.purchDiscPct || 0) / 100) * (1 - (i.purchSchemePct || 0) / 100) * (1 + (i.gstRate || 0) / 100) * (i.purchFreeRatio || 1);
     return ss + cost * i.qty;
   }, 0), 0);
   return (
@@ -2313,8 +2313,8 @@ function ProfitPage({ bills, inv, mob, purch, saveBills }) {
     const salePrice = (it.unitPrice || it.mrp) * it.qty;
     const discAmt = salePrice * (it.discount || 0) / 100;
     const netSale = salePrice - discAmt;
-    // Cost = PTR per unit (WITHOUT GST  -  GST is recovered via ITC)
-    // Use unitPtr (per-unit, already adjusted for loose) > ptr/packQty for loose > ptr for full
+    // Cost = PTR + GST (actual amount paid to distributor per unit)
+    // Adjusted for purchase discount, scheme, and free items
     var ptrPerUnit = 0;
     if (it.unitPtr && it.unitPtr > 0) {
       ptrPerUnit = it.unitPtr;
@@ -2324,7 +2324,8 @@ function ProfitPage({ bills, inv, mob, purch, saveBills }) {
     var purchDisc = it.purchDiscPct || 0;
     var scheme = it.purchSchemePct || 0;
     var freeRatio = it.purchFreeRatio || 1;
-    var costPerUnit = ptrPerUnit * (1 - purchDisc / 100) * (1 - scheme / 100) * freeRatio;
+    var gst = it.gstRate || 0;
+    var costPerUnit = ptrPerUnit * (1 - purchDisc / 100) * (1 - scheme / 100) * (1 + gst / 100) * freeRatio;
     const totalCost = costPerUnit * it.qty;
     return { netSale, totalCost, profit: netSale - totalCost, margin: netSale > 0 ? ((netSale - totalCost) / netSale * 100) : 0 };
   };
@@ -2343,6 +2344,9 @@ function ProfitPage({ bills, inv, mob, purch, saveBills }) {
   };
 
   const fl = filterBills(bills);
+  const [profitExpand, setProfitExpand] = useState(null);
+  var getStockForItem = function(it) { var m = inv.find(function(x) { return x.id === it.mid; }); if (!m) m = inv.find(function(x) { return x.name === it.name; }); return m ? fStock(m.stock, m.packQty) : "0"; };
+
   const totals = fl.reduce((acc, b) => { const p = calcBillProfit(b); return { sale: acc.sale + p.netSale, cost: acc.cost + p.totalCost, disc: acc.disc + p.totalDisc, profit: acc.profit + p.profit }; }, { sale: 0, cost: 0, disc: 0, profit: 0 });
   const overallMargin = totals.sale > 0 ? (totals.profit / totals.sale * 100) : 0;
 
@@ -2447,19 +2451,50 @@ function ProfitPage({ bills, inv, mob, purch, saveBills }) {
 
       <div style={cds}><b>Bill-wise Breakdown ({fl.length})</b>
         {fl.length === 0 ? <p style={{ color: "#aaa", textAlign: "center", padding: 16, fontSize: 12 }}>No bills in this period</p> :
-        <div style={{ overflowX: "auto", marginTop: 10 }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: 650 }}><thead><tr>
-          {["Bill","Date","Patient","Net Sale","Discounts","Cost","Profit","Margin %"].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
-          {[...fl].reverse().map((b) => { const p = calcBillProfit(b);
-            return (<tr key={b.billNo}>
-              <td style={{ ...tds, fontFamily: "monospace", fontWeight: 600, color: "#0D6B5B" }}>{b.billNo}</td>
-              <td style={tds}>{fD(b.date)}</td>
-              <td style={tds}>{b.patient}</td>
-              <td style={{ ...tds, fontWeight: 600 }}>Rs.{f2(p.netSale)}</td>
-              <td style={{ ...tds, color: "#DC2626" }}>Rs.{f2(p.totalDisc)}</td>
-              <td style={{ ...tds, color: "#B45309" }}>Rs.{f2(p.totalCost)}</td>
-              <td style={{ ...tds, fontWeight: 700, color: p.profit >= 0 ? "#059669" : "#DC2626" }}>Rs.{f2(p.profit)}</td>
-              <td style={{ ...tds, fontWeight: 600, color: p.margin >= 20 ? "#059669" : p.margin >= 10 ? "#D97706" : "#DC2626" }}>{f2(p.margin)}%</td>
-            </tr>); })}</tbody></table></div>}
+        <div style={{ marginTop: 10 }}>
+          {[...fl].reverse().map(function(b) { var p = calcBillProfit(b); var isExp = profitExpand === b.billNo;
+            return <div key={b.billNo} style={{ marginBottom: 6, borderRadius: 10, border: "1px solid #eee", overflow: "hidden" }}>
+              <div onClick={function() { setProfitExpand(isExp ? null : b.billNo); }} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", background: isExp ? "#F0FDF4" : "#FAFAF7", cursor: "pointer", borderLeft: "3px solid " + (p.profit >= 0 ? "#059669" : "#DC2626"), flexWrap: "wrap", gap: 4 }}>
+                <div><span style={{ fontFamily: "monospace", fontWeight: 700, color: "#0D6B5B", fontSize: 13 }}>{b.billNo}</span><span style={{ color: "#888", fontSize: 11, marginLeft: 8 }}>{fD(b.date)} | {b.patient}</span></div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12 }}>
+                  <span>Sale: <b>Rs.{f2(p.netSale)}</b></span><span style={{ color: "#B45309" }}>Cost: Rs.{f2(p.totalCost)}</span>
+                  <span style={{ fontWeight: 800, color: p.profit >= 0 ? "#059669" : "#DC2626" }}>Rs.{f2(p.profit)}</span>
+                  <span style={{ fontWeight: 600, color: p.margin >= 20 ? "#059669" : p.margin >= 10 ? "#D97706" : "#DC2626" }}>{f2(p.margin)}%</span>
+                  <span style={{ color: "#888" }}>{isExp ? "\u25B2" : "\u25BC"}</span>
+                </div>
+              </div>
+              {isExp && <div style={{ padding: 14, background: "#fff", overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
+                  {["Medicine","Type","Qty","Sale Price","Disc%","Sale Amt","PTR","GST%","Cost","Profit","Margin%","Stock"].map(function(h) { return <th key={h} style={{ ...ths, fontSize: 10, background: "#DCFCE7" }}>{h}</th>; })}</tr></thead><tbody>
+                  {b.items.map(function(it, i) {
+                    var iP = calcItemProfit(it);
+                    var iM = iP.netSale > 0 ? (iP.profit / iP.netSale * 100) : 0;
+                    var sl = getStockForItem(it);
+                    var ptrVal = it.unitPtr || (it.loose && it.ptr ? it.ptr / (it.packQty || 10) : it.ptr) || 0;
+                    return <tr key={i}>
+                      <td style={{ ...tds, fontWeight: 500 }}>{it.name}</td>
+                      <td style={tds}>{it.loose ? <Tag bg="#FEF3C7" fg="#92400E">Loose</Tag> : <Tag bg="#DBEAFE" fg="#1E40AF">Pack</Tag>}</td>
+                      <td style={tds}>{it.qty}{it.loose ? " pcs" : ""}</td>
+                      <td style={tds}>Rs.{f2(it.unitPrice || it.mrp)}</td>
+                      <td style={tds}>{it.discount || 0}%</td>
+                      <td style={{ ...tds, fontWeight: 600 }}>Rs.{f2(iP.netSale)}</td>
+                      <td style={{ ...tds, color: "#2563EB", fontSize: 11 }}>Rs.{f2(ptrVal)}</td>
+                      <td style={{ ...tds, fontSize: 11 }}>{it.gstRate || 0}%</td>
+                      <td style={{ ...tds, color: "#B45309" }}>Rs.{f2(iP.totalCost)}</td>
+                      <td style={{ ...tds, fontWeight: 700, color: iP.profit >= 0 ? "#059669" : "#DC2626" }}>Rs.{f2(iP.profit)}</td>
+                      <td style={{ ...tds, fontWeight: 600, color: iM >= 20 ? "#059669" : iM >= 10 ? "#D97706" : "#DC2626" }}>{f2(iM)}%</td>
+                      <td style={tds}><span style={{ fontWeight: 600, color: sl === "0" ? "#DC2626" : "#059669" }}>{sl}</span></td>
+                    </tr>;
+                  })}</tbody></table>
+                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8, paddingTop: 8, borderTop: "1px solid #eee", gap: 12, fontSize: 12 }}>
+                  {p.totalDisc > 0 && <span style={{ color: "#DC2626" }}>Discounts: -Rs.{f2(p.totalDisc)}</span>}
+                  <span style={{ color: "#B45309" }}>Total Cost: Rs.{f2(p.totalCost)}</span>
+                  <span style={{ fontWeight: 800, color: p.profit >= 0 ? "#059669" : "#DC2626" }}>Net Profit: Rs.{f2(p.profit)} ({f2(p.margin)}%)</span>
+                </div>
+              </div>}
+            </div>;
+          })}
+        </div>}
       </div>
     </div>
   );
@@ -2575,17 +2610,24 @@ function RackPage({ inv, saveInv, mob }) {
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: meds.length > 0 ? 8 : 0 }}>
                   <b style={{ fontSize: 15, color: "#0D6B5B" }}>{r}</b>
                   <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                    {meds.length > 0 && <Tag bg="#D1FAE5" fg="#065F46">{meds.length} items | {meds.reduce(function(s,m){return s + (m.stock||0);},0)} units</Tag>}
+                    {meds.length > 0 && <Tag bg="#D1FAE5" fg="#065F46">{meds.length} items | {Math.floor(meds.reduce(function(s,m){return s + (m.stock||0);},0))} units</Tag>}
                     {selected.length > 0 && <button onClick={function() { assignToRack(r, selected); }} style={{ ...bts(true), padding: "4px 10px", fontSize: 11 }}>Assign {selected.length}</button>}
                   </div>
                 </div>
-                {meds.length > 0 && <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                {meds.length > 0 && <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                   {meds.map(function(m) {
+                    var stockColor = m.stock <= 0 ? "#DC2626" : m.stock < 3 ? "#D97706" : "#059669";
                     return (
-                      <div key={m.id} style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 8px", background: "#EFF6FF", borderRadius: 6, fontSize: 11 }}>
-                        <span>{m.name}</span>
-                        <span style={{ color: "#0D6B5B", fontWeight: 600, fontSize: 10 }}>({fStock(m.stock, m.packQty)})</span>
-                        <button onClick={function() { removeFromRack(m.id); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#DC2626", fontSize: 12, padding: 0 }}>x</button>
+                      <div key={m.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 10px", background: m.stock <= 0 ? "#FEF2F2" : "#EFF6FF", borderRadius: 6, fontSize: 11, border: m.stock <= 0 ? "1px solid #FCA5A5" : "1px solid #DBEAFE" }}>
+                        <div style={{ flex: 1 }}>
+                          <b>{m.name}</b>
+                          <span style={{ color: "#888", marginLeft: 4, fontSize: 10 }}>{m.batch}</span>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <span style={{ color: stockColor, fontWeight: 700, fontSize: 12 }}>{fStock(m.stock, m.packQty)}</span>
+                          <span style={{ color: "#888", fontSize: 10 }}>MRP:{f2(m.mrp)}</span>
+                          <button onClick={function() { removeFromRack(m.id); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#DC2626", fontSize: 12, padding: 0 }}>x</button>
+                        </div>
                       </div>
                     );
                   })}
@@ -2768,7 +2810,7 @@ function AuditPage({ inv, mob }) {
           return <div key={rack} style={{ ...cds, borderLeft: "4px solid #0D6B5B" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
               <b style={{ fontSize: 15, color: "#0D6B5B" }}>{rack}</b>
-              <Tag bg="#D1FAE5" fg="#065F46">{meds.length} items</Tag>
+              <Tag bg="#D1FAE5" fg="#065F46">{meds.length} items | {Math.floor(meds.reduce(function(s,m){return s+(m.stock||0);},0))} units</Tag>
             </div>
             {meds.map(renderMedRow)}
           </div>;
@@ -3105,7 +3147,7 @@ function ReportsPage({ bills, inv, mob, showBill }) {
   var itemCost = function(it) {
     var p = it.unitPtr || 0;
     if (!p && it.ptr) p = it.loose ? it.ptr / (it.packQty || 10) : it.ptr;
-    var cost = p * (1 - (it.purchDiscPct || 0) / 100) * (1 - (it.purchSchemePct || 0) / 100) * (it.purchFreeRatio || 1);
+    var cost = p * (1 - (it.purchDiscPct || 0) / 100) * (1 - (it.purchSchemePct || 0) / 100) * (1 + (it.gstRate || 0) / 100) * (it.purchFreeRatio || 1);
     return cost * it.qty;
   };
 
