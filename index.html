@@ -120,6 +120,19 @@ function fStock(stock, packQty) {
   return packs + "." + String(loose).padStart(2, "0");
 }
 
+// Parse stock display format back to internal decimal
+// e.g. "2.13" with packQty=15 → 2 + 13/15 = 2.8667
+// e.g. "5" → 5.0  |  "3.05" with packQty=10 → 3.5
+function parseStockInput(val, packQty) {
+  var s = String(val).trim();
+  var pq = packQty || 10;
+  var dot = s.indexOf(".");
+  if (dot === -1) return parseFloat(s) || 0;
+  var packs = parseInt(s.substring(0, dot)) || 0;
+  var loose = parseInt(s.substring(dot + 1)) || 0;
+  return Math.round((packs + loose / pq) * 10000) / 10000;
+}
+
 // ══════════════════════════════════════════════
 // FIREBASE DATABASE HELPERS (real-time sync)
 // ══════════════════════════════════════════════
@@ -1030,8 +1043,9 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
   };
 
   const doSave = () => { if (!fm.name || !fm.batch) { alert("Name and Batch required"); return; }
-    if (ed) saveInv(inv.map((m) => m.id === ed ? { ...fm, id: ed, uid: m.uid || mkUID() } : m));
-    else saveInv([...inv, { ...fm, id: mkId(), addedFrom: "manual", uid: mkUID() }]);
+    const { _stockDisplay, ...fmClean } = fm;
+    if (ed) saveInv(inv.map((m) => m.id === ed ? { ...fmClean, id: ed, uid: m.uid || mkUID() } : m));
+    else saveInv([...inv, { ...fmClean, id: mkId(), addedFrom: "manual", uid: mkUID() }]);
     setSf(false); setEd(null); setFm(blank); };
   const doDelete = (id) => { askConfirm("Delete this medicine?", () => saveInv(inv.filter((x) => x.id !== id))); };
 
@@ -1066,7 +1080,8 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
       {sf && <div style={{ ...cds, border: "2px solid #0D6B5B" }}><b style={{ color: "#0D6B5B" }}>{ed ? "Edit" : "Add"} Medicine</b>
         <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "1fr 1fr 1fr 1fr", gap: 10, marginTop: 12 }}>
           {[["name","Name*"],["manufacturer","Mfg"],["batch","Batch*"],["expiry","Expiry"],["pack","Pack"],["rack","Rack"],["distributor","Distributor"],["hsn","HSN"]].map(([k, l]) => <div key={k}><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>{l}</label><input value={fm[k] || ""} onChange={(e) => setFm((f) => ({ ...f, [k]: e.target.value }))} style={inps} /></div>)}
-          {[["mrp","MRP"],["ptr","PTR"],["stock","Stock"],["gstRate","GST%"],["packQty","Pack Qty"]].map(([k, l]) => <div key={k}><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>{l}</label><input type="number" value={fm[k] || 0} onChange={(e) => setFm((f) => ({ ...f, [k]: Number(e.target.value) }))} style={inps} /></div>)}
+          {[["mrp","MRP"],["ptr","PTR"],["gstRate","GST%"],["packQty","Pack Qty"]].map(([k, l]) => <div key={k}><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>{l}</label><input type="number" value={fm[k] || 0} onChange={(e) => setFm((f) => ({ ...f, [k]: Number(e.target.value) }))} style={inps} /></div>)}
+          <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Stock <span style={{ fontWeight: 400, color: "#aaa" }}>(packs.tablets)</span></label><input type="text" value={fm._stockDisplay !== undefined ? fm._stockDisplay : fStock(fm.stock, fm.packQty)} onChange={(e) => setFm((f) => ({ ...f, _stockDisplay: e.target.value, stock: parseStockInput(e.target.value, f.packQty) }))} onBlur={() => setFm((f) => ({ ...f, _stockDisplay: undefined }))} style={inps} /></div>
         </div><div style={{ display: "flex", gap: 8, marginTop: 12 }}><button onClick={doSave} style={bts(true)}>Save</button><button onClick={() => setSf(false)} style={bts(false)}>Cancel</button></div></div>}
       {/* Mobile card view */}
       {mob ? <div>
