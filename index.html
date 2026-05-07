@@ -120,19 +120,6 @@ function fStock(stock, packQty) {
   return packs + "." + String(loose).padStart(2, "0");
 }
 
-// Parse stock display format back to internal decimal
-// e.g. "2.13" with packQty=15 → 2 + 13/15 = 2.8667
-// e.g. "5" → 5.0  |  "3.05" with packQty=10 → 3.5
-function parseStockInput(val, packQty) {
-  var s = String(val).trim();
-  var pq = packQty || 10;
-  var dot = s.indexOf(".");
-  if (dot === -1) return parseFloat(s) || 0;
-  var packs = parseInt(s.substring(0, dot)) || 0;
-  var loose = parseInt(s.substring(dot + 1)) || 0;
-  return Math.round((packs + loose / pq) * 10000) / 10000;
-}
-
 // ══════════════════════════════════════════════
 // FIREBASE DATABASE HELPERS (real-time sync)
 // ══════════════════════════════════════════════
@@ -692,7 +679,7 @@ function Login({ onLogin }) {
 // ══════════════════════════════════════════════
 function Sidebar({ page, setPage, user, onLogout, counts, mob, sideOpen, setSideOpen }) {
   const isO = user.role === "owner";
-  const nav = [{ id: "dash", i: "📊", l: "Dashboard" }, ...(isO ? [{ id: "purch", i: "📦", l: "Purchases" }, { id: "returns", i: "↩️", l: "Returns" }] : []), { id: "inv", i: "💊", l: "Inventory" }, { id: "rack", i: "🗄", l: "Racks" }, ...(isO ? [{ id: "audit", i: "📝", l: "Audit" }] : []), { id: "bill", i: "🧾", l: "New Bill" }, ...(isO ? [{ id: "profit", i: "💹", l: "Profit Margin" }] : []), { id: "stock", i: "📋", l: "Stock" }, { id: "hist", i: "🗂", l: "Bills" }, ...(isO ? [{ id: "reports", i: "📑", l: "Reports" }] : []), { id: "ency", i: "📚", l: "Encyclopedia" }, ...(isO ? [{ id: "users", i: "👥", l: "Users" }, { id: "backup", i: "💾", l: "Backup" }] : [])];
+  const nav = [{ id: "dash", i: "📊", l: "Dashboard" }, ...(isO ? [{ id: "purch", i: "📦", l: "Purchases" }, { id: "returns", i: "↩️", l: "Returns" }] : []), { id: "inv", i: "💊", l: "Inventory" }, { id: "rack", i: "🗄", l: "Racks" }, ...(isO ? [{ id: "audit", i: "📝", l: "Audit" }] : []), { id: "bill", i: "🧾", l: "New Bill" }, ...(isO ? [{ id: "profit", i: "💹", l: "Profit Margin" }] : []), { id: "stock", i: "📋", l: "Stock" }, { id: "hist", i: "🗂", l: "Bills" }, ...(isO ? [{ id: "reports", i: "📑", l: "Reports" }] : []), { id: "customers", i: "👤", l: "Customers" }, { id: "ency", i: "📚", l: "Encyclopedia" }, ...(isO ? [{ id: "users", i: "👥", l: "Users" }, { id: "backup", i: "💾", l: "Backup" }] : [])];
   if (mob && !sideOpen) return null;
   return (
     <div>
@@ -1043,9 +1030,8 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
   };
 
   const doSave = () => { if (!fm.name || !fm.batch) { alert("Name and Batch required"); return; }
-    const { _stockDisplay, ...fmClean } = fm;
-    if (ed) saveInv(inv.map((m) => m.id === ed ? { ...fmClean, id: ed, uid: m.uid || mkUID() } : m));
-    else saveInv([...inv, { ...fmClean, id: mkId(), addedFrom: "manual", uid: mkUID() }]);
+    if (ed) saveInv(inv.map((m) => m.id === ed ? { ...fm, id: ed, uid: m.uid || mkUID() } : m));
+    else saveInv([...inv, { ...fm, id: mkId(), addedFrom: "manual", uid: mkUID() }]);
     setSf(false); setEd(null); setFm(blank); };
   const doDelete = (id) => { askConfirm("Delete this medicine?", () => saveInv(inv.filter((x) => x.id !== id))); };
 
@@ -1080,8 +1066,7 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
       {sf && <div style={{ ...cds, border: "2px solid #0D6B5B" }}><b style={{ color: "#0D6B5B" }}>{ed ? "Edit" : "Add"} Medicine</b>
         <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "1fr 1fr 1fr 1fr", gap: 10, marginTop: 12 }}>
           {[["name","Name*"],["manufacturer","Mfg"],["batch","Batch*"],["expiry","Expiry"],["pack","Pack"],["rack","Rack"],["distributor","Distributor"],["hsn","HSN"]].map(([k, l]) => <div key={k}><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>{l}</label><input value={fm[k] || ""} onChange={(e) => setFm((f) => ({ ...f, [k]: e.target.value }))} style={inps} /></div>)}
-          {[["mrp","MRP"],["ptr","PTR"],["gstRate","GST%"],["packQty","Pack Qty"]].map(([k, l]) => <div key={k}><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>{l}</label><input type="number" value={fm[k] || 0} onChange={(e) => setFm((f) => ({ ...f, [k]: Number(e.target.value) }))} style={inps} /></div>)}
-          <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Stock <span style={{ fontWeight: 400, color: "#aaa" }}>(packs.tablets)</span></label><input type="text" value={fm._stockDisplay !== undefined ? fm._stockDisplay : fStock(fm.stock, fm.packQty)} onChange={(e) => setFm((f) => ({ ...f, _stockDisplay: e.target.value, stock: parseStockInput(e.target.value, f.packQty) }))} onBlur={() => setFm((f) => ({ ...f, _stockDisplay: undefined }))} style={inps} /></div>
+          {[["mrp","MRP"],["ptr","PTR"],["stock","Stock"],["gstRate","GST%"],["packQty","Pack Qty"]].map(([k, l]) => <div key={k}><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>{l}</label><input type="number" value={fm[k] || 0} onChange={(e) => setFm((f) => ({ ...f, [k]: Number(e.target.value) }))} style={inps} /></div>)}
         </div><div style={{ display: "flex", gap: 8, marginTop: 12 }}><button onClick={doSave} style={bts(true)}>Save</button><button onClick={() => setSf(false)} style={bts(false)}>Cancel</button></div></div>}
       {/* Mobile card view */}
       {mob ? <div>
@@ -2697,6 +2682,7 @@ function RackPage({ inv, saveInv, mob }) {
 // ══════════════════════════════════════════════
 function AuditPage({ inv, mob }) {
   const [checked, setChecked] = useState({});
+  const [actualStock, setActualStock] = useState({});
   const [auditStarted, setAuditStarted] = useState(false);
   const [auditReport, setAuditReport] = useState(null);
   const [pastAudits, setPastAudits] = useState([]);
@@ -2726,6 +2712,9 @@ function AuditPage({ inv, mob }) {
     setAuditStarted(true);
     setChecked({});
     setAuditReport(null);
+    var initActual = {};
+    inv.forEach(function(m) { initActual[m.id] = m.stock || 0; });
+    setActualStock(initActual);
   };
 
   var toggleCheck = function(id) {
@@ -2744,7 +2733,9 @@ function AuditPage({ inv, mob }) {
     var valid = [];
     var invalid = [];
     inv.forEach(function(m) {
-      var item = { id: m.id, name: m.name, batch: m.batch, rack: m.rack || "Unassigned", stock: m.stock, packQty: m.packQty, mrp: m.mrp, expiry: m.expiry || "" };
+      var actual = actualStock[m.id] !== undefined ? actualStock[m.id] : m.stock;
+      var diff = actual - m.stock;
+      var item = { id: m.id, name: m.name, batch: m.batch, rack: m.rack || "Unassigned", stock: m.stock, actual: actual, diff: Math.round(diff * 10000) / 10000, packQty: m.packQty, mrp: m.mrp, expiry: m.expiry || "" };
       if (checked[m.id]) valid.push(item);
       else invalid.push(item);
     });
@@ -2767,12 +2758,16 @@ function AuditPage({ inv, mob }) {
   };
 
   var renderMedRow = function(m) {
+    var actualVal = actualStock[m.id] !== undefined ? actualStock[m.id] : m.stock;
+    var diff = actualVal - m.stock;
     return (
       <div key={m.id} onClick={function() { if (auditStarted) toggleCheck(m.id); }}
         style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", marginBottom: 3, borderRadius: 8, border: checked[m.id] ? "2px solid #059669" : "1px solid #eee", background: checked[m.id] ? "#D1FAE5" : "#FAFAF7", cursor: auditStarted ? "pointer" : "default", fontSize: 12.5 }}>
         {auditStarted && <div style={{ width: 20, height: 20, borderRadius: 4, border: checked[m.id] ? "2px solid #059669" : "2px solid #ccc", background: checked[m.id] ? "#059669" : "#fff", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, color: "#fff", fontSize: 13, fontWeight: 700 }}>{checked[m.id] ? "\u2713" : ""}</div>}
         <div style={{ flex: 1 }}><b>{m.name}</b><span style={{ color: "#888", marginLeft: 6, fontSize: 11 }}>{m.batch}</span></div>
-        <span style={{ color: "#0D6B5B", fontWeight: 600, fontSize: 11, whiteSpace: "nowrap" }}>{fStock(m.stock, m.packQty)}</span>
+        <span style={{ color: "#0D6B5B", fontWeight: 600, fontSize: 11, whiteSpace: "nowrap" }}>Sys: {fStock(m.stock, m.packQty)}</span>
+        {auditStarted && <input type="number" step="0.01" value={actualVal} onClick={function(e) { e.stopPropagation(); }} onChange={function(e) { var v = parseFloat(e.target.value) || 0; setActualStock(function(p) { var n = Object.assign({}, p); n[m.id] = v; return n; }); }} style={{ width: 55, border: "1px solid #ddd", borderRadius: 4, padding: "2px 4px", fontSize: 11, textAlign: "right", background: "#fff" }} />}
+        {auditStarted && diff !== 0 && <span style={{ fontSize: 10, fontWeight: 700, color: diff > 0 ? "#059669" : "#DC2626" }}>{diff > 0 ? "+" : ""}{Math.round(diff * 100) / 100}</span>}
         <span style={{ color: "#888", fontSize: 10, whiteSpace: "nowrap" }}>{m.expiry || ""}</span>
       </div>
     );
@@ -2813,9 +2808,21 @@ function AuditPage({ inv, mob }) {
       {(auditReport || viewReport) && (function() {
         var rpt = viewReport || auditReport;
         return <div style={{ ...cds, border: "2px solid #0D6B5B", marginBottom: 16 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
             <div><b style={{ fontSize: 16, color: "#0D6B5B" }}>Audit Report</b><div style={{ fontSize: 12, color: "#888" }}>{rpt.date}</div></div>
-            <button onClick={function() { setAuditReport(null); setViewReport(null); }} style={bts(false)}>Close</button>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button onClick={function() {
+                var html = "<html><head><title>Audit Report - " + rpt.date + "</title><style>body{font-family:sans-serif;font-size:11px;padding:20px;max-width:900px;margin:0 auto}table{width:100%;border-collapse:collapse;margin:8px 0}th,td{border:1px solid #999;padding:4px 6px;font-size:10px;text-align:left}th{background:#eee}h2{margin:6px 0}.red{color:#DC2626}.green{color:#059669}</style></head><body>";
+                html += "<h2>A to Z Pharmacy - Inventory Audit Report</h2><p>Date: " + rpt.date + " | Audited by: " + rpt.auditedBy + "</p>";
+                html += "<p>Total: " + rpt.totalItems + " | Verified: " + rpt.validCount + " | Not Verified: " + rpt.invalidCount + " | Accuracy: " + Math.round(rpt.validCount / Math.max(rpt.totalItems, 1) * 100) + "%</p>";
+                var discrepancies = (rpt.validItems || []).concat(rpt.invalidItems || []).filter(function(m) { return m.diff && m.diff !== 0; });
+                if (discrepancies.length > 0) { html += "<h3 class='red'>Stock Discrepancies (" + discrepancies.length + ")</h3><table><tr><th>Medicine</th><th>Batch</th><th>Rack</th><th>System</th><th>Actual</th><th>Diff</th></tr>"; discrepancies.forEach(function(m) { html += "<tr><td>" + m.name + "</td><td>" + m.batch + "</td><td>" + m.rack + "</td><td>" + fStock(m.stock, m.packQty) + "</td><td>" + (m.actual || m.stock) + "</td><td class='" + (m.diff > 0 ? "green" : "red") + "'>" + (m.diff > 0 ? "+" : "") + m.diff + "</td></tr>"; }); html += "</table>"; }
+                if (rpt.invalidCount > 0) { html += "<h3 class='red'>Not Verified (" + rpt.invalidCount + ")</h3><table><tr><th>Medicine</th><th>Batch</th><th>Rack</th><th>System Stock</th><th>Actual</th><th>MRP</th></tr>"; rpt.invalidItems.forEach(function(m) { html += "<tr style='background:#FEF2F2'><td>" + m.name + "</td><td>" + m.batch + "</td><td>" + m.rack + "</td><td>" + fStock(m.stock, m.packQty) + "</td><td>" + (m.actual || m.stock) + "</td><td>Rs." + f2(m.mrp) + "</td></tr>"; }); html += "</table>"; }
+                html += "<h3 class='green'>Verified (" + rpt.validCount + ")</h3><table><tr><th>Medicine</th><th>Batch</th><th>Rack</th><th>System Stock</th><th>Actual</th><th>MRP</th></tr>"; (rpt.validItems || []).forEach(function(m) { html += "<tr><td>" + m.name + "</td><td>" + m.batch + "</td><td>" + m.rack + "</td><td>" + fStock(m.stock, m.packQty) + "</td><td>" + (m.actual || m.stock) + "</td><td>Rs." + f2(m.mrp) + "</td></tr>"; }); html += "</table></body></html>";
+                var w = window.open("", "_blank"); if (w) { w.document.write(html); w.document.close(); w.print(); }
+              }} style={{ ...bts(true), padding: "6px 14px", fontSize: 11 }}>Print Report</button>
+              <button onClick={function() { setAuditReport(null); setViewReport(null); }} style={bts(false)}>Close</button>
+            </div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(4,1fr)", gap: 10, marginBottom: 16 }}>
             <Stat icon="📦" label="Total Items" value={rpt.totalItems} color="#0D6B5B" />
@@ -2827,12 +2834,14 @@ function AuditPage({ inv, mob }) {
           {rpt.invalidCount > 0 && <div style={{ marginBottom: 12 }}>
             <b style={{ color: "#DC2626", fontSize: 13 }}>Not Verified ({rpt.invalidCount})</b>
             <div style={{ overflowX: "auto", marginTop: 6 }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
-              {["Medicine","Batch","Rack","Stock","MRP","Expiry"].map(function(h) { return <th key={h} style={ths}>{h}</th>; })}</tr></thead><tbody>
+              {["Medicine","Batch","Rack","System","Actual","Diff","MRP","Expiry"].map(function(h) { return <th key={h} style={ths}>{h}</th>; })}</tr></thead><tbody>
               {rpt.invalidItems.map(function(m) { return <tr key={m.id} style={{ background: "#FEF2F2" }}>
                 <td style={{ ...tds, fontWeight: 600, color: "#DC2626" }}>{m.name}</td>
                 <td style={{ ...tds, fontFamily: "monospace", fontSize: 11 }}>{m.batch || "-"}</td>
                 <td style={tds}>{m.rack}</td>
                 <td style={{ ...tds, fontWeight: 600 }}>{fStock(m.stock, m.packQty)}</td>
+                <td style={{ ...tds, fontWeight: 600 }}>{m.actual !== undefined ? m.actual : m.stock}</td>
+                <td style={{ ...tds, fontWeight: 700, color: (m.diff || 0) > 0 ? "#059669" : (m.diff || 0) < 0 ? "#DC2626" : "#888" }}>{m.diff ? (m.diff > 0 ? "+" : "") + m.diff : "0"}</td>
                 <td style={tds}>Rs.{f2(m.mrp)}</td>
                 <td style={tds}>{m.expiry || "-"}</td></tr>; })}
             </tbody></table></div>
@@ -2841,12 +2850,14 @@ function AuditPage({ inv, mob }) {
           {rpt.validCount > 0 && <div>
             <b style={{ color: "#059669", fontSize: 13 }}>Verified ({rpt.validCount})</b>
             <div style={{ overflowX: "auto", marginTop: 6 }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
-              {["Medicine","Batch","Rack","Stock","MRP","Expiry"].map(function(h) { return <th key={h} style={ths}>{h}</th>; })}</tr></thead><tbody>
+              {["Medicine","Batch","Rack","System","Actual","Diff","MRP","Expiry"].map(function(h) { return <th key={h} style={ths}>{h}</th>; })}</tr></thead><tbody>
               {rpt.validItems.map(function(m) { return <tr key={m.id}>
                 <td style={{ ...tds, fontWeight: 500 }}>{m.name}</td>
                 <td style={{ ...tds, fontFamily: "monospace", fontSize: 11 }}>{m.batch || "-"}</td>
                 <td style={tds}>{m.rack}</td>
                 <td style={{ ...tds, fontWeight: 600, color: "#059669" }}>{fStock(m.stock, m.packQty)}</td>
+                <td style={{ ...tds, fontWeight: 600 }}>{m.actual !== undefined ? m.actual : m.stock}</td>
+                <td style={{ ...tds, fontWeight: 700, color: (m.diff || 0) > 0 ? "#059669" : (m.diff || 0) < 0 ? "#DC2626" : "#888" }}>{m.diff ? (m.diff > 0 ? "+" : "") + m.diff : "0"}</td>
                 <td style={tds}>Rs.{f2(m.mrp)}</td>
                 <td style={tds}>{m.expiry || "-"}</td></tr>; })}
             </tbody></table></div>
@@ -3521,6 +3532,136 @@ function ReportsPage({ bills, inv, mob, showBill }) {
 }
 
 // ══════════════════════════════════════════════
+// ══════════════════════════════════════════════
+// CUSTOMERS PAGE
+// ══════════════════════════════════════════════
+function CustomersPage({ bills, mob, showBill }) {
+  const [customers, setCustomers] = useState([]);
+  const [q, setQ] = useState("");
+  const [expanded, setExpanded] = useState(null);
+  const [addMode, setAddMode] = useState(false);
+  const [newCust, setNewCust] = useState({ name: "", contact: "", address: "" });
+
+  useEffect(function() {
+    fbListen("customers", function(data) { setCustomers(data ? Object.values(data) : []); });
+  }, []);
+
+  // Auto-sync from bills - build customer list from bill data
+  var syncFromBills = function() {
+    var custMap = {};
+    // Existing customers
+    customers.forEach(function(c) { custMap[c.name.toLowerCase().trim()] = c; });
+    // From bills
+    var added = 0;
+    bills.forEach(function(b) {
+      var key = (b.patient || "").toLowerCase().trim();
+      if (!key || key === "counter" || key === "counter sales" || key === "cash") return;
+      if (!custMap[key]) {
+        var c = { id: mkId(), name: b.patient, contact: b.patientContact || "", address: b.patientAddress || "", source: "bill", addedDate: new Date().toISOString() };
+        custMap[key] = c;
+        added++;
+      } else {
+        // Update contact/address if missing
+        if (!custMap[key].contact && b.patientContact) custMap[key] = Object.assign({}, custMap[key], { contact: b.patientContact });
+        if (!custMap[key].address && b.patientAddress) custMap[key] = Object.assign({}, custMap[key], { address: b.patientAddress });
+      }
+    });
+    var all = Object.values(custMap);
+    var obj = {};
+    all.forEach(function(c) { obj[c.id] = c; });
+    fbSet("customers", obj);
+    alert("Synced! " + added + " new customers added from bills. Total: " + all.length);
+  };
+
+  var addCustomer = function() {
+    if (!newCust.name.trim()) { alert("Name required"); return; }
+    var c = { id: mkId(), name: newCust.name.trim(), contact: newCust.contact.trim(), address: newCust.address.trim(), source: "manual", addedDate: new Date().toISOString() };
+    db.ref("customers/" + c.id).set(c);
+    setNewCust({ name: "", contact: "", address: "" });
+    setAddMode(false);
+  };
+
+  var deleteCustomer = function(id) {
+    db.ref("customers/" + id).remove();
+  };
+
+  // Get bills for a customer
+  var getCustomerBills = function(name) {
+    return bills.filter(function(b) { return (b.patient || "").toLowerCase().trim() === name.toLowerCase().trim(); }).sort(function(a, b) { return new Date(b.date) - new Date(a.date); });
+  };
+
+  var filtered = customers.filter(function(c) {
+    if (!q) return true;
+    var lq = q.toLowerCase();
+    return c.name.toLowerCase().indexOf(lq) >= 0 || (c.contact || "").indexOf(lq) >= 0;
+  }).sort(function(a, b) { return a.name.localeCompare(b.name); });
+
+  return (
+    <div><h2 style={hds}>Customers ({filtered.length})</h2>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+        <input value={q} onChange={function(e) { setQ(e.target.value); }} placeholder="Search name or phone..." style={{ ...inps, flex: 1, minWidth: 180 }} />
+        <button onClick={function() { setAddMode(!addMode); }} style={{ ...bts(true), padding: "8px 16px", fontSize: 12 }}>{addMode ? "Cancel" : "+ Add Customer"}</button>
+        <button onClick={syncFromBills} style={{ ...bts(false), padding: "8px 16px", fontSize: 12 }}>Sync from Bills</button>
+      </div>
+
+      {addMode && <div style={{ ...cds, border: "2px solid #0D6B5B", marginBottom: 14 }}>
+        <b style={{ color: "#0D6B5B" }}>Add Customer</b>
+        <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr 1fr", gap: 8, marginTop: 8 }}>
+          <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Name*</label><input value={newCust.name} onChange={function(e) { setNewCust(Object.assign({}, newCust, { name: e.target.value })); }} style={inps} /></div>
+          <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Phone</label><input value={newCust.contact} onChange={function(e) { setNewCust(Object.assign({}, newCust, { contact: e.target.value })); }} style={inps} /></div>
+          <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Address</label><input value={newCust.address} onChange={function(e) { setNewCust(Object.assign({}, newCust, { address: e.target.value })); }} style={inps} /></div>
+        </div>
+        <button onClick={addCustomer} style={{ ...bts(true), marginTop: 8, padding: "8px 20px", fontSize: 12 }}>Save Customer</button>
+      </div>}
+
+      {filtered.length === 0 && <div style={{ ...cds, textAlign: "center", padding: 40, color: "#888" }}>
+        <div style={{ fontSize: 40, marginBottom: 12, opacity: 0.3 }}>👤</div>
+        <div style={{ fontSize: 14 }}>No customers found. Click "Sync from Bills" to import from bill history.</div>
+      </div>}
+
+      {filtered.map(function(c) {
+        var isExp = expanded === c.id;
+        var custBills = isExp ? getCustomerBills(c.name) : [];
+        var totalSpent = isExp ? custBills.reduce(function(s, b) { return s + b.netAmount; }, 0) : 0;
+        return <div key={c.id} style={{ marginBottom: 6, borderRadius: 10, border: "1px solid #eee", overflow: "hidden" }}>
+          <div onClick={function() { setExpanded(isExp ? null : c.id); }} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", background: isExp ? "#F0FDF4" : "#FAFAF7", cursor: "pointer", borderLeft: "3px solid #0D6B5B" }}>
+            <div>
+              <span style={{ fontWeight: 700, fontSize: 14, color: "#0C2E24" }}>{c.name}</span>
+              {c.contact && <span style={{ color: "#888", fontSize: 11, marginLeft: 8 }}>{c.contact}</span>}
+              {c.address && <span style={{ color: "#aaa", fontSize: 11, marginLeft: 8 }}>{c.address}</span>}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <Tag bg={c.source === "manual" ? "#F3E8FF" : "#DBEAFE"} fg={c.source === "manual" ? "#6B21A8" : "#1E40AF"}>{c.source === "manual" ? "Manual" : "Bill"}</Tag>
+              <button onClick={function(e) { e.stopPropagation(); deleteCustomer(c.id); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#DC2626", fontSize: 12 }}>x</button>
+              <span style={{ color: "#888", fontSize: 12 }}>{isExp ? "\u25B2" : "\u25BC"}</span>
+            </div>
+          </div>
+          {isExp && <div style={{ padding: 14, background: "#fff" }}>
+            <div style={{ display: "flex", gap: 12, marginBottom: 10, fontSize: 12 }}>
+              <span>Total Bills: <b>{custBills.length}</b></span>
+              <span>Total Spent: <b style={{ color: "#0D6B5B" }}>Rs.{f2(totalSpent)}</b></span>
+            </div>
+            {custBills.length === 0 ? <div style={{ color: "#aaa", fontSize: 12 }}>No bills found</div> :
+            <div>
+              {custBills.slice(0, 20).map(function(b) {
+                return <div key={b.billNo} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "1px solid #eee", fontSize: 12 }}>
+                  <div><span style={{ fontFamily: "monospace", fontWeight: 600, color: "#0D6B5B" }}>{b.billNo}</span><span style={{ color: "#888", marginLeft: 8 }}>{b.dateIST || fDT(b.date)}</span></div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <b>Rs.{f2(b.netAmount)}</b>
+                    <button onClick={function() { showBill(b, true); }} style={{ ...bts(true), padding: "3px 8px", fontSize: 10 }}>View</button>
+                  </div>
+                </div>;
+              })}
+              {custBills.length > 20 && <div style={{ color: "#888", fontSize: 11, padding: 4 }}>...and {custBills.length - 20} more</div>}
+            </div>}
+          </div>}
+        </div>;
+      })}
+    </div>
+  );
+}
+
 // MAIN APP
 // ══════════════════════════════════════════════
 function App() {
@@ -3679,6 +3820,7 @@ function App() {
           {page === "profit" && isO && <ProfitPage bills={bills} inv={inv} mob={mob} purch={purch} saveBills={saveBills} />}
           {page === "stock" && <StockPage inv={inv} saveInv={saveInv} isO={isO} mob={mob} />}
           {page === "hist" && <HistPage bills={bills} showBill={showBill} saveBills={saveBills} askConfirm={askConfirm} inv={inv} saveInv={saveInv} purch={purch} />}
+          {page === "customers" && <CustomersPage bills={bills} mob={mob} showBill={showBill} />}
           {page === "reports" && isO && <ReportsPage bills={bills} inv={inv} mob={mob} showBill={showBill} />}
           {page === "ency" && <EncyclopediaPage inv={inv} mob={mob} />}
           {page === "users" && isO && <UsersPage sessions={sessions} mob={mob} />}
