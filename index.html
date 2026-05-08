@@ -692,7 +692,7 @@ function Login({ onLogin }) {
 // ══════════════════════════════════════════════
 function Sidebar({ page, setPage, user, onLogout, counts, mob, sideOpen, setSideOpen }) {
   const isO = user.role === "owner";
-  const nav = [{ id: "dash", i: "📊", l: "Dashboard" }, ...(isO ? [{ id: "purch", i: "📦", l: "Purchases" }, { id: "returns", i: "↩️", l: "Returns" }] : []), { id: "inv", i: "💊", l: "Inventory" }, { id: "rack", i: "🗄", l: "Racks" }, ...(isO ? [{ id: "audit", i: "📝", l: "Audit" }] : []), { id: "bill", i: "🧾", l: "New Bill" }, ...(isO ? [{ id: "profit", i: "💹", l: "Profit Margin" }] : []), { id: "stock", i: "📋", l: "Stock" }, { id: "hist", i: "🗂", l: "Bills" }, ...(isO ? [{ id: "reports", i: "📑", l: "Reports" }] : []), { id: "customers", i: "👤", l: "Customers" }, { id: "ency", i: "📚", l: "Encyclopedia" }, ...(isO ? [{ id: "users", i: "👥", l: "Users" }, { id: "backup", i: "💾", l: "Backup" }] : [])];
+  const nav = [{ id: "dash", i: "📊", l: "Dashboard" }, ...(isO ? [{ id: "purch", i: "📦", l: "Purchases" }, { id: "returns", i: "↩️", l: "Returns" }] : []), { id: "inv", i: "💊", l: "Inventory" }, { id: "rack", i: "🗄", l: "Racks" }, ...(isO ? [{ id: "audit", i: "📝", l: "Audit" }] : []), { id: "bill", i: "🧾", l: "New Bill" }, ...(isO ? [{ id: "profit", i: "💹", l: "Profit Margin" }] : []), { id: "stock", i: "📋", l: "Stock" }, { id: "hist", i: "🗂", l: "Bills" }, ...(isO ? [{ id: "reports", i: "📑", l: "Reports" }] : []), { id: "customers", i: "👤", l: "Customers" }, { id: "compare", i: "⚖️", l: "Price Compare" }, { id: "ency", i: "📚", l: "Encyclopedia" }, ...(isO ? [{ id: "users", i: "👥", l: "Users" }, { id: "backup", i: "💾", l: "Backup" }] : [])];
   if (mob && !sideOpen) return null;
   return (
     <div>
@@ -3070,6 +3070,358 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm, bills, s
 // ══════════════════════════════════════════════
 // ENCYCLOPEDIA (MedGuide India Live)
 // ══════════════════════════════════════════════
+// ══════════════════════════════════════════════
+// PRICE COMPARE DASHBOARD
+// ══════════════════════════════════════════════
+function ComparePage({ inv, mob }) {
+  const [searchQ, setSearchQ] = useState("");
+  const [results, setResults] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [history, setHistory] = useState([]);
+  const [activeDistSite, setActiveDistSite] = useState(null);
+  const [compareMode, setCompareMode] = useState("search"); // "search" | "browse"
+
+  const DISTRIBUTORS = [
+    { id: "focus", name: "Focus (Whitefield)", short: "Focus", color: "#0D6B5B", icon: "🏪",
+      proxyUrl: PROXY_URL + "/proxy?target=" + encodeURIComponent("http://whitefield.float-zone.com:8080") + "&path=" + encodeURIComponent("/FocusOnlineOrder/Default.aspx"),
+      directUrl: "http://whitefield.float-zone.com:8080/FocusOnlineOrder/Default.aspx" },
+    { id: "fgt", name: "FGT Banas", short: "FGT", color: "#B45309", icon: "🏪",
+      proxyUrl: PROXY_URL + "/proxy?target=" + encodeURIComponent("http://fgtbanas.fortiddns.com:8080") + "&path=" + encodeURIComponent("/OnlineOrder/Default.aspx"),
+      directUrl: "http://fgtbanas.fortiddns.com:8080/OnlineOrder/Default.aspx" },
+    { id: "udaan", name: "Udaan B2B", short: "Udaan", color: "#2563EB", icon: "🛒",
+      proxyUrl: PROXY_URL + "/proxy?target=" + encodeURIComponent("https://udaan.com") + "&path=" + encodeURIComponent("/main?selectedTabId=Pharma&navId=pharma"),
+      directUrl: "https://udaan.com/main?selectedTabId=Pharma&navId=pharma" }
+  ];
+
+  // Find matching medicines from local inventory grouped by name
+  const localMatches = React.useMemo(() => {
+    if (!searchQ.trim() || searchQ.length < 2) return [];
+    const q = searchQ.toLowerCase();
+    return inv.filter(m => m.name.toLowerCase().includes(q)).sort((a,b) => a.name.localeCompare(b.name));
+  }, [searchQ, inv]);
+
+  // Group local matches by medicine name to compare distributors
+  const localGrouped = React.useMemo(() => {
+    const groups = {};
+    localMatches.forEach(m => {
+      const key = m.name.toLowerCase();
+      if (!groups[key]) groups[key] = { name: m.name, entries: [] };
+      groups[key].entries.push(m);
+    });
+    return Object.values(groups);
+  }, [localMatches]);
+
+  const doAISearch = async () => {
+    if (!searchQ.trim()) return;
+    if (!PROXY_READY) { setError("API proxy not configured."); return; }
+    setLoading(true); setError(""); setResults(null);
+    try {
+      // Build inventory context for the medicine being searched
+      const invContext = localMatches.slice(0, 30).map(m =>
+        m.name + " | PTR:" + f2(m.ptr) + " | MRP:" + f2(m.mrp) + " | Dist:" + (m.purchaseDistributor || m.distributor || "?") + " | Batch:" + (m.batch||"?") + " | Exp:" + (m.expiry||"?") + " | Stock:" + (m.stock||0)
+      ).join("\n");
+
+      // Also gather all purchase history for this medicine
+      const purchContext = inv.filter(m => m.name.toLowerCase().includes(searchQ.toLowerCase()))
+        .map(m => ({
+          name: m.name, ptr: m.ptr, mrp: m.mrp,
+          distributor: m.purchaseDistributor || m.distributor || "",
+          date: m.purchaseDate || "", batch: m.batch || ""
+        }));
+
+      const prompt = `You are a pharmacy purchase advisor. Analyze pricing for: "${searchQ}"
+
+CURRENT INVENTORY DATA (matching medicines):
+${invContext || "No matching items in inventory yet."}
+
+DISTRIBUTOR INFO:
+- Focus (Whitefield): http://whitefield.float-zone.com:8080 - local distributor
+- FGT Banas: http://fgtbanas.fortiddns.com:8080 - local distributor  
+- Udaan: https://udaan.com - B2B online marketplace (often has competitive pricing)
+
+Respond ONLY with valid JSON (no markdown, no explanation):
+{
+  "medicine": "cleaned medicine name",
+  "summary": "1-2 sentence buying recommendation",
+  "bestBuy": "distributor name with best price based on history",
+  "priceInsight": "pricing trend or tip (1 sentence)",
+  "distributorAnalysis": [
+    {"distributor": "Focus (Whitefield)", "avgPTR": number_or_null, "lastPurchase": "date or null", "notes": "short note", "rating": "good/average/expensive/unknown"},
+    {"distributor": "FGT Banas", "avgPTR": number_or_null, "lastPurchase": "date or null", "notes": "short note", "rating": "good/average/expensive/unknown"},
+    {"distributor": "Udaan B2B", "avgPTR": number_or_null, "lastPurchase": "date or null", "notes": "short note", "rating": "good/average/expensive/unknown"}
+  ],
+  "inventoryItems": [{"name": "...", "ptr": 0, "mrp": 0, "distributor": "...", "stock": 0, "batch": "...", "expiry": "..."}],
+  "checkPortals": true
+}`;
+
+      const resp = await fetch(PROXY_URL, {
+        method: "POST", headers: CLAUDE_HEADERS,
+        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000,
+          messages: [{ role: "user", content: prompt }] })
+      });
+      const data = await resp.json();
+      if (data.error) throw new Error(data.error.message || "API error");
+      let t = (data.content || []).map(c => c.text || "").join("").trim();
+      if (t.indexOf("{") >= 0) t = t.slice(t.indexOf("{"), t.lastIndexOf("}") + 1);
+      const parsed = JSON.parse(t);
+      setResults(parsed);
+      setHistory(prev => [{ q: searchQ, ts: new Date().toLocaleTimeString(), result: parsed }, ...prev.slice(0, 4)]);
+    } catch(e) { setError("Analysis failed: " + e.message); }
+    setLoading(false);
+  };
+
+  const ratingColor = (r) => ({ good: "#059669", average: "#B45309", expensive: "#DC2626", unknown: "#9CA3AF" }[r] || "#9CA3AF");
+  const ratingBg = (r) => ({ good: "#ECFDF5", average: "#FFFBEB", expensive: "#FEF2F2", unknown: "#F3F4F6" }[r] || "#F3F4F6");
+
+  if (activeDistSite) {
+    const dist = DISTRIBUTORS.find(d => d.id === activeDistSite);
+    return (
+      <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <button onClick={() => setActiveDistSite(null)} style={{ background: "#E8E4DD", border: "none", borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontFamily: "inherit", fontWeight: 600, fontSize: 13 }}>← Back</button>
+            <span style={{ fontWeight: 700, fontSize: 15, color: dist.color }}>{dist.icon} {dist.name}</span>
+          </div>
+          <a href={dist.directUrl} target="_blank" rel="noopener noreferrer" style={{ background: dist.color, color: "#fff", borderRadius: 8, padding: "6px 14px", textDecoration: "none", fontSize: 12, fontWeight: 600 }}>Open in New Tab ↗</a>
+        </div>
+        <div style={{ borderRadius: 12, overflow: "hidden", border: "2px solid #D4D0C8", flex: 1 }}>
+          <iframe src={dist.proxyUrl} style={{ width: "100%", height: mob ? 500 : 650, border: "none" }}
+            title={dist.name} sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-top-navigation" />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <h2 style={hds}>🔍 Price Compare</h2>
+
+      {/* Mode Toggle */}
+      <div style={{ display: "flex", gap: 3, background: "#E8E4DD", borderRadius: 8, padding: 3, marginBottom: 16, width: "fit-content" }}>
+        {[["search","AI Price Analysis"],["browse","Browse Portals"]].map(([id,l]) =>
+          <button key={id} onClick={() => setCompareMode(id)} style={{ padding: "7px 16px", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: compareMode === id ? "#fff" : "transparent", color: compareMode === id ? "#0D6B5B" : "#888", boxShadow: compareMode === id ? "0 1px 3px rgba(0,0,0,.1)" : "none" }}>{l}</button>
+        )}
+      </div>
+
+      {compareMode === "browse" && (
+        <div>
+          <div style={{ fontSize: 13, color: "#555", marginBottom: 14 }}>Browse distributor portals side by side or individually to compare prices and place orders.</div>
+          <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "repeat(3,1fr)", gap: 12, marginBottom: 20 }}>
+            {DISTRIBUTORS.map(d => (
+              <div key={d.id} onClick={() => setActiveDistSite(d.id)} style={{ ...cds, border: "2px solid " + d.color + "40", textAlign: "center", cursor: "pointer", transition: "box-shadow .15s" }}
+                onMouseEnter={e => e.currentTarget.style.boxShadow = "0 4px 16px " + d.color + "30"}
+                onMouseLeave={e => e.currentTarget.style.boxShadow = ""}>
+                <div style={{ fontSize: 32, marginBottom: 8 }}>{d.icon}</div>
+                <div style={{ fontWeight: 700, fontSize: 14, color: d.color }}>{d.name}</div>
+                <div style={{ fontSize: 11, color: "#888", margin: "6px 0 12px" }}>
+                  {d.id === "focus" ? "Whitefield Local Distributor" : d.id === "fgt" ? "Banas Local Distributor" : "B2B Online Marketplace"}
+                </div>
+                <div style={{ padding: "8px 20px", background: d.color, color: "#fff", borderRadius: 8, display: "inline-block", fontWeight: 600, fontSize: 13 }}>Browse →</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Quick inventory summary by distributor */}
+          <div style={cds}>
+            <b style={{ fontSize: 13, color: "#0C2E24" }}>Purchase History by Distributor</b>
+            <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "repeat(3,1fr)", gap: 10, marginTop: 12 }}>
+              {DISTRIBUTORS.map(d => {
+                const items = inv.filter(m => (m.purchaseDistributor||m.distributor||"").toLowerCase().includes(d.short.toLowerCase()));
+                const totalVal = items.reduce((s,m) => s + (m.ptr||0)*(m.stock||0), 0);
+                return (
+                  <div key={d.id} style={{ background: ratingBg("good"), border: "1px solid " + d.color + "30", borderRadius: 10, padding: 12 }}>
+                    <div style={{ fontWeight: 700, color: d.color, fontSize: 13, marginBottom: 6 }}>{d.icon} {d.short}</div>
+                    <div style={{ fontSize: 12, color: "#555" }}>{items.length} medicines</div>
+                    <div style={{ fontSize: 12, color: "#555" }}>Stock val: Rs.{Math.round(totalVal).toLocaleString()}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {compareMode === "search" && (
+        <div>
+          {/* Search bar */}
+          <div style={{ ...cds, marginBottom: 16 }}>
+            <div style={{ fontSize: 13, color: "#555", marginBottom: 12 }}>Enter a medicine name to compare prices across your purchase history and get AI buying recommendations.</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input value={searchQ} onChange={e => setSearchQ(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && doAISearch()}
+                placeholder="e.g. Paracetamol, Amoxicillin, Metformin..."
+                style={{ ...inps, flex: 1, fontSize: 14, padding: "10px 14px" }} />
+              <button onClick={doAISearch} disabled={loading || !searchQ.trim()}
+                style={{ ...bts(true), padding: "10px 20px", opacity: loading || !searchQ.trim() ? .6 : 1, whiteSpace: "nowrap" }}>
+                {loading ? "Analyzing..." : "🔍 Compare"}
+              </button>
+            </div>
+            {error && <div style={{ color: "#DC2626", fontSize: 12, marginTop: 8 }}>{error}</div>}
+          </div>
+
+          {/* Live local inventory preview while typing */}
+          {searchQ.length >= 2 && !loading && !results && localGrouped.length > 0 && (
+            <div style={{ ...cds, marginBottom: 16 }}>
+              <b style={{ fontSize: 12, color: "#888", textTransform: "uppercase", letterSpacing: 1 }}>Found in Your Inventory</b>
+              <div style={{ marginTop: 10, overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead><tr>
+                    {["Medicine","Distributor","PTR","MRP","Stock","Batch","Expiry"].map(h => <th key={h} style={{ ...ths, fontSize: 11 }}>{h}</th>)}
+                  </tr></thead>
+                  <tbody>
+                    {localMatches.slice(0,10).map((m,i) => (
+                      <tr key={i} style={{ background: i%2===0?"#FAFAF7":"#fff" }}>
+                        <td style={{ ...tds, fontWeight: 600, fontSize: 12 }}>{m.name}</td>
+                        <td style={{ ...tds, fontSize: 11, color: "#0D6B5B", fontWeight: 600 }}>{m.purchaseDistributor||m.distributor||"-"}</td>
+                        <td style={{ ...tds, fontSize: 12, fontWeight: 700 }}>Rs.{f2(m.ptr)}</td>
+                        <td style={{ ...tds, fontSize: 11 }}>Rs.{f2(m.mrp)}</td>
+                        <td style={{ ...tds, fontSize: 11 }}>{m.stock||0}</td>
+                        <td style={{ ...tds, fontSize: 11, fontFamily: "monospace" }}>{m.batch||"-"}</td>
+                        <td style={{ ...tds, fontSize: 11 }}>{m.expiry||"-"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <button onClick={doAISearch} style={{ ...bts(true), marginTop: 10, fontSize: 12 }}>Get AI Analysis →</button>
+            </div>
+          )}
+
+          {/* Loading state */}
+          {loading && (
+            <div style={{ ...cds, textAlign: "center", padding: 40 }}>
+              <div style={{ fontSize: 32, marginBottom: 12, animation: "spin 1s linear infinite", display: "inline-block" }}>⚙️</div>
+              <div style={{ fontSize: 14, color: "#0D6B5B", fontWeight: 600 }}>Analyzing purchase history & pricing...</div>
+              <div style={{ fontSize: 12, color: "#888", marginTop: 6 }}>Checking all distributors for {searchQ}</div>
+            </div>
+          )}
+
+          {/* Results */}
+          {results && !loading && (
+            <div>
+              {/* Summary card */}
+              <div style={{ background: "linear-gradient(135deg,#0C2E24,#1A5744)", borderRadius: 14, padding: 20, marginBottom: 16, color: "#fff" }}>
+                <div style={{ fontSize: 11, opacity: .6, letterSpacing: 2, textTransform: "uppercase", marginBottom: 6 }}>Analysis for</div>
+                <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "'Playfair Display',serif", marginBottom: 10 }}>{results.medicine || searchQ}</div>
+                <div style={{ fontSize: 13, lineHeight: 1.6, opacity: .9, marginBottom: 12 }}>{results.summary}</div>
+                {results.bestBuy && (
+                  <div style={{ background: "rgba(52,211,153,.2)", border: "1px solid rgba(52,211,153,.4)", borderRadius: 8, padding: "8px 14px", display: "inline-block" }}>
+                    <span style={{ fontSize: 11, opacity: .7 }}>Best Buy: </span>
+                    <span style={{ fontWeight: 700, color: "#34D399" }}>{results.bestBuy}</span>
+                  </div>
+                )}
+                {results.priceInsight && <div style={{ marginTop: 10, fontSize: 12, opacity: .7, fontStyle: "italic" }}>💡 {results.priceInsight}</div>}
+              </div>
+
+              {/* Distributor comparison */}
+              <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "repeat(3,1fr)", gap: 12, marginBottom: 16 }}>
+                {(results.distributorAnalysis || []).map((da, i) => {
+                  const dist = DISTRIBUTORS[i] || {};
+                  return (
+                    <div key={i} style={{ background: ratingBg(da.rating), border: "2px solid " + (ratingColor(da.rating) + "40"), borderRadius: 12, padding: 16 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+                        <div style={{ fontWeight: 700, fontSize: 13, color: dist.color || "#333" }}>{dist.icon} {da.distributor}</div>
+                        <span style={{ background: ratingColor(da.rating), color: "#fff", borderRadius: 20, padding: "2px 9px", fontSize: 10, fontWeight: 700, textTransform: "uppercase" }}>{da.rating}</span>
+                      </div>
+                      {da.avgPTR ? (
+                        <div style={{ fontSize: 22, fontWeight: 800, color: "#0C2E24", marginBottom: 4 }}>Rs.{f2(da.avgPTR)}<span style={{ fontSize: 11, fontWeight: 400, color: "#888" }}> PTR</span></div>
+                      ) : (
+                        <div style={{ fontSize: 14, color: "#aaa", marginBottom: 4 }}>No price data</div>
+                      )}
+                      {da.lastPurchase && <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>Last: {da.lastPurchase}</div>}
+                      <div style={{ fontSize: 12, color: "#555", lineHeight: 1.5 }}>{da.notes}</div>
+                      <button onClick={() => setActiveDistSite(dist.id)} style={{ ...bts(false), marginTop: 10, fontSize: 11, padding: "5px 12px", width: "100%", border: "1px solid " + (dist.color || "#ccc") + "60", color: dist.color || "#333" }}>
+                        Browse Portal →
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Inventory items detail */}
+              {results.inventoryItems && results.inventoryItems.length > 0 && (
+                <div style={{ ...cds, marginBottom: 16 }}>
+                  <b style={{ fontSize: 13 }}>Your Inventory — {results.medicine}</b>
+                  <div style={{ overflowX: "auto", marginTop: 10 }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                      <thead><tr>
+                        {["Medicine","Distributor","PTR","MRP","Stock","Batch","Expiry"].map(h => <th key={h} style={{ ...ths, fontSize: 11 }}>{h}</th>)}
+                      </tr></thead>
+                      <tbody>
+                        {results.inventoryItems.map((it, i) => (
+                          <tr key={i} style={{ background: i%2===0?"#FAFAF7":"#fff" }}>
+                            <td style={{ ...tds, fontWeight: 600, fontSize: 12 }}>{it.name}</td>
+                            <td style={{ ...tds, fontSize: 11, color: "#0D6B5B", fontWeight: 600 }}>{it.distributor||"-"}</td>
+                            <td style={{ ...tds, fontWeight: 700, color: "#0C2E24" }}>Rs.{f2(it.ptr)}</td>
+                            <td style={{ ...tds, fontSize: 11 }}>Rs.{f2(it.mrp)}</td>
+                            <td style={{ ...tds, fontSize: 11 }}>{it.stock||0}</td>
+                            <td style={{ ...tds, fontSize: 11, fontFamily: "monospace" }}>{it.batch||"-"}</td>
+                            <td style={{ ...tds, fontSize: 11 }}>{it.expiry||"-"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Portal browse shortcuts */}
+              {results.checkPortals && (
+                <div style={{ ...cds, background: "#F0FDF4", border: "1px solid #BBF7D0" }}>
+                  <b style={{ fontSize: 13, color: "#059669" }}>📋 Check Live Prices on Portals</b>
+                  <div style={{ fontSize: 12, color: "#555", marginTop: 4, marginBottom: 12 }}>Search for <b>"{results.medicine || searchQ}"</b> on these portals for current pricing:</div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {DISTRIBUTORS.map(d => (
+                      <button key={d.id} onClick={() => setActiveDistSite(d.id)}
+                        style={{ background: d.color, color: "#fff", border: "none", borderRadius: 8, padding: "8px 16px", cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "inherit" }}>
+                        {d.icon} {d.short} →
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <button onClick={() => { setResults(null); setSearchQ(""); }} style={{ ...bts(false), marginTop: 12, fontSize: 12 }}>New Search</button>
+            </div>
+          )}
+
+          {/* Search history */}
+          {history.length > 0 && !results && (
+            <div style={{ ...cds }}>
+              <b style={{ fontSize: 12, color: "#888", textTransform: "uppercase", letterSpacing: 1 }}>Recent Searches</b>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
+                {history.map((h, i) => (
+                  <button key={i} onClick={() => { setSearchQ(h.q); setResults(h.result); }}
+                    style={{ background: "#E8E4DD", border: "none", borderRadius: 20, padding: "5px 14px", cursor: "pointer", fontSize: 12, fontFamily: "inherit", color: "#444" }}>
+                    {h.q} <span style={{ opacity: .5, fontSize: 10 }}>{h.ts}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Empty state */}
+          {!searchQ && !results && history.length === 0 && (
+            <div style={{ ...cds, textAlign: "center", padding: 40 }}>
+              <div style={{ fontSize: 48, marginBottom: 12 }}>⚖️</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: "#0C2E24", marginBottom: 8 }}>Compare Distributor Prices</div>
+              <div style={{ fontSize: 13, color: "#888", maxWidth: 400, margin: "0 auto 20px" }}>
+                Search any medicine to see pricing history across Focus, FGT Banas, and Udaan. AI analyzes your purchase history to recommend the best buy.
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "center" }}>
+                {["Paracetamol","Amoxicillin","Metformin","Omeprazole"].map(s => (
+                  <button key={s} onClick={() => { setSearchQ(s); }} style={{ background: "#E8E4DD", border: "none", borderRadius: 20, padding: "6px 16px", cursor: "pointer", fontSize: 12, fontFamily: "inherit", color: "#0D6B5B", fontWeight: 600 }}>{s}</button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function EncyclopediaPage({ inv, mob }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState(null);
@@ -3840,6 +4192,7 @@ function App() {
           {page === "customers" && <CustomersPage bills={bills} mob={mob} showBill={showBill} />}
           {page === "reports" && isO && <ReportsPage bills={bills} inv={inv} mob={mob} showBill={showBill} />}
           {page === "ency" && <EncyclopediaPage inv={inv} mob={mob} />}
+          {page === "compare" && <ComparePage inv={inv} mob={mob} />}
           {page === "users" && isO && <UsersPage sessions={sessions} mob={mob} />}
           {page === "backup" && isO && <BackupPage inv={inv} bills={bills} purch={purch} saveAll={saveAll} askConfirm={askConfirm} saveInv={saveInv} saveBills={saveBills} />}
         </div></div></div>
