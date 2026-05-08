@@ -871,9 +871,53 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm, inv, s
   ];
   const [purchColVis, setPurchColVis] = useState({ invoice: true, supplier: true, date: true, items: true, amt: true, src: true });
   const shP = (k) => purchColVis[k] !== false;
+  const [viewPurch, setViewPurch] = useState(null);
 
   return (
-    <div><h2 style={hds}>Purchase Entry</h2>
+    <div>
+      {/* View Purchase Modal */}
+      {viewPurch && <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={function() { setViewPurch(null); }}>
+        <div style={{ background: "#fff", borderRadius: 16, maxWidth: 800, width: "100%", maxHeight: "85vh", overflow: "auto", padding: 24 }} onClick={function(e) { e.stopPropagation(); }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+            <div><h3 style={{ fontSize: 18, fontWeight: 700, color: "#0C2E24", margin: 0 }}>{viewPurch.supplier || "Purchase"}</h3>
+              <div style={{ fontSize: 12, color: "#888" }}>Invoice: {viewPurch.invoiceNo || "-"} | Date: {fD(viewPurch.date)} | Source: {(viewPurch.sourceType || "manual").toUpperCase()}</div></div>
+            <button onClick={function() { setViewPurch(null); }} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#888" }}>x</button>
+          </div>
+          <div style={{ fontWeight: 700, fontSize: 16, color: "#0D6B5B", marginBottom: 12 }}>Rs.{f2(viewPurch.netAmount)} ({viewPurch.items.length} items)</div>
+          <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
+            {["#","Medicine","Batch","Expiry","MRP","PTR","Qty","Free","Disc%","Scheme%","GST%","Amount"].map(function(h) { return <th key={h} style={{ ...ths, fontSize: 11 }}>{h}</th>; })}</tr></thead><tbody>
+            {viewPurch.items.map(function(it, i) {
+              var amt = purchCalcAmt(it);
+              return <tr key={i}>
+                <td style={{ ...tds, color: "#888" }}>{i + 1}</td>
+                <td style={{ ...tds, fontWeight: 600 }}>{it.name}</td>
+                <td style={{ ...tds, fontFamily: "monospace", fontSize: 11 }}>{it.batch || "-"}</td>
+                <td style={{ ...tds, fontSize: 11 }}>{it.expiry || "-"}</td>
+                <td style={tds}>Rs.{f2(it.mrp)}</td>
+                <td style={{ ...tds, color: "#2563EB" }}>Rs.{f2(it.ptr)}</td>
+                <td style={{ ...tds, fontWeight: 600 }}>{it.qty}</td>
+                <td style={tds}>{it.freeQty || 0}</td>
+                <td style={tds}>{it.discPct || 0}%</td>
+                <td style={tds}>{it.schemePct || 0}%</td>
+                <td style={tds}>{it.gstRate || 0}%</td>
+                <td style={{ ...tds, fontWeight: 600, color: "#0D6B5B" }}>Rs.{f2(amt)}</td>
+              </tr>;
+            })}</tbody></table></div>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12, gap: 8 }}>
+            <button onClick={function() {
+              var html = "<html><head><title>Purchase " + (viewPurch.invoiceNo || "") + "</title><style>body{font-family:sans-serif;font-size:11px;padding:20px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #999;padding:4px 6px;font-size:10px}th{background:#eee}</style></head><body>";
+              html += "<h2>" + (viewPurch.supplier || "Purchase") + "</h2><p>Invoice: " + (viewPurch.invoiceNo || "-") + " | Date: " + fD(viewPurch.date) + " | Amount: Rs." + f2(viewPurch.netAmount) + "</p>";
+              html += "<table><tr><th>#</th><th>Medicine</th><th>Batch</th><th>MRP</th><th>PTR</th><th>Qty</th><th>Free</th><th>Disc%</th><th>Scheme%</th><th>GST%</th><th>Amount</th></tr>";
+              viewPurch.items.forEach(function(it, i) { html += "<tr><td>" + (i+1) + "</td><td>" + it.name + "</td><td>" + (it.batch||"-") + "</td><td>Rs." + f2(it.mrp) + "</td><td>Rs." + f2(it.ptr) + "</td><td>" + it.qty + "</td><td>" + (it.freeQty||0) + "</td><td>" + (it.discPct||0) + "%</td><td>" + (it.schemePct||0) + "%</td><td>" + (it.gstRate||0) + "%</td><td>Rs." + f2(purchCalcAmt(it)) + "</td></tr>"; });
+              html += "</table></body></html>";
+              var w = window.open("","_blank"); if(w){w.document.write(html);w.document.close();w.print();}
+            }} style={{ ...bts(true), padding: "8px 16px", fontSize: 12 }}>Print</button>
+            <button onClick={function() { setViewPurch(null); }} style={{ ...bts(false), padding: "8px 16px", fontSize: 12 }}>Close</button>
+          </div>
+        </div>
+      </div>}
+
+      <h2 style={hds}>Purchase Entry</h2>
       {rev ? (<div style={{ ...cds, border: "2px solid #0D6B5B" }}>
         <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
           <div><b style={{ color: "#0D6B5B", fontSize: 14 }}>Review - {rev.srcType.toUpperCase()}</b>
@@ -991,6 +1035,7 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm, inv, s
             {shP("items") && <td style={tds}>{p.items.length}</td>}
             {shP("amt") && <td style={{ ...tds, fontWeight: 600 }}>Rs.{f2(p.netAmount)}</td>}
             {shP("src") && <td style={tds}><Tag bg={p.sourceType === "csv" ? "#DBEAFE" : p.sourceType === "image" ? "#FEE2E2" : "#F3E8FF"} fg={p.sourceType === "csv" ? "#1E40AF" : p.sourceType === "image" ? "#991B1B" : "#6B21A8"}>{(p.sourceType || "?").toUpperCase()}</Tag></td>}
+            <td style={tds}><button onClick={function(){setViewPurch(p);}} style={{ background: "none", border: "none", cursor: "pointer", color: "#0D6B5B", fontSize: 11, fontWeight: 600 }}>View</button></td>
             <td style={tds}><button onClick={function(){setEditPurch({id:p.id,supplier:p.supplier,invoiceNo:p.invoiceNo,date:p.date});}} style={{ background: "none", border: "none", cursor: "pointer", color: "#2563EB", fontSize: 11, fontWeight: 600 }}>Edit</button></td>
             <td style={tds}><button onClick={() => delPurch(p.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#DC2626", fontSize: 11, fontWeight: 600 }}>Delete</button></td>
           </tr>))}</tbody></table></div>}
@@ -1500,6 +1545,17 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
     setEditBill({ ...b, patient: b.patient || "", doctor: b.doctor || "", paymentMode: b.paymentMode || "Cash", billDiscount: b.billDiscount || 0, items: b.items.map(function(i) { return { ...i, unitPrice: i.unitPrice || i.mrp || 0, discount: i.discount || 0, gstRate: i.gstRate || 0 }; }) });
     setTimeout(function() { if (editRef.current) editRef.current.scrollIntoView({ behavior: "smooth", block: "start" }); }, 100);
   };
+
+  // Listen for editBill event from Profit Margin page
+  useEffect(function() {
+    var handler = function(e) {
+      var billNo = e.detail;
+      var bill = bills.find(function(b) { return b.billNo === billNo; });
+      if (bill) doEdit(bill);
+    };
+    window.addEventListener("editBill", handler);
+    return function() { window.removeEventListener("editBill", handler); };
+  }, [bills]);
 
   const saveEditedBill = () => {
     if (!editBill) return;
@@ -2342,7 +2398,7 @@ function BackupPage({ inv, bills, purch, saveAll, askConfirm, saveInv, saveBills
     </div>
   );
 }
-function ProfitPage({ bills, inv, mob, purch, saveBills }) {
+function ProfitPage({ bills, inv, mob, purch, saveBills, showBill, setPage }) {
   const [view, setView] = useState("bill");
   const [profitSearch, setProfitSearch] = useState("");
   const [fromD, setFromD] = useState("");
@@ -2540,10 +2596,16 @@ function ProfitPage({ bills, inv, mob, purch, saveBills }) {
                       <td style={tds}><span style={{ fontWeight: 600, color: sl === "0" ? "#DC2626" : "#059669" }}>{sl}</span></td>
                     </tr>;
                   })}</tbody></table>
-                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8, paddingTop: 8, borderTop: "1px solid #eee", gap: 12, fontSize: 12 }}>
-                  {p.totalDisc > 0 && <span style={{ color: "#DC2626" }}>Discounts: -Rs.{f2(p.totalDisc)}</span>}
-                  <span style={{ color: "#B45309" }}>Total Cost: Rs.{f2(p.totalCost)}</span>
-                  <span style={{ fontWeight: 800, color: p.profit >= 0 ? "#059669" : "#DC2626" }}>Net Profit: Rs.{f2(p.profit)} ({f2(p.margin)}%)</span>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8, paddingTop: 8, borderTop: "1px solid #eee", flexWrap: "wrap", gap: 8 }}>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button onClick={function() { showBill(b, true); }} style={{ ...bts(true), padding: "6px 14px", fontSize: 11 }}>View Bill</button>
+                    <button onClick={function() { setPage("hist"); setTimeout(function() { window.dispatchEvent(new CustomEvent("editBill", { detail: b.billNo })); }, 300); }} style={{ ...bts(false), padding: "6px 14px", fontSize: 11 }}>Edit Bill</button>
+                  </div>
+                  <div style={{ display: "flex", gap: 12, fontSize: 12 }}>
+                    {p.totalDisc > 0 && <span style={{ color: "#DC2626" }}>Discounts: -Rs.{f2(p.totalDisc)}</span>}
+                    <span style={{ color: "#B45309" }}>Total Cost: Rs.{f2(p.totalCost)}</span>
+                    <span style={{ fontWeight: 800, color: p.profit >= 0 ? "#059669" : "#DC2626" }}>Net Profit: Rs.{f2(p.profit)} ({f2(p.margin)}%)</span>
+                  </div>
                 </div>
               </div>}
             </div>;
@@ -4697,7 +4759,7 @@ function App() {
           {page === "rack" && <RackPage inv={inv} saveInv={saveInv} mob={mob} />}
           {page === "audit" && isO && <AuditPage inv={inv} mob={mob} />}
           {page === "bill" && <BillPage inv={inv} saveInv={saveInv} addBill={addBill} mob={mob} showBill={showBill} />}
-          {page === "profit" && isO && <ProfitPage bills={bills} inv={inv} mob={mob} purch={purch} saveBills={saveBills} />}
+          {page === "profit" && isO && <ProfitPage bills={bills} inv={inv} mob={mob} purch={purch} saveBills={saveBills} showBill={showBill} setPage={setPage} />}
           {page === "stock" && <StockPage inv={inv} saveInv={saveInv} isO={isO} mob={mob} />}
           {page === "hist" && <HistPage bills={bills} showBill={showBill} saveBills={saveBills} askConfirm={askConfirm} inv={inv} saveInv={saveInv} purch={purch} />}
           {page === "customers" && <CustomersPage bills={bills} mob={mob} showBill={showBill} />}
