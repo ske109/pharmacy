@@ -79,6 +79,7 @@ if (CONFIGURED) {
 
 // Claude API Proxy URL (deploy worker.js to Cloudflare Workers, then paste URL here)
 const PROXY_URL = "https://atoz-pharmacy-api.sk05012024.workers.dev";
+const COMPARE_SERVER = localStorage.getItem("compareServer") || "http://localhost:3000";
 const PROXY_READY = PROXY_URL.indexOf("YOUR-WORKER") === -1;
 const CLAUDE_HEADERS = { "Content-Type": "application/json" };
 
@@ -3150,27 +3151,23 @@ function ComparePage({ inv, mob }) {
     const newCreds = {...creds, [portal]: {username, password}};
     saveCreds(newCreds);
     try {
-      // Try the Node server /api/login if available, else simulate connected
-      const resp = await fetch("/api/login", {
+      const resp = await fetch(PROXY_URL + "/dist-api", {
         method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({portal, username, password})
+        body: JSON.stringify({action: "login", portal, username, password})
       });
       const data = await resp.json();
       if (data.ok) {
         setLoginStatus(s => ({...s, [portal]: "connected"}));
         setLoginMsg(m => ({...m, [portal]: "Connected successfully"}));
         saveConnected({...connected, [portal]: true});
+        saveCreds({...newCreds, [portal]: {username, password, session: data.session}});
       } else {
-        // If no server, just mark connected with stored creds
-        setLoginStatus(s => ({...s, [portal]: "connected"}));
-        setLoginMsg(m => ({...m, [portal]: "Credentials saved (portal will be accessed via proxy)"}));
-        saveConnected({...connected, [portal]: true});
+        setLoginStatus(s => ({...s, [portal]: "error"}));
+        setLoginMsg(m => ({...m, [portal]: data.error || "Login failed"}));
       }
     } catch(e) {
-      // No server running  -  just save creds and mark as using proxy
-      setLoginStatus(s => ({...s, [portal]: "connected"}));
-      setLoginMsg(m => ({...m, [portal]: "Credentials saved  -  will use proxy access"}));
-      saveConnected({...connected, [portal]: true});
+      setLoginStatus(s => ({...s, [portal]: "error"}));
+      setLoginMsg(m => ({...m, [portal]: "Cannot reach server - " + e.message}));
     }
   };
 
@@ -3290,14 +3287,67 @@ function ComparePage({ inv, mob }) {
 
     await Promise.all(activePortals.map(async (p) => {
       try {
-        const resp = await fetch("/api/search", {
+        if (p.id === "udaan") {
+          results[p.id] = {ok: false, error: "Udaan search not supported via API - use Browse button"};
+          setSingleResults({...results});
+          return;
+        }
+        // Step 1: Search (GetItems)
+        const session = creds[p.id]?.session || "";
+        const resp = await fetch(PROXY_URL + "/dist-api", {
           method:"POST", headers:{"Content-Type":"application/json"},
-          body: JSON.stringify({portal:p.id, query:searchQ,
-            username: creds[p.id]?.username, password: creds[p.id]?.password,
-            mobile: creds[p.id]?.mobile})
+          body: JSON.stringify({action: "search", portal: p.id, session, query: searchQ})
         });
         const data = await resp.json();
-        results[p.id] = data;
+        if (!data.ok) {
+          // Session expired - try re-login
+          if (data.error && data.error.indexOf("expired") >= 0 && creds[p.id]?.username) {
+            const loginResp = await fetch(PROXY_URL + "/dist-api", {
+              method:"POST", headers:{"Content-Type":"application/json"},
+              body: JSON.stringify({action: "login", portal: p.id, username: creds[p.id].username, password: creds[p.id].password})
+            });
+            const loginData = await loginResp.json();
+            if (loginData.ok) {
+              saveCreds({...creds, [p.id]: {...creds[p.id], session: loginData.session}});
+              // Retry search
+              const resp2 = await fetch(PROXY_URL + "/dist-api", {
+                method:"POST", headers:{"Content-Type":"application/json"},
+                body: JSON.stringify({action: "search", portal: p.id, session: loginData.session, query: searchQ})
+              });
+              const data2 = await resp2.json();
+              if (data2.ok) {
+                // Get details for each result
+                const items = await Promise.all((data2.results || []).slice(0, 10).map(async (item) => {
+                  try {
+                    const dr = await fetch(PROXY_URL + "/dist-api", {
+                      method:"POST", headers:{"Content-Type":"application/json"},
+                      body: JSON.stringify({action: "details", portal: p.id, session: loginData.session, itemRaw: item.raw})
+                    });
+                    const dd = await dr.json();
+                    return {...item, mrp: dd.mrp || "", rate: dd.rate || "", detailScheme: dd.scheme || ""};
+                  } catch(e) { return item; }
+                }));
+                results[p.id] = {ok: true, items};
+                setSingleResults({...results});
+                return;
+              }
+            }
+          }
+          results[p.id] = data;
+        } else {
+          // Get details for top results
+          const items = await Promise.all((data.results || []).slice(0, 10).map(async (item) => {
+            try {
+              const dr = await fetch(PROXY_URL + "/dist-api", {
+                method:"POST", headers:{"Content-Type":"application/json"},
+                body: JSON.stringify({action: "details", portal: p.id, session, itemRaw: item.raw})
+              });
+              const dd = await dr.json();
+              return {...item, mrp: dd.mrp || "", rate: dd.rate || "", detailScheme: dd.scheme || ""};
+            } catch(e) { return item; }
+          }));
+          results[p.id] = {ok: true, items};
+        }
       } catch(e) {
         results[p.id] = {ok:false, error: e.message};
       }
@@ -3314,7 +3364,7 @@ function ComparePage({ inv, mob }) {
 
   const runBulk = async () => {
     if (!bulkMeds.length) return;
-    const activePortals = PORTALS.filter(p => connected[p.id]);
+    const activePortals = PORTALS.filter(p => connected[p.id] && p.id !== "udaan");
     if (!activePortals.length) { alert("No distributors connected."); return; }
     setBulkRunning(true); setBulkDone(false);
     const rows = bulkMeds.map(q => ({query:q}));
@@ -3324,12 +3374,25 @@ function ComparePage({ inv, mob }) {
     for (let i = 0; i < bulkMeds.length; i++) {
       await Promise.all(activePortals.map(async (p) => {
         try {
-          const resp = await fetch("/api/search", {
+          const session = creds[p.id]?.session || "";
+          const resp = await fetch(PROXY_URL + "/dist-api", {
             method:"POST", headers:{"Content-Type":"application/json"},
-            body: JSON.stringify({portal:p.id, query:bulkMeds[i],
-              username:creds[p.id]?.username, password:creds[p.id]?.password})
+            body: JSON.stringify({action: "search", portal: p.id, session, query: bulkMeds[i]})
           });
-          rows[i][p.id] = await resp.json();
+          const data = await resp.json();
+          if (data.ok && data.results && data.results.length > 0) {
+            const top = data.results[0];
+            try {
+              const dr = await fetch(PROXY_URL + "/dist-api", {
+                method:"POST", headers:{"Content-Type":"application/json"},
+                body: JSON.stringify({action: "details", portal: p.id, session, itemRaw: top.raw})
+              });
+              const dd = await dr.json();
+              rows[i][p.id] = {ok: true, items: [{...top, mrp: dd.mrp || "", rate: dd.rate || "", detailScheme: dd.scheme || ""}]};
+            } catch(e) { rows[i][p.id] = {ok: true, items: [top]}; }
+          } else {
+            rows[i][p.id] = data;
+          }
         } catch(e) { rows[i][p.id] = {ok:false, error:e.message}; }
         setBulkData([...rows]);
       }));
@@ -3684,7 +3747,7 @@ function ComparePage({ inv, mob }) {
                                       onClick={async()=>{
                                         singleResults[p.id]={loading:true};setSingleResults({...singleResults});
                                         try {
-                                          const r=await fetch("/api/search",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({portal:p.id,query:s.raw||s.itemName,...creds[p.id]})});
+                                          const r=await fetch(PROXY_URL + "/dist-api",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({portal:p.id,query:s.raw||s.itemName,...creds[p.id]})});
                                           singleResults[p.id]=await r.json();
                                         } catch(e){singleResults[p.id]={ok:false,error:e.message};}
                                         setSingleResults({...singleResults});
