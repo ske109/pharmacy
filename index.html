@@ -3071,293 +3071,526 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm, bills, s
 // ENCYCLOPEDIA (MedGuide India Live)
 // ══════════════════════════════════════════════
 // ══════════════════════════════════════════════
-// PRICE COMPARE DASHBOARD
+// PRICE COMPARE DASHBOARD — mirrors dashboard UI
 // ══════════════════════════════════════════════
 function ComparePage({ inv, mob }) {
-  const [searchQ, setSearchQ] = useState("");
-  const [results, setResults] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [history, setHistory] = useState([]);
-  const [activeDistSite, setActiveDistSite] = useState(null);
-  const [compareMode, setCompareMode] = useState("search"); // "search" | "browse"
+  // ── Portal connection state ─────────────────────────────────────────
+  const [connected, setConnected] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("pharma_connected") || "{}"); } catch(_){return {};}
+  });
+  const [creds, setCreds] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("pharma_creds") || "{}"); } catch(_){return {};}
+  });
 
-  const DISTRIBUTORS = [
-    { id: "focus", name: "Focus (Whitefield)", short: "Focus", color: "#0D6B5B", icon: "🏪",
-      proxyUrl: PROXY_URL + "/proxy?target=" + encodeURIComponent("http://whitefield.float-zone.com:8080") + "&path=" + encodeURIComponent("/FocusOnlineOrder/Default.aspx"),
+  // ── Page state ──────────────────────────────────────────────────────
+  const [activeTab, setActiveTab] = useState("login"); // login | search | browse
+  const [activeDist, setActiveDist] = useState(null);  // iframe view
+
+  // ── Login form state ────────────────────────────────────────────────
+  const [vUser, setVUser] = useState(creds.vardhman?.username || "");
+  const [vPass, setVPass] = useState(creds.vardhman?.password || "");
+  const [fUser, setFUser] = useState(creds.focus?.username || "");
+  const [fPass, setFPass] = useState(creds.focus?.password || "");
+  const [uMobile, setUMobile] = useState(creds.udaan?.mobile || "");
+  const [uOtp, setUOtp] = useState("");
+  const [udaanStep, setUdaanStep] = useState(1);
+  const [loginMsg, setLoginMsg] = useState({}); // {vardhman:'',focus:'',udaan:''}
+  const [loginStatus, setLoginStatus] = useState({}); // {vardhman:'connected',...}
+
+  // ── Search state ────────────────────────────────────────────────────
+  const [searchQ, setSearchQ] = useState("");
+  const [searchMode, setSearchMode] = useState("single"); // single | bulk
+  const [singleResults, setSingleResults] = useState({}); // {vardhman:{...}, focus:{...}, udaan:{...}}
+  const [singleLoading, setSingleLoading] = useState(false);
+  const [bulkText, setBulkText] = useState("");
+  const [bulkMeds, setBulkMeds] = useState([]);
+  const [bulkData, setBulkData] = useState([]);
+  const [bulkRunning, setBulkRunning] = useState(false);
+  const [bulkDone, setBulkDone] = useState(false);
+
+  // ── Helper: portals config ──────────────────────────────────────────
+  const PORTALS = [
+    { id: "vardhman", name: "Vardhman", abbr: "V", color: "#1565C0", bg: "#E3F2FD",
+      proxyBase: null, directUrl: null }, // vardhman if it exists locally
+    { id: "focus",    name: "Focus",    abbr: "F", color: "#6A1B9A", bg: "#F3E5F5",
+      proxyBase: "http://whitefield.float-zone.com:8080",
+      proxyPath: "/FocusOnlineOrder/Default.aspx",
       directUrl: "http://whitefield.float-zone.com:8080/FocusOnlineOrder/Default.aspx" },
-    { id: "fgt", name: "FGT Banas", short: "FGT", color: "#B45309", icon: "🏪",
-      proxyUrl: PROXY_URL + "/proxy?target=" + encodeURIComponent("http://fgtbanas.fortiddns.com:8080") + "&path=" + encodeURIComponent("/OnlineOrder/Default.aspx"),
-      directUrl: "http://fgtbanas.fortiddns.com:8080/OnlineOrder/Default.aspx" },
-    { id: "udaan", name: "Udaan B2B", short: "Udaan", color: "#2563EB", icon: "🛒",
-      proxyUrl: PROXY_URL + "/proxy?target=" + encodeURIComponent("https://udaan.com") + "&path=" + encodeURIComponent("/main?selectedTabId=Pharma&navId=pharma"),
-      directUrl: "https://udaan.com/main?selectedTabId=Pharma&navId=pharma" }
+    { id: "udaan",    name: "Udaan",    abbr: "U", color: "#E53935", bg: "#FFEBEE",
+      proxyBase: "https://udaan.com",
+      proxyPath: "/main?selectedTabId=Pharma&navId=pharma",
+      directUrl: "https://udaan.com/main?selectedTabId=Pharma&navId=pharma" },
   ];
 
-  // Find matching medicines from local inventory grouped by name
+  const proxyUrl = (p) => p.proxyBase
+    ? PROXY_URL + "/proxy?target=" + encodeURIComponent(p.proxyBase) + "&path=" + encodeURIComponent(p.proxyPath)
+    : null;
+
+  // save creds to localStorage
+  const saveCreds = (newCreds) => {
+    localStorage.setItem("pharma_creds", JSON.stringify(newCreds));
+    setCreds(newCreds);
+  };
+  const saveConnected = (newConn) => {
+    localStorage.setItem("pharma_connected", JSON.stringify(newConn));
+    setConnected(newConn);
+  };
+
+  // ── Simulate login (hits PROXY /api/login) ──────────────────────────
+  const connectPortal = async (portal) => {
+    const username = portal === "vardhman" ? vUser : fUser;
+    const password = portal === "vardhman" ? vPass : fPass;
+    if (!username || !password) {
+      setLoginMsg(m => ({...m, [portal]: "Enter username and password"}));
+      setLoginStatus(s => ({...s, [portal]: "error"}));
+      return;
+    }
+    setLoginStatus(s => ({...s, [portal]: "pending"}));
+    setLoginMsg(m => ({...m, [portal]: "Connecting..."}));
+    const newCreds = {...creds, [portal]: {username, password}};
+    saveCreds(newCreds);
+    try {
+      // Try the Node server /api/login if available, else simulate connected
+      const resp = await fetch("/api/login", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({portal, username, password})
+      });
+      const data = await resp.json();
+      if (data.ok) {
+        setLoginStatus(s => ({...s, [portal]: "connected"}));
+        setLoginMsg(m => ({...m, [portal]: "Connected successfully"}));
+        saveConnected({...connected, [portal]: true});
+      } else {
+        // If no server, just mark connected with stored creds
+        setLoginStatus(s => ({...s, [portal]: "connected"}));
+        setLoginMsg(m => ({...m, [portal]: "Credentials saved (portal will be accessed via proxy)"}));
+        saveConnected({...connected, [portal]: true});
+      }
+    } catch(e) {
+      // No server running — just save creds and mark as using proxy
+      setLoginStatus(s => ({...s, [portal]: "connected"}));
+      setLoginMsg(m => ({...m, [portal]: "Credentials saved — will use proxy access"}));
+      saveConnected({...connected, [portal]: true});
+    }
+  };
+
+  const sendOtp = async () => {
+    if (!uMobile || uMobile.length < 10) {
+      setLoginMsg(m => ({...m, udaan:"Enter valid 10-digit mobile"}));
+      setLoginStatus(s => ({...s, udaan:"error"}));
+      return;
+    }
+    setLoginStatus(s => ({...s, udaan:"pending"}));
+    setLoginMsg(m => ({...m, udaan:"Sending OTP..."}));
+    saveCreds({...creds, udaan: {mobile: uMobile}});
+    try {
+      const resp = await fetch("/api/udaan/send-otp", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({mobile: uMobile})
+      });
+      const data = await resp.json();
+      if (data.ok) {
+        setUdaanStep(2);
+        setLoginMsg(m => ({...m, udaan:"OTP sent — check your phone"}));
+        setLoginStatus(s => ({...s, udaan:"pending"}));
+      } else {
+        setLoginMsg(m => ({...m, udaan: data.error || "Failed to send OTP"}));
+        setLoginStatus(s => ({...s, udaan:"error"}));
+      }
+    } catch(e) {
+      // No server — just go to step 2 for testing
+      setUdaanStep(2);
+      setLoginMsg(m => ({...m, udaan:"Enter OTP (server not connected — use proxy mode)"}));
+      setLoginStatus(s => ({...s, udaan:"pending"}));
+    }
+  };
+
+  const verifyOtp = async () => {
+    if (!uOtp || uOtp.length < 4) {
+      setLoginMsg(m => ({...m, udaan:"Enter the OTP"}));
+      return;
+    }
+    setLoginStatus(s => ({...s, udaan:"pending"}));
+    setLoginMsg(m => ({...m, udaan:"Verifying..."}));
+    try {
+      const resp = await fetch("/api/udaan/verify-otp", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({mobile: uMobile, otp: uOtp})
+      });
+      const data = await resp.json();
+      if (data.ok) {
+        setLoginStatus(s => ({...s, udaan:"connected"}));
+        setLoginMsg(m => ({...m, udaan:"Logged in to Udaan"}));
+        saveConnected({...connected, udaan:true});
+      } else {
+        setLoginStatus(s => ({...s, udaan:"error"}));
+        setLoginMsg(m => ({...m, udaan: data.error || "Verification failed"}));
+      }
+    } catch(e) {
+      // No server — mark connected via mobile saved
+      setLoginStatus(s => ({...s, udaan:"connected"}));
+      setLoginMsg(m => ({...m, udaan:"Saved — Udaan accessed via proxy"}));
+      saveConnected({...connected, udaan:true});
+    }
+  };
+
+  // ── Single search via /api/search ───────────────────────────────────
+  const doSingleSearch = async () => {
+    if (!searchQ.trim()) return;
+    setSingleLoading(true);
+    setSingleResults({});
+    const activePortals = PORTALS.filter(p => connected[p.id]);
+    if (activePortals.length === 0) {
+      setSingleLoading(false);
+      alert("No distributors connected. Please connect on the Login tab first.");
+      setActiveTab("login");
+      return;
+    }
+    const results = {};
+    activePortals.forEach(p => { results[p.id] = {loading: true}; });
+    setSingleResults({...results});
+
+    await Promise.all(activePortals.map(async (p) => {
+      try {
+        const resp = await fetch("/api/search", {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({portal:p.id, query:searchQ,
+            username: creds[p.id]?.username, password: creds[p.id]?.password,
+            mobile: creds[p.id]?.mobile})
+        });
+        const data = await resp.json();
+        results[p.id] = data;
+      } catch(e) {
+        results[p.id] = {ok:false, error: e.message};
+      }
+      setSingleResults({...results});
+    }));
+    setSingleLoading(false);
+  };
+
+  // ── Bulk CSV compare ────────────────────────────────────────────────
+  const parseBulkText = (text) => {
+    const lines = text.split(/[\n,]+/).map(l => l.trim()).filter(l => l.length > 1);
+    setBulkMeds([...new Set(lines)]);
+  };
+
+  const runBulk = async () => {
+    if (!bulkMeds.length) return;
+    const activePortals = PORTALS.filter(p => connected[p.id]);
+    if (!activePortals.length) { alert("No distributors connected."); return; }
+    setBulkRunning(true); setBulkDone(false);
+    const rows = bulkMeds.map(q => ({query:q}));
+    activePortals.forEach(p => rows.forEach(r => { r[p.id] = {loading:true}; }));
+    setBulkData([...rows]);
+
+    for (let i = 0; i < bulkMeds.length; i++) {
+      await Promise.all(activePortals.map(async (p) => {
+        try {
+          const resp = await fetch("/api/search", {
+            method:"POST", headers:{"Content-Type":"application/json"},
+            body: JSON.stringify({portal:p.id, query:bulkMeds[i],
+              username:creds[p.id]?.username, password:creds[p.id]?.password})
+          });
+          rows[i][p.id] = await resp.json();
+        } catch(e) { rows[i][p.id] = {ok:false, error:e.message}; }
+        setBulkData([...rows]);
+      }));
+    }
+    setBulkRunning(false); setBulkDone(true);
+  };
+
+  const exportBulkCSV = () => {
+    const activePortals = PORTALS.filter(p => connected[p.id]);
+    let csv = "Medicine," + activePortals.flatMap(p => [`${p.name} Scheme`,`${p.name} MRP`,`${p.name} Rate`]).join(",") + "\n";
+    bulkData.forEach(row => {
+      let line = `"${row.query}"`;
+      activePortals.forEach(p => {
+        const d = row[p.id] || {};
+        line += `,"${d.scheme||""}","${d.mrp||""}","${d.rate||""}"`;
+      });
+      csv += line + "\n";
+    });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([csv],{type:"text/csv"}));
+    a.download = "pharma-compare-" + new Date().toISOString().slice(0,10) + ".csv"; a.click();
+  };
+
+  // ── Local inventory fallback for search ─────────────────────────────
   const localMatches = React.useMemo(() => {
     if (!searchQ.trim() || searchQ.length < 2) return [];
     const q = searchQ.toLowerCase();
-    return inv.filter(m => m.name.toLowerCase().includes(q)).sort((a,b) => a.name.localeCompare(b.name));
+    return inv.filter(m => m.name.toLowerCase().includes(q));
   }, [searchQ, inv]);
 
-  // Group local matches by medicine name to compare distributors
-  const localGrouped = React.useMemo(() => {
-    const groups = {};
-    localMatches.forEach(m => {
-      const key = m.name.toLowerCase();
-      if (!groups[key]) groups[key] = { name: m.name, entries: [] };
-      groups[key].entries.push(m);
-    });
-    return Object.values(groups);
-  }, [localMatches]);
-
-  const doAISearch = async () => {
-    if (!searchQ.trim()) return;
-    if (!PROXY_READY) { setError("API proxy not configured."); return; }
-    setLoading(true); setError(""); setResults(null);
-    try {
-      // Build inventory context for the medicine being searched
-      const invContext = localMatches.slice(0, 30).map(m =>
-        m.name + " | PTR:" + f2(m.ptr) + " | MRP:" + f2(m.mrp) + " | Dist:" + (m.purchaseDistributor || m.distributor || "?") + " | Batch:" + (m.batch||"?") + " | Exp:" + (m.expiry||"?") + " | Stock:" + (m.stock||0)
-      ).join("\n");
-
-      // Also gather all purchase history for this medicine
-      const purchContext = inv.filter(m => m.name.toLowerCase().includes(searchQ.toLowerCase()))
-        .map(m => ({
-          name: m.name, ptr: m.ptr, mrp: m.mrp,
-          distributor: m.purchaseDistributor || m.distributor || "",
-          date: m.purchaseDate || "", batch: m.batch || ""
-        }));
-
-      const prompt = `You are a pharmacy purchase advisor. Analyze pricing for: "${searchQ}"
-
-CURRENT INVENTORY DATA (matching medicines):
-${invContext || "No matching items in inventory yet."}
-
-DISTRIBUTOR INFO:
-- Focus (Whitefield): http://whitefield.float-zone.com:8080 - local distributor
-- FGT Banas: http://fgtbanas.fortiddns.com:8080 - local distributor  
-- Udaan: https://udaan.com - B2B online marketplace (often has competitive pricing)
-
-Respond ONLY with valid JSON (no markdown, no explanation):
-{
-  "medicine": "cleaned medicine name",
-  "summary": "1-2 sentence buying recommendation",
-  "bestBuy": "distributor name with best price based on history",
-  "priceInsight": "pricing trend or tip (1 sentence)",
-  "distributorAnalysis": [
-    {"distributor": "Focus (Whitefield)", "avgPTR": number_or_null, "lastPurchase": "date or null", "notes": "short note", "rating": "good/average/expensive/unknown"},
-    {"distributor": "FGT Banas", "avgPTR": number_or_null, "lastPurchase": "date or null", "notes": "short note", "rating": "good/average/expensive/unknown"},
-    {"distributor": "Udaan B2B", "avgPTR": number_or_null, "lastPurchase": "date or null", "notes": "short note", "rating": "good/average/expensive/unknown"}
-  ],
-  "inventoryItems": [{"name": "...", "ptr": 0, "mrp": 0, "distributor": "...", "stock": 0, "batch": "...", "expiry": "..."}],
-  "checkPortals": true
-}`;
-
-      const resp = await fetch(PROXY_URL, {
-        method: "POST", headers: CLAUDE_HEADERS,
-        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000,
-          messages: [{ role: "user", content: prompt }] })
-      });
-      const data = await resp.json();
-      if (data.error) throw new Error(data.error.message || "API error");
-      let t = (data.content || []).map(c => c.text || "").join("").trim();
-      if (t.indexOf("{") >= 0) t = t.slice(t.indexOf("{"), t.lastIndexOf("}") + 1);
-      const parsed = JSON.parse(t);
-      setResults(parsed);
-      setHistory(prev => [{ q: searchQ, ts: new Date().toLocaleTimeString(), result: parsed }, ...prev.slice(0, 4)]);
-    } catch(e) { setError("Analysis failed: " + e.message); }
-    setLoading(false);
+  // ── Styles mirroring dashboard UI ───────────────────────────────────
+  const S = {
+    page: { fontFamily:"'DM Sans',sans-serif", color:"#1a1a2e", minHeight:"100%" },
+    topbar: { background:"#fff", borderBottom:"1px solid #e0e0e0", padding:"14px 20px",
+      display:"flex", alignItems:"center", justifyContent:"space-between",
+      marginBottom:20, borderRadius:12, boxShadow:"0 1px 4px rgba(0,0,0,.06)" },
+    h1: { fontSize:18, fontWeight:700, color:"#1a1a2e", margin:0 },
+    h1span: { color:"#e53935" },
+    nav: { display:"flex", gap:4 },
+    navA: (active) => ({ padding:"7px 16px", borderRadius:8, fontWeight:600, fontSize:13,
+      cursor:"pointer", border:"none", fontFamily:"inherit",
+      background: active ? "#1a1a2e" : "transparent", color: active ? "#fff" : "#555",
+      transition:"all .15s" }),
+    card: { background:"#fff", borderRadius:14, padding:20,
+      boxShadow:"0 1px 4px rgba(0,0,0,.06)", border:"2px solid transparent", marginBottom:16 },
+    cardConnected: { borderColor:"#4caf50" },
+    cardPending: { borderColor:"#ff9800" },
+    label: { display:"block", fontSize:11, fontWeight:600, color:"#888", marginBottom:4,
+      textTransform:"uppercase", letterSpacing:"0.5px" },
+    input: { width:"100%", padding:"10px 12px", border:"1.5px solid #e0e0e0", borderRadius:8,
+      fontSize:14, fontFamily:"'DM Sans',sans-serif", marginBottom:12, outline:"none",
+      boxSizing:"border-box" },
+    btn: { display:"inline-flex", alignItems:"center", justifyContent:"center",
+      padding:"11px 20px", border:"none", borderRadius:8, fontSize:14, fontWeight:600,
+      fontFamily:"'DM Sans',sans-serif", cursor:"pointer", transition:"all .2s" },
+    btnPrimary: { background:"#1a1a2e", color:"#fff", width:"100%" },
+    btnDanger: { background:"#e53935", color:"#fff" },
+    badge: (status) => {
+      const map = {
+        connected:    { background:"#e8f5e9", color:"#2e7d32" },
+        pending:      { background:"#fff3e0", color:"#e65100" },
+        error:        { background:"#ffebee", color:"#c62828" },
+        disconnected: { background:"#f5f5f5", color:"#999" },
+      };
+      const s = map[status] || map.disconnected;
+      return { fontSize:11, fontWeight:700, padding:"4px 10px", borderRadius:20,
+        textTransform:"uppercase", letterSpacing:"0.5px", ...s };
+    },
+    portalIcon: (color) => ({ width:36, height:36, borderRadius:8, display:"inline-flex",
+      alignItems:"center", justifyContent:"center", fontWeight:700, fontSize:14,
+      color:"#fff", background:color, marginRight:10, flexShrink:0 }),
+    connChip: (active) => ({ display:"inline-flex", alignItems:"center", gap:6,
+      padding:"5px 12px", borderRadius:20, fontSize:12, fontWeight:600,
+      background: active ? "#e8f5e9" : "#f5f5f5", color: active ? "#2e7d32" : "#999" }),
+    dot: (active) => ({ width:7, height:7, borderRadius:"50%",
+      background: active ? "#4caf50" : "#ccc", display:"inline-block" }),
+    searchBox: { display:"flex", gap:10, marginBottom:20 },
+    searchInput: { flex:1, padding:"14px 18px", border:"2px solid #e0e0e0", borderRadius:12,
+      fontSize:16, fontFamily:"'DM Sans',sans-serif", outline:"none" },
+    searchBtn: { padding:"14px 28px", background:"#1a1a2e", color:"#fff", border:"none",
+      borderRadius:12, fontSize:15, fontWeight:600, fontFamily:"'DM Sans',sans-serif",
+      cursor:"pointer", whiteSpace:"nowrap" },
+    tabs: { display:"flex", gap:4, marginBottom:20, background:"#fff", padding:6,
+      borderRadius:12, boxShadow:"0 1px 4px rgba(0,0,0,.06)", width:"fit-content" },
+    tab: (active) => ({ padding:"8px 20px", border:"none", background: active ? "#1a1a2e" : "none",
+      color: active ? "#fff" : "#888", fontFamily:"'DM Sans',sans-serif", fontSize:14,
+      fontWeight:600, borderRadius:8, cursor:"pointer", transition:"all .2s" }),
+    resultCard: { background:"#fff", borderRadius:14, padding:20,
+      boxShadow:"0 1px 4px rgba(0,0,0,.06)", flex:1, minWidth:220 },
+    portalName: { fontSize:13, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.5px",
+      marginBottom:12, display:"flex", alignItems:"center", gap:8 },
+    portalDot: (color) => ({ width:10, height:10, borderRadius:"50%",
+      background:color, display:"inline-block", flexShrink:0 }),
+    priceGrid: { display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:8, marginBottom:8 },
+    priceCell: { textAlign:"center", padding:"10px 6px", background:"#f8f9fa", borderRadius:8 },
+    priceLabel: { fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", marginBottom:4 },
+    priceVal: { fontSize:17, fontWeight:700, color:"#1a1a2e" },
+    emptyVal: { color:"#ccc", fontSize:14 },
+    table: { width:"100%", borderCollapse:"collapse", fontSize:13 },
+    th: { textAlign:"left", padding:"10px 14px", background:"#1a1a2e", color:"#fff",
+      fontWeight:700, fontSize:11, textTransform:"uppercase", letterSpacing:"0.5px" },
+    td: { padding:"11px 14px", borderBottom:"1px solid #f2f3f5", verticalAlign:"middle" },
   };
 
-  const ratingColor = (r) => ({ good: "#059669", average: "#B45309", expensive: "#DC2626", unknown: "#9CA3AF" }[r] || "#9CA3AF");
-  const ratingBg = (r) => ({ good: "#ECFDF5", average: "#FFFBEB", expensive: "#FEF2F2", unknown: "#F3F4F6" }[r] || "#F3F4F6");
+  const getBadgeStatus = (pid) => loginStatus[pid] || (connected[pid] ? "connected" : "disconnected");
 
-  if (activeDistSite) {
-    const dist = DISTRIBUTORS.find(d => d.id === activeDistSite);
+  // ── Iframe portal view ──────────────────────────────────────────────
+  if (activeDist) {
+    const p = PORTALS.find(x => x.id === activeDist);
+    const iframeSrc = proxyUrl(p);
     return (
-      <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <button onClick={() => setActiveDistSite(null)} style={{ background: "#E8E4DD", border: "none", borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontFamily: "inherit", fontWeight: 600, fontSize: 13 }}>← Back</button>
-            <span style={{ fontWeight: 700, fontSize: 15, color: dist.color }}>{dist.icon} {dist.name}</span>
+      <div style={S.page}>
+        <div style={S.topbar}>
+          <div style={{display:"flex",alignItems:"center",gap:12}}>
+            <button onClick={() => setActiveDist(null)} style={{background:"#f0f2f5",border:"none",borderRadius:8,padding:"7px 14px",cursor:"pointer",fontFamily:"inherit",fontWeight:600,fontSize:13,color:"#1a1a2e"}}>← Back</button>
+            <div style={{display:"flex",alignItems:"center"}}>
+              <span style={S.portalIcon(p.color)}>{p.abbr}</span>
+              <b style={{fontSize:15}}>{p.name}</b>
+            </div>
           </div>
-          <a href={dist.directUrl} target="_blank" rel="noopener noreferrer" style={{ background: dist.color, color: "#fff", borderRadius: 8, padding: "6px 14px", textDecoration: "none", fontSize: 12, fontWeight: 600 }}>Open in New Tab ↗</a>
+          {p.directUrl && <a href={p.directUrl} target="_blank" rel="noopener noreferrer"
+            style={{background:"#1a1a2e",color:"#fff",borderRadius:8,padding:"7px 16px",textDecoration:"none",fontSize:13,fontWeight:600}}>
+            Open in New Tab ↗
+          </a>}
         </div>
-        <div style={{ borderRadius: 12, overflow: "hidden", border: "2px solid #D4D0C8", flex: 1 }}>
-          <iframe src={dist.proxyUrl} style={{ width: "100%", height: mob ? 500 : 650, border: "none" }}
-            title={dist.name} sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-top-navigation" />
-        </div>
+        {iframeSrc ? (
+          <div style={{borderRadius:14,overflow:"hidden",border:"2px solid #e0e0e0"}}>
+            <iframe src={iframeSrc} style={{width:"100%",height:mob?480:640,border:"none"}}
+              title={p.name} sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-top-navigation" />
+          </div>
+        ) : (
+          <div style={{...S.card,textAlign:"center",padding:40,color:"#888"}}>
+            <div style={{fontSize:14}}>Portal browsing not available for {p.name}.<br/>Connect via credentials above then visit the portal directly.</div>
+          </div>
+        )}
       </div>
     );
   }
 
   return (
-    <div>
-      <h2 style={hds}>🔍 Price Compare</h2>
-
-      {/* Mode Toggle */}
-      <div style={{ display: "flex", gap: 3, background: "#E8E4DD", borderRadius: 8, padding: 3, marginBottom: 16, width: "fit-content" }}>
-        {[["search","AI Price Analysis"],["browse","Browse Portals"]].map(([id,l]) =>
-          <button key={id} onClick={() => setCompareMode(id)} style={{ padding: "7px 16px", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: compareMode === id ? "#fff" : "transparent", color: compareMode === id ? "#0D6B5B" : "#888", boxShadow: compareMode === id ? "0 1px 3px rgba(0,0,0,.1)" : "none" }}>{l}</button>
-        )}
+    <div style={S.page}>
+      {/* ── Topbar ── */}
+      <div style={S.topbar}>
+        <h1 style={S.h1}>Pharmacy<span style={S.h1span}>Compare</span></h1>
+        <div style={S.nav}>
+          {[["login","Login"],["search","Search"],["browse","Portals"]].map(([id,l]) => (
+            <button key={id} onClick={() => setActiveTab(id)} style={S.navA(activeTab===id)}>{l}</button>
+          ))}
+        </div>
       </div>
 
-      {compareMode === "browse" && (
+      {/* ── Connection status chips ── */}
+      <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
+        {PORTALS.map(p => {
+          const st = getBadgeStatus(p.id);
+          const isConn = st === "connected";
+          return (
+            <div key={p.id} style={S.connChip(isConn)}>
+              <span style={S.dot(isConn)} />
+              {p.name}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* ════════════════ LOGIN TAB ════════════════ */}
+      {activeTab === "login" && (
         <div>
-          <div style={{ fontSize: 13, color: "#555", marginBottom: 14 }}>Browse distributor portals side by side or individually to compare prices and place orders.</div>
-          <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "repeat(3,1fr)", gap: 12, marginBottom: 20 }}>
-            {DISTRIBUTORS.map(d => (
-              <div key={d.id} onClick={() => setActiveDistSite(d.id)} style={{ ...cds, border: "2px solid " + d.color + "40", textAlign: "center", cursor: "pointer", transition: "box-shadow .15s" }}
-                onMouseEnter={e => e.currentTarget.style.boxShadow = "0 4px 16px " + d.color + "30"}
-                onMouseLeave={e => e.currentTarget.style.boxShadow = ""}>
-                <div style={{ fontSize: 32, marginBottom: 8 }}>{d.icon}</div>
-                <div style={{ fontWeight: 700, fontSize: 14, color: d.color }}>{d.name}</div>
-                <div style={{ fontSize: 11, color: "#888", margin: "6px 0 12px" }}>
-                  {d.id === "focus" ? "Whitefield Local Distributor" : d.id === "fgt" ? "Banas Local Distributor" : "B2B Online Marketplace"}
+          <p style={{fontSize:14,color:"#777",marginBottom:20}}>Connect your distributor accounts. Credentials are saved locally for quick access.</p>
+          <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"repeat(3,1fr)",gap:16}}>
+
+            {/* Vardhman */}
+            {(()=>{
+              const st = getBadgeStatus("vardhman");
+              return (
+                <div style={{...S.card, ...(st==="connected"?S.cardConnected:st==="pending"?S.cardPending:{})}}>
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
+                    <div style={{display:"flex",alignItems:"center"}}>
+                      <span style={S.portalIcon("#1565C0")}>V</span>
+                      <b style={{fontSize:17}}>Vardhman</b>
+                    </div>
+                    <span style={S.badge(st)}>{st}</span>
+                  </div>
+                  <label style={S.label}>Username</label>
+                  <input style={S.input} type="text" value={vUser} onChange={e=>setVUser(e.target.value)} placeholder="Enter username" />
+                  <label style={S.label}>Password</label>
+                  <input style={S.input} type="password" value={vPass} onChange={e=>setVPass(e.target.value)} placeholder="Enter password" />
+                  <button style={{...S.btn,...S.btnPrimary}} onClick={() => connectPortal("vardhman")}>Connect</button>
+                  {loginMsg.vardhman && <div style={{fontSize:12,marginTop:8,color:st==="error"?"#c62828":st==="connected"?"#2e7d32":"#f57c00"}}>{loginMsg.vardhman}</div>}
                 </div>
-                <div style={{ padding: "8px 20px", background: d.color, color: "#fff", borderRadius: 8, display: "inline-block", fontWeight: 600, fontSize: 13 }}>Browse →</div>
-              </div>
-            ))}
+              );
+            })()}
+
+            {/* Focus */}
+            {(()=>{
+              const st = getBadgeStatus("focus");
+              return (
+                <div style={{...S.card, ...(st==="connected"?S.cardConnected:st==="pending"?S.cardPending:{})}}>
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
+                    <div style={{display:"flex",alignItems:"center"}}>
+                      <span style={S.portalIcon("#6A1B9A")}>F</span>
+                      <b style={{fontSize:17}}>Focus</b>
+                    </div>
+                    <span style={S.badge(st)}>{st}</span>
+                  </div>
+                  <label style={S.label}>Username</label>
+                  <input style={S.input} type="text" value={fUser} onChange={e=>setFUser(e.target.value)} placeholder="Enter username" />
+                  <label style={S.label}>Password</label>
+                  <input style={S.input} type="password" value={fPass} onChange={e=>setFPass(e.target.value)} placeholder="Enter password" />
+                  <button style={{...S.btn,...S.btnPrimary,background:"#6A1B9A"}} onClick={() => connectPortal("focus")}>Connect</button>
+                  {loginMsg.focus && <div style={{fontSize:12,marginTop:8,color:st==="error"?"#c62828":st==="connected"?"#2e7d32":"#f57c00"}}>{loginMsg.focus}</div>}
+                  {st==="connected" && <button onClick={()=>setActiveDist("focus")} style={{...S.btn,background:"#f3e5f5",color:"#6A1B9A",width:"100%",marginTop:8,fontSize:13}}>Browse Portal →</button>}
+                </div>
+              );
+            })()}
+
+            {/* Udaan */}
+            {(()=>{
+              const st = getBadgeStatus("udaan");
+              return (
+                <div style={{...S.card, ...(st==="connected"?S.cardConnected:st==="pending"?S.cardPending:{})}}>
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
+                    <div style={{display:"flex",alignItems:"center"}}>
+                      <span style={S.portalIcon("#E53935")}>U</span>
+                      <b style={{fontSize:17}}>Udaan</b>
+                    </div>
+                    <span style={S.badge(st)}>{st}</span>
+                  </div>
+                  {udaanStep === 1 ? (
+                    <div>
+                      <label style={S.label}>Mobile Number</label>
+                      <input style={S.input} type="tel" value={uMobile} onChange={e=>setUMobile(e.target.value)} placeholder="10-digit mobile" maxLength={10} />
+                      <button style={{...S.btn,...S.btnPrimary,background:"#E53935"}} onClick={sendOtp}>Send OTP</button>
+                    </div>
+                  ) : (
+                    <div>
+                      <label style={S.label}>Enter OTP</label>
+                      <input style={{...S.input,fontSize:20,fontWeight:700,letterSpacing:4,textAlign:"center"}} type="text" value={uOtp} onChange={e=>setUOtp(e.target.value)} placeholder="6-digit OTP" maxLength={6} />
+                      <button style={{...S.btn,...S.btnPrimary,background:"#E53935"}} onClick={verifyOtp}>Verify</button>
+                      <div style={{height:1,background:"#eee",margin:"12px 0"}} />
+                      <button onClick={()=>{setUdaanStep(1);setUOtp("");setLoginMsg(m=>({...m,udaan:""}));setLoginStatus(s=>({...s,udaan:"disconnected"}));}}
+                        style={{...S.btn,background:"#f5f5f5",color:"#555",width:"100%",fontSize:13}}>← Change Number</button>
+                    </div>
+                  )}
+                  {loginMsg.udaan && <div style={{fontSize:12,marginTop:8,color:st==="error"?"#c62828":st==="connected"?"#2e7d32":"#f57c00"}}>{loginMsg.udaan}</div>}
+                  {st==="connected" && <button onClick={()=>setActiveDist("udaan")} style={{...S.btn,background:"#ffebee",color:"#E53935",width:"100%",marginTop:8,fontSize:13}}>Browse Portal →</button>}
+                </div>
+              );
+            })()}
           </div>
 
-          {/* Quick inventory summary by distributor */}
-          <div style={cds}>
-            <b style={{ fontSize: 13, color: "#0C2E24" }}>Purchase History by Distributor</b>
-            <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "repeat(3,1fr)", gap: 10, marginTop: 12 }}>
-              {DISTRIBUTORS.map(d => {
-                const items = inv.filter(m => (m.purchaseDistributor||m.distributor||"").toLowerCase().includes(d.short.toLowerCase()));
-                const totalVal = items.reduce((s,m) => s + (m.ptr||0)*(m.stock||0), 0);
-                return (
-                  <div key={d.id} style={{ background: ratingBg("good"), border: "1px solid " + d.color + "30", borderRadius: 10, padding: 12 }}>
-                    <div style={{ fontWeight: 700, color: d.color, fontSize: 13, marginBottom: 6 }}>{d.icon} {d.short}</div>
-                    <div style={{ fontSize: 12, color: "#555" }}>{items.length} medicines</div>
-                    <div style={{ fontSize: 12, color: "#555" }}>Stock val: Rs.{Math.round(totalVal).toLocaleString()}</div>
-                  </div>
-                );
-              })}
-            </div>
+          {/* Tip */}
+          <div style={{background:"#f8f9fa",border:"1px solid #e0e0e0",borderRadius:10,padding:"12px 16px",fontSize:13,color:"#555",marginTop:4}}>
+            💡 After connecting, go to <b>Search</b> to compare prices across portals, or <b>Portals</b> to browse them directly.
           </div>
         </div>
       )}
 
-      {compareMode === "search" && (
+      {/* ════════════════ SEARCH TAB ════════════════ */}
+      {activeTab === "search" && (
         <div>
-          {/* Search bar */}
-          <div style={{ ...cds, marginBottom: 16 }}>
-            <div style={{ fontSize: 13, color: "#555", marginBottom: 12 }}>Enter a medicine name to compare prices across your purchase history and get AI buying recommendations.</div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <input value={searchQ} onChange={e => setSearchQ(e.target.value)}
-                onKeyDown={e => e.key === "Enter" && doAISearch()}
-                placeholder="e.g. Paracetamol, Amoxicillin, Metformin..."
-                style={{ ...inps, flex: 1, fontSize: 14, padding: "10px 14px" }} />
-              <button onClick={doAISearch} disabled={loading || !searchQ.trim()}
-                style={{ ...bts(true), padding: "10px 20px", opacity: loading || !searchQ.trim() ? .6 : 1, whiteSpace: "nowrap" }}>
-                {loading ? "Analyzing..." : "🔍 Compare"}
-              </button>
-            </div>
-            {error && <div style={{ color: "#DC2626", fontSize: 12, marginTop: 8 }}>{error}</div>}
+          {/* Tabs: Single / Bulk */}
+          <div style={S.tabs}>
+            {[["single","Single Search"],["bulk","Bulk CSV Compare"]].map(([id,l]) => (
+              <button key={id} style={S.tab(searchMode===id)} onClick={()=>setSearchMode(id)}>{l}</button>
+            ))}
           </div>
 
-          {/* Live local inventory preview while typing */}
-          {searchQ.length >= 2 && !loading && !results && localGrouped.length > 0 && (
-            <div style={{ ...cds, marginBottom: 16 }}>
-              <b style={{ fontSize: 12, color: "#888", textTransform: "uppercase", letterSpacing: 1 }}>Found in Your Inventory</b>
-              <div style={{ marginTop: 10, overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                  <thead><tr>
-                    {["Medicine","Distributor","PTR","MRP","Stock","Batch","Expiry"].map(h => <th key={h} style={{ ...ths, fontSize: 11 }}>{h}</th>)}
-                  </tr></thead>
-                  <tbody>
-                    {localMatches.slice(0,10).map((m,i) => (
-                      <tr key={i} style={{ background: i%2===0?"#FAFAF7":"#fff" }}>
-                        <td style={{ ...tds, fontWeight: 600, fontSize: 12 }}>{m.name}</td>
-                        <td style={{ ...tds, fontSize: 11, color: "#0D6B5B", fontWeight: 600 }}>{m.purchaseDistributor||m.distributor||"-"}</td>
-                        <td style={{ ...tds, fontSize: 12, fontWeight: 700 }}>Rs.{f2(m.ptr)}</td>
-                        <td style={{ ...tds, fontSize: 11 }}>Rs.{f2(m.mrp)}</td>
-                        <td style={{ ...tds, fontSize: 11 }}>{m.stock||0}</td>
-                        <td style={{ ...tds, fontSize: 11, fontFamily: "monospace" }}>{m.batch||"-"}</td>
-                        <td style={{ ...tds, fontSize: 11 }}>{m.expiry||"-"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <button onClick={doAISearch} style={{ ...bts(true), marginTop: 10, fontSize: 12 }}>Get AI Analysis →</button>
-            </div>
-          )}
-
-          {/* Loading state */}
-          {loading && (
-            <div style={{ ...cds, textAlign: "center", padding: 40 }}>
-              <div style={{ fontSize: 32, marginBottom: 12, animation: "spin 1s linear infinite", display: "inline-block" }}>⚙️</div>
-              <div style={{ fontSize: 14, color: "#0D6B5B", fontWeight: 600 }}>Analyzing purchase history & pricing...</div>
-              <div style={{ fontSize: 12, color: "#888", marginTop: 6 }}>Checking all distributors for {searchQ}</div>
-            </div>
-          )}
-
-          {/* Results */}
-          {results && !loading && (
+          {/* ── Single Search ── */}
+          {searchMode === "single" && (
             <div>
-              {/* Summary card */}
-              <div style={{ background: "linear-gradient(135deg,#0C2E24,#1A5744)", borderRadius: 14, padding: 20, marginBottom: 16, color: "#fff" }}>
-                <div style={{ fontSize: 11, opacity: .6, letterSpacing: 2, textTransform: "uppercase", marginBottom: 6 }}>Analysis for</div>
-                <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "'Playfair Display',serif", marginBottom: 10 }}>{results.medicine || searchQ}</div>
-                <div style={{ fontSize: 13, lineHeight: 1.6, opacity: .9, marginBottom: 12 }}>{results.summary}</div>
-                {results.bestBuy && (
-                  <div style={{ background: "rgba(52,211,153,.2)", border: "1px solid rgba(52,211,153,.4)", borderRadius: 8, padding: "8px 14px", display: "inline-block" }}>
-                    <span style={{ fontSize: 11, opacity: .7 }}>Best Buy: </span>
-                    <span style={{ fontWeight: 700, color: "#34D399" }}>{results.bestBuy}</span>
-                  </div>
-                )}
-                {results.priceInsight && <div style={{ marginTop: 10, fontSize: 12, opacity: .7, fontStyle: "italic" }}>💡 {results.priceInsight}</div>}
+              <div style={S.searchBox}>
+                <input style={S.searchInput} value={searchQ} onChange={e=>setSearchQ(e.target.value)}
+                  onKeyDown={e=>e.key==="Enter"&&doSingleSearch()}
+                  placeholder="Search medicine (e.g. Dolo 650, Amaryl 1mg, Pan D)" />
+                <button style={{...S.searchBtn, opacity:singleLoading?.5:1}} onClick={doSingleSearch} disabled={singleLoading}>
+                  {singleLoading ? "Searching..." : "Compare"}
+                </button>
               </div>
 
-              {/* Distributor comparison */}
-              <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "repeat(3,1fr)", gap: 12, marginBottom: 16 }}>
-                {(results.distributorAnalysis || []).map((da, i) => {
-                  const dist = DISTRIBUTORS[i] || {};
-                  return (
-                    <div key={i} style={{ background: ratingBg(da.rating), border: "2px solid " + (ratingColor(da.rating) + "40"), borderRadius: 12, padding: 16 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-                        <div style={{ fontWeight: 700, fontSize: 13, color: dist.color || "#333" }}>{dist.icon} {da.distributor}</div>
-                        <span style={{ background: ratingColor(da.rating), color: "#fff", borderRadius: 20, padding: "2px 9px", fontSize: 10, fontWeight: 700, textTransform: "uppercase" }}>{da.rating}</span>
-                      </div>
-                      {da.avgPTR ? (
-                        <div style={{ fontSize: 22, fontWeight: 800, color: "#0C2E24", marginBottom: 4 }}>Rs.{f2(da.avgPTR)}<span style={{ fontSize: 11, fontWeight: 400, color: "#888" }}> PTR</span></div>
-                      ) : (
-                        <div style={{ fontSize: 14, color: "#aaa", marginBottom: 4 }}>No price data</div>
-                      )}
-                      {da.lastPurchase && <div style={{ fontSize: 11, color: "#888", marginBottom: 8 }}>Last: {da.lastPurchase}</div>}
-                      <div style={{ fontSize: 12, color: "#555", lineHeight: 1.5 }}>{da.notes}</div>
-                      <button onClick={() => setActiveDistSite(dist.id)} style={{ ...bts(false), marginTop: 10, fontSize: 11, padding: "5px 12px", width: "100%", border: "1px solid " + (dist.color || "#ccc") + "60", color: dist.color || "#333" }}>
-                        Browse Portal →
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Inventory items detail */}
-              {results.inventoryItems && results.inventoryItems.length > 0 && (
-                <div style={{ ...cds, marginBottom: 16 }}>
-                  <b style={{ fontSize: 13 }}>Your Inventory — {results.medicine}</b>
-                  <div style={{ overflowX: "auto", marginTop: 10 }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              {/* Local inventory quick preview */}
+              {searchQ.length >= 2 && localMatches.length > 0 && !Object.keys(singleResults).length && (
+                <div style={{...S.card,marginBottom:16}}>
+                  <div style={{fontSize:11,fontWeight:700,color:"#888",textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Found in Your Inventory</div>
+                  <div style={{overflowX:"auto"}}>
+                    <table style={S.table}>
                       <thead><tr>
-                        {["Medicine","Distributor","PTR","MRP","Stock","Batch","Expiry"].map(h => <th key={h} style={{ ...ths, fontSize: 11 }}>{h}</th>)}
+                        {["Medicine","Distributor","PTR","MRP","Stock","Batch"].map(h=>(
+                          <th key={h} style={S.th}>{h}</th>
+                        ))}
                       </tr></thead>
                       <tbody>
-                        {results.inventoryItems.map((it, i) => (
-                          <tr key={i} style={{ background: i%2===0?"#FAFAF7":"#fff" }}>
-                            <td style={{ ...tds, fontWeight: 600, fontSize: 12 }}>{it.name}</td>
-                            <td style={{ ...tds, fontSize: 11, color: "#0D6B5B", fontWeight: 600 }}>{it.distributor||"-"}</td>
-                            <td style={{ ...tds, fontWeight: 700, color: "#0C2E24" }}>Rs.{f2(it.ptr)}</td>
-                            <td style={{ ...tds, fontSize: 11 }}>Rs.{f2(it.mrp)}</td>
-                            <td style={{ ...tds, fontSize: 11 }}>{it.stock||0}</td>
-                            <td style={{ ...tds, fontSize: 11, fontFamily: "monospace" }}>{it.batch||"-"}</td>
-                            <td style={{ ...tds, fontSize: 11 }}>{it.expiry||"-"}</td>
+                        {localMatches.slice(0,8).map((m,i)=>(
+                          <tr key={i} style={{background:i%2===0?"#fafbfc":"#fff"}}>
+                            <td style={{...S.td,fontWeight:600}}>{m.name}</td>
+                            <td style={{...S.td,fontSize:12,color:"#1565C0",fontWeight:600}}>{m.purchaseDistributor||m.distributor||"—"}</td>
+                            <td style={{...S.td,fontWeight:700}}>₹{f2(m.ptr)}</td>
+                            <td style={{...S.td,fontSize:12}}>₹{f2(m.mrp)}</td>
+                            <td style={{...S.td,fontSize:12}}>{m.stock||0}</td>
+                            <td style={{...S.td,fontSize:12,fontFamily:"monospace"}}>{m.batch||"—"}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -3366,56 +3599,233 @@ Respond ONLY with valid JSON (no markdown, no explanation):
                 </div>
               )}
 
-              {/* Portal browse shortcuts */}
-              {results.checkPortals && (
-                <div style={{ ...cds, background: "#F0FDF4", border: "1px solid #BBF7D0" }}>
-                  <b style={{ fontSize: 13, color: "#059669" }}>📋 Check Live Prices on Portals</b>
-                  <div style={{ fontSize: 12, color: "#555", marginTop: 4, marginBottom: 12 }}>Search for <b>"{results.medicine || searchQ}"</b> on these portals for current pricing:</div>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    {DISTRIBUTORS.map(d => (
-                      <button key={d.id} onClick={() => setActiveDistSite(d.id)}
-                        style={{ background: d.color, color: "#fff", border: "none", borderRadius: 8, padding: "8px 16px", cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "inherit" }}>
-                        {d.icon} {d.short} →
-                      </button>
+              {/* Results grid */}
+              {Object.keys(singleResults).length > 0 && (
+                <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
+                  {PORTALS.filter(p=>singleResults[p.id]!==undefined).map(p => {
+                    const d = singleResults[p.id];
+                    const isLoading = d?.loading;
+                    const isError = !d?.ok && !isLoading;
+                    const mrp = d?.mrp || "—";
+                    const rate = d?.rate || "—";
+                    const scheme = d?.scheme || "—";
+                    return (
+                      <div key={p.id} style={S.resultCard}>
+                        <div style={S.portalName}>
+                          <span style={S.portalDot(p.color)} />
+                          {p.name}
+                        </div>
+                        {isLoading ? (
+                          <div>
+                            <div style={{...S.priceGrid}}>
+                              {["Scheme","MRP","Rate"].map(l=>(
+                                <div key={l} style={S.priceCell}>
+                                  <div style={S.priceLabel}>{l}</div>
+                                  <div style={{...S.priceVal,...S.emptyVal}}>…</div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : isError ? (
+                          <div style={{color:"#c62828",fontSize:13}}>{d?.error || "Not found or not connected"}</div>
+                        ) : (
+                          <div>
+                            <div style={{fontSize:14,fontWeight:600,marginBottom:10,color:"#1a1a2e"}}>{d?.suggestion || searchQ}</div>
+                            <div style={S.priceGrid}>
+                              <div style={S.priceCell}><div style={S.priceLabel}>Scheme</div><div style={{...S.priceVal,...(scheme==="—"?S.emptyVal:{})}}>{scheme}</div></div>
+                              <div style={S.priceCell}><div style={S.priceLabel}>MRP</div><div style={{...S.priceVal,...(mrp==="—"?S.emptyVal:{})}}>{mrp==="—"?"—":"₹"+mrp}</div></div>
+                              <div style={S.priceCell}><div style={S.priceLabel}>Rate</div><div style={{...S.priceVal,...(rate==="—"?S.emptyVal:{})}}>{rate==="—"?"—":"₹"+rate}</div></div>
+                            </div>
+                            {/* Suggestions */}
+                            {d?.suggestions && d.suggestions.length > 1 && (
+                              <details style={{marginTop:10,borderTop:"1px solid #eee",paddingTop:10}}>
+                                <summary style={{fontSize:12,color:"#888",cursor:"pointer",fontWeight:600}}>{d.suggestions.length} items found</summary>
+                                <div style={{marginTop:6}}>
+                                  {d.suggestions.slice(0,6).map((s,i)=>(
+                                    <div key={i} style={{padding:"5px 10px",background:"#f5f5f5",borderRadius:6,margin:"3px 0",fontSize:12,cursor:"pointer"}}
+                                      onClick={async()=>{
+                                        singleResults[p.id]={loading:true};setSingleResults({...singleResults});
+                                        try {
+                                          const r=await fetch("/api/search",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({portal:p.id,query:s.raw||s.itemName,...creds[p.id]})});
+                                          singleResults[p.id]=await r.json();
+                                        } catch(e){singleResults[p.id]={ok:false,error:e.message};}
+                                        setSingleResults({...singleResults});
+                                      }}>
+                                      {s.itemName}{s.pack?" · "+s.pack:""} {s.avail&&<span style={{color:s.avail.toUpperCase()==="AVL"?"#2e7d32":"#c62828",fontWeight:600,fontSize:11}}>{s.avail}</span>}
+                                    </div>
+                                  ))}
+                                </div>
+                              </details>
+                            )}
+                          </div>
+                        )}
+                        <button onClick={()=>setActiveDist(p.id)} style={{...S.btn,background:"#f5f5f5",color:"#1a1a2e",width:"100%",marginTop:12,fontSize:12}}>Browse {p.name} →</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {!Object.keys(singleResults).length && !searchQ && (
+                <div style={{textAlign:"center",padding:"48px 20px",color:"#999"}}>
+                  <div style={{fontSize:36,marginBottom:10}}>⚖️</div>
+                  <div style={{fontSize:15}}>Search for a medicine to compare prices across connected distributors</div>
+                  {!PORTALS.some(p=>connected[p.id]) && (
+                    <div style={{marginTop:12}}>
+                      <button onClick={()=>setActiveTab("login")} style={{...S.btn,background:"#1a1a2e",color:"#fff",margin:"0 auto"}}>Connect Distributors →</button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Bulk CSV ── */}
+          {searchMode === "bulk" && (
+            <div>
+              {/* Drop zone */}
+              <div style={{border:"2px dashed #d0d0d0",borderRadius:14,padding:28,textAlign:"center",background:"#fff",cursor:"pointer",marginBottom:14}}
+                onClick={()=>document.getElementById("cp-csv-input").click()}>
+                <input id="cp-csv-input" type="file" accept=".csv,.txt" style={{display:"none"}}
+                  onChange={e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>parseBulkText(ev.target.result);r.readAsText(f);}} />
+                <div style={{fontSize:32,marginBottom:6}}>📂</div>
+                <b style={{fontSize:15,color:"#1a1a2e"}}>Upload CSV file</b>
+                <p style={{fontSize:13,color:"#888",marginTop:4}}>One medicine name per row, or comma-separated. Click to browse.</p>
+              </div>
+
+              <div style={{marginBottom:14}}>
+                <div style={{fontSize:13,fontWeight:600,color:"#555",marginBottom:6}}>Or type medicine names (comma or newline separated):</div>
+                <div style={{display:"flex",gap:8}}>
+                  <textarea value={bulkText} onChange={e=>setBulkText(e.target.value)} rows={3}
+                    style={{flex:1,padding:"10px 14px",border:"2px solid #e0e0e0",borderRadius:10,fontFamily:"'DM Sans',sans-serif",fontSize:14,resize:"vertical"}}
+                    placeholder="Dolo 650, Crocin, Pan D, Amaryl 1mg ..." />
+                  <button style={{...S.btn,background:"#f5f5f5",color:"#1a1a2e",alignSelf:"flex-start",border:"2px solid #e0e0e0"}}
+                    onClick={()=>parseBulkText(bulkText)}>Load</button>
+                </div>
+              </div>
+
+              {bulkMeds.length > 0 && (
+                <div style={{background:"#fff",borderRadius:12,padding:"14px 16px",marginBottom:14,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
+                  <b style={{fontSize:13}}>{bulkMeds.length} medicine{bulkMeds.length>1?"s":""} loaded</b>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:8}}>
+                    {bulkMeds.map((m,i)=>(
+                      <span key={i} style={{background:"#e8f0fe",color:"#1565c0",fontSize:12,fontWeight:600,padding:"4px 12px",borderRadius:20}}>{m}</span>
                     ))}
                   </div>
                 </div>
               )}
 
-              <button onClick={() => { setResults(null); setSearchQ(""); }} style={{ ...bts(false), marginTop: 12, fontSize: 12 }}>New Search</button>
-            </div>
-          )}
+              <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap"}}>
+                <button style={{...S.btn,background:"#1a1a2e",color:"#fff"}} disabled={!bulkMeds.length||bulkRunning} onClick={runBulk}>
+                  {bulkRunning?"Running...":"▶ Run Comparison"}
+                </button>
+                {bulkDone && <button style={{...S.btn,background:"#2e7d32",color:"#fff"}} onClick={exportBulkCSV}>⬇ Download Report</button>}
+              </div>
 
-          {/* Search history */}
-          {history.length > 0 && !results && (
-            <div style={{ ...cds }}>
-              <b style={{ fontSize: 12, color: "#888", textTransform: "uppercase", letterSpacing: 1 }}>Recent Searches</b>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
-                {history.map((h, i) => (
-                  <button key={i} onClick={() => { setSearchQ(h.q); setResults(h.result); }}
-                    style={{ background: "#E8E4DD", border: "none", borderRadius: 20, padding: "5px 14px", cursor: "pointer", fontSize: 12, fontFamily: "inherit", color: "#444" }}>
-                    {h.q} <span style={{ opacity: .5, fontSize: 10 }}>{h.ts}</span>
-                  </button>
-                ))}
-              </div>
+              {/* Bulk results table */}
+              {bulkData.length > 0 && (
+                <div style={{background:"#fff",borderRadius:14,boxShadow:"0 1px 4px rgba(0,0,0,.06)",overflowX:"auto"}}>
+                  <table style={{...S.table,minWidth:500}}>
+                    <thead>
+                      <tr>
+                        <th style={S.th} rowSpan={2}>Medicine</th>
+                        {PORTALS.filter(p=>connected[p.id]).map(p=>(
+                          <th key={p.id} style={{...S.th,color:p.id==="vardhman"?"#90caf9":p.id==="focus"?"#ce93d8":"#ef9a9a"}} colSpan={3}>{p.name}</th>
+                        ))}
+                      </tr>
+                      <tr>
+                        {PORTALS.filter(p=>connected[p.id]).flatMap(p=>(
+                          ["Scheme","MRP","Rate"].map(l=><th key={p.id+l} style={{...S.th,fontSize:10,fontWeight:600,background:"#2d2d4e"}}>{l}</th>)
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {bulkData.map((row,i)=>(
+                        <tr key={i} style={{background:i%2===0?"#fafbfc":"#fff"}}>
+                          <td style={{...S.td,fontWeight:600}}>{row.query}</td>
+                          {PORTALS.filter(p=>connected[p.id]).flatMap(p=>{
+                            const d = row[p.id];
+                            if (!d||d.loading) return ["Scheme","MRP","Rate"].map(l=>(
+                              <td key={p.id+l} style={{...S.td,color:"#f57c00",textAlign:"center",fontSize:12}}>⏳</td>
+                            ));
+                            if (!d.ok) return ["Scheme","MRP","Rate"].map(l=>(
+                              <td key={p.id+l} style={{...S.td,color:"#c62828",textAlign:"center",fontSize:12}}>✗</td>
+                            ));
+                            return [
+                              <td key={p.id+"s"} style={{...S.td,fontSize:12}}>{d.scheme||"—"}</td>,
+                              <td key={p.id+"m"} style={{...S.td,fontWeight:700,fontSize:13}}>{d.mrp?"₹"+d.mrp:"—"}</td>,
+                              <td key={p.id+"r"} style={{...S.td,fontWeight:700,fontSize:13,color:"#2e7d32"}}>{d.rate?"₹"+d.rate:"—"}</td>,
+                            ];
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
+        </div>
+      )}
 
-          {/* Empty state */}
-          {!searchQ && !results && history.length === 0 && (
-            <div style={{ ...cds, textAlign: "center", padding: 40 }}>
-              <div style={{ fontSize: 48, marginBottom: 12 }}>⚖️</div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: "#0C2E24", marginBottom: 8 }}>Compare Distributor Prices</div>
-              <div style={{ fontSize: 13, color: "#888", maxWidth: 400, margin: "0 auto 20px" }}>
-                Search any medicine to see pricing history across Focus, FGT Banas, and Udaan. AI analyzes your purchase history to recommend the best buy.
-              </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "center" }}>
-                {["Paracetamol","Amoxicillin","Metformin","Omeprazole"].map(s => (
-                  <button key={s} onClick={() => { setSearchQ(s); }} style={{ background: "#E8E4DD", border: "none", borderRadius: 20, padding: "6px 16px", cursor: "pointer", fontSize: 12, fontFamily: "inherit", color: "#0D6B5B", fontWeight: 600 }}>{s}</button>
-                ))}
-              </div>
+      {/* ════════════════ PORTALS TAB ════════════════ */}
+      {activeTab === "browse" && (
+        <div>
+          <p style={{fontSize:14,color:"#777",marginBottom:16}}>Browse distributor portals directly. Login first to access order placement.</p>
+          <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"repeat(3,1fr)",gap:16,marginBottom:20}}>
+            {PORTALS.map(p => {
+              const st = getBadgeStatus(p.id);
+              const items = inv.filter(m=>(m.purchaseDistributor||m.distributor||"").toLowerCase().includes(p.name.toLowerCase()));
+              return (
+                <div key={p.id} style={{...S.card,textAlign:"center",cursor:proxyUrl(p)?"pointer":"default",border:"2px solid "+p.color+"30"}}
+                  onClick={()=>proxyUrl(p)&&setActiveDist(p.id)}>
+                  <div style={{width:56,height:56,borderRadius:14,background:p.color,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:22,color:"#fff",margin:"0 auto 12px"}}>
+                    {p.abbr}
+                  </div>
+                  <div style={{fontWeight:700,fontSize:16,color:p.color,marginBottom:4}}>{p.name}</div>
+                  <div style={{...S.badge(st),display:"inline-block",marginBottom:12}}>{st}</div>
+                  <div style={{fontSize:12,color:"#888",marginBottom:12}}>{items.length} medicines in inventory</div>
+                  {proxyUrl(p) ? (
+                    <div style={{padding:"9px 20px",background:p.color,color:"#fff",borderRadius:9,display:"inline-block",fontWeight:600,fontSize:13}}>Browse Portal →</div>
+                  ) : (
+                    <div style={{padding:"9px 20px",background:"#f5f5f5",color:"#999",borderRadius:9,display:"inline-block",fontWeight:600,fontSize:13}}>No Proxy Available</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Purchase history by portal */}
+          <div style={S.card}>
+            <b style={{fontSize:14,display:"block",marginBottom:14}}>Purchase History by Distributor</b>
+            <div style={{overflowX:"auto"}}>
+              <table style={S.table}>
+                <thead><tr>
+                  {["Distributor","Medicines","Stock Value","Last Purchase"].map(h=><th key={h} style={S.th}>{h}</th>)}
+                </tr></thead>
+                <tbody>
+                  {PORTALS.map(p=>{
+                    const items = inv.filter(m=>(m.purchaseDistributor||m.distributor||"").toLowerCase().includes(p.name.toLowerCase()));
+                    const val = items.reduce((s,m)=>s+(m.ptr||0)*(m.stock||0),0);
+                    const lastDate = items.map(m=>m.purchaseDate||"").filter(Boolean).sort().reverse()[0];
+                    return (
+                      <tr key={p.id}>
+                        <td style={S.td}>
+                          <div style={{display:"flex",alignItems:"center",gap:8}}>
+                            <span style={{...S.portalIcon(p.color),width:28,height:28,fontSize:11,margin:0}}>{p.abbr}</span>
+                            <b>{p.name}</b>
+                          </div>
+                        </td>
+                        <td style={S.td}>{items.length}</td>
+                        <td style={{...S.td,fontWeight:700}}>₹{Math.round(val).toLocaleString("en-IN")}</td>
+                        <td style={{...S.td,fontSize:12,color:"#888"}}>{lastDate?fD(lastDate):"—"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
-          )}
+          </div>
         </div>
       )}
     </div>
