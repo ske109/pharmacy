@@ -3071,7 +3071,7 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm, bills, s
 // ENCYCLOPEDIA (MedGuide India Live)
 // ══════════════════════════════════════════════
 // ══════════════════════════════════════════════
-// PRICE COMPARE DASHBOARD — mirrors dashboard UI
+// PRICE COMPARE DASHBOARD  -  mirrors dashboard UI
 // ══════════════════════════════════════════════
 function ComparePage({ inv, mob }) {
   // ── Portal connection state ─────────────────────────────────────────
@@ -3167,9 +3167,9 @@ function ComparePage({ inv, mob }) {
         saveConnected({...connected, [portal]: true});
       }
     } catch(e) {
-      // No server running — just save creds and mark as using proxy
+      // No server running  -  just save creds and mark as using proxy
       setLoginStatus(s => ({...s, [portal]: "connected"}));
-      setLoginMsg(m => ({...m, [portal]: "Credentials saved — will use proxy access"}));
+      setLoginMsg(m => ({...m, [portal]: "Credentials saved  -  will use proxy access"}));
       saveConnected({...connected, [portal]: true});
     }
   };
@@ -3183,26 +3183,45 @@ function ComparePage({ inv, mob }) {
     setLoginStatus(s => ({...s, udaan:"pending"}));
     setLoginMsg(m => ({...m, udaan:"Sending OTP..."}));
     saveCreds({...creds, udaan: {mobile: uMobile}});
+
+    // Try 1: Cloudflare Worker (REST API)
     try {
-      const resp = await fetch("/api/udaan/send-otp", {
+      var resp = await fetch(PROXY_URL + "/udaan-otp", {
         method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({mobile: uMobile})
+        body: JSON.stringify({action: "send", mobile: uMobile})
       });
-      const data = await resp.json();
+      var data = await resp.json();
       if (data.ok) {
         setUdaanStep(2);
-        setLoginMsg(m => ({...m, udaan:"OTP sent — check your phone"}));
+        setLoginMsg(m => ({...m, udaan:"OTP sent - check your phone"}));
         setLoginStatus(s => ({...s, udaan:"pending"}));
-      } else {
-        setLoginMsg(m => ({...m, udaan: data.error || "Failed to send OTP"}));
-        setLoginStatus(s => ({...s, udaan:"error"}));
+        return;
       }
-    } catch(e) {
-      // No server — just go to step 2 for testing
-      setUdaanStep(2);
-      setLoginMsg(m => ({...m, udaan:"Enter OTP (server not connected — use proxy mode)"}));
-      setLoginStatus(s => ({...s, udaan:"pending"}));
+    } catch(e) { /* Worker failed, try local */ }
+
+    // Try 2: Local comparison dashboard server
+    var localPorts = [3000, 3001, 8080];
+    for (var pi = 0; pi < localPorts.length; pi++) {
+      try {
+        var resp2 = await fetch("http://localhost:" + localPorts[pi] + "/api/udaan/send-otp", {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({mobile: uMobile})
+        });
+        var data2 = await resp2.json();
+        if (data2.ok) {
+          setUdaanStep(2);
+          setLoginMsg(m => ({...m, udaan:"OTP sent via local server (port " + localPorts[pi] + ")"}));
+          setLoginStatus(s => ({...s, udaan:"pending"}));
+          saveCreds({...creds, udaan: {mobile: uMobile, localPort: localPorts[pi]}});
+          return;
+        }
+      } catch(e) { /* try next port */ }
     }
+
+    // All failed - still show OTP input for manual entry
+    setUdaanStep(2);
+    setLoginMsg(m => ({...m, udaan:"Could not send OTP automatically. If you received OTP on your phone, enter it below. Or start the comparison dashboard server locally."}));
+    setLoginStatus(s => ({...s, udaan:"pending"}));
   };
 
   const verifyOtp = async () => {
@@ -3212,26 +3231,45 @@ function ComparePage({ inv, mob }) {
     }
     setLoginStatus(s => ({...s, udaan:"pending"}));
     setLoginMsg(m => ({...m, udaan:"Verifying..."}));
+
+    // Try 1: Cloudflare Worker
     try {
-      const resp = await fetch("/api/udaan/verify-otp", {
+      var resp = await fetch(PROXY_URL + "/udaan-otp", {
         method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({mobile: uMobile, otp: uOtp})
+        body: JSON.stringify({action: "verify", mobile: uMobile, otp: uOtp})
       });
-      const data = await resp.json();
+      var data = await resp.json();
       if (data.ok) {
         setLoginStatus(s => ({...s, udaan:"connected"}));
         setLoginMsg(m => ({...m, udaan:"Logged in to Udaan"}));
         saveConnected({...connected, udaan:true});
-      } else {
-        setLoginStatus(s => ({...s, udaan:"error"}));
-        setLoginMsg(m => ({...m, udaan: data.error || "Verification failed"}));
+        if (data.token) saveCreds({...creds, udaan: {mobile: uMobile, token: data.token}});
+        return;
       }
-    } catch(e) {
-      // No server — mark connected via mobile saved
-      setLoginStatus(s => ({...s, udaan:"connected"}));
-      setLoginMsg(m => ({...m, udaan:"Saved — Udaan accessed via proxy"}));
-      saveConnected({...connected, udaan:true});
+    } catch(e) { /* try local */ }
+
+    // Try 2: Local comparison dashboard server
+    var localPort = (creds.udaan && creds.udaan.localPort) || 3000;
+    var localPorts = [localPort, 3000, 3001, 8080];
+    for (var pi = 0; pi < localPorts.length; pi++) {
+      try {
+        var resp2 = await fetch("http://localhost:" + localPorts[pi] + "/api/udaan/verify-otp", {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({mobile: uMobile, otp: uOtp})
+        });
+        var data2 = await resp2.json();
+        if (data2.ok) {
+          setLoginStatus(s => ({...s, udaan:"connected"}));
+          setLoginMsg(m => ({...m, udaan:"Logged in to Udaan via local server"}));
+          saveConnected({...connected, udaan:true});
+          if (data2.token) saveCreds({...creds, udaan: {mobile: uMobile, token: data2.token, localPort: localPorts[pi]}});
+          return;
+        }
+      } catch(e) { /* try next */ }
     }
+
+    setLoginStatus(s => ({...s, udaan:"error"}));
+    setLoginMsg(m => ({...m, udaan:"OTP verification failed. Make sure the comparison dashboard server is running locally."}));
   };
 
   // ── Single search via /api/search ───────────────────────────────────
@@ -3586,11 +3624,11 @@ function ComparePage({ inv, mob }) {
                         {localMatches.slice(0,8).map((m,i)=>(
                           <tr key={i} style={{background:i%2===0?"#fafbfc":"#fff"}}>
                             <td style={{...S.td,fontWeight:600}}>{m.name}</td>
-                            <td style={{...S.td,fontSize:12,color:"#1565C0",fontWeight:600}}>{m.purchaseDistributor||m.distributor||"—"}</td>
+                            <td style={{...S.td,fontSize:12,color:"#1565C0",fontWeight:600}}>{m.purchaseDistributor||m.distributor||" - "}</td>
                             <td style={{...S.td,fontWeight:700}}>₹{f2(m.ptr)}</td>
                             <td style={{...S.td,fontSize:12}}>₹{f2(m.mrp)}</td>
                             <td style={{...S.td,fontSize:12}}>{m.stock||0}</td>
-                            <td style={{...S.td,fontSize:12,fontFamily:"monospace"}}>{m.batch||"—"}</td>
+                            <td style={{...S.td,fontSize:12,fontFamily:"monospace"}}>{m.batch||" - "}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -3606,9 +3644,9 @@ function ComparePage({ inv, mob }) {
                     const d = singleResults[p.id];
                     const isLoading = d?.loading;
                     const isError = !d?.ok && !isLoading;
-                    const mrp = d?.mrp || "—";
-                    const rate = d?.rate || "—";
-                    const scheme = d?.scheme || "—";
+                    const mrp = d?.mrp || " - ";
+                    const rate = d?.rate || " - ";
+                    const scheme = d?.scheme || " - ";
                     return (
                       <div key={p.id} style={S.resultCard}>
                         <div style={S.portalName}>
@@ -3632,9 +3670,9 @@ function ComparePage({ inv, mob }) {
                           <div>
                             <div style={{fontSize:14,fontWeight:600,marginBottom:10,color:"#1a1a2e"}}>{d?.suggestion || searchQ}</div>
                             <div style={S.priceGrid}>
-                              <div style={S.priceCell}><div style={S.priceLabel}>Scheme</div><div style={{...S.priceVal,...(scheme==="—"?S.emptyVal:{})}}>{scheme}</div></div>
-                              <div style={S.priceCell}><div style={S.priceLabel}>MRP</div><div style={{...S.priceVal,...(mrp==="—"?S.emptyVal:{})}}>{mrp==="—"?"—":"₹"+mrp}</div></div>
-                              <div style={S.priceCell}><div style={S.priceLabel}>Rate</div><div style={{...S.priceVal,...(rate==="—"?S.emptyVal:{})}}>{rate==="—"?"—":"₹"+rate}</div></div>
+                              <div style={S.priceCell}><div style={S.priceLabel}>Scheme</div><div style={{...S.priceVal,...(scheme===" - "?S.emptyVal:{})}}>{scheme}</div></div>
+                              <div style={S.priceCell}><div style={S.priceLabel}>MRP</div><div style={{...S.priceVal,...(mrp===" - "?S.emptyVal:{})}}>{mrp===" - "?" - ":"₹"+mrp}</div></div>
+                              <div style={S.priceCell}><div style={S.priceLabel}>Rate</div><div style={{...S.priceVal,...(rate===" - "?S.emptyVal:{})}}>{rate===" - "?" - ":"₹"+rate}</div></div>
                             </div>
                             {/* Suggestions */}
                             {d?.suggestions && d.suggestions.length > 1 && (
@@ -3752,9 +3790,9 @@ function ComparePage({ inv, mob }) {
                               <td key={p.id+l} style={{...S.td,color:"#c62828",textAlign:"center",fontSize:12}}>✗</td>
                             ));
                             return [
-                              <td key={p.id+"s"} style={{...S.td,fontSize:12}}>{d.scheme||"—"}</td>,
-                              <td key={p.id+"m"} style={{...S.td,fontWeight:700,fontSize:13}}>{d.mrp?"₹"+d.mrp:"—"}</td>,
-                              <td key={p.id+"r"} style={{...S.td,fontWeight:700,fontSize:13,color:"#2e7d32"}}>{d.rate?"₹"+d.rate:"—"}</td>,
+                              <td key={p.id+"s"} style={{...S.td,fontSize:12}}>{d.scheme||" - "}</td>,
+                              <td key={p.id+"m"} style={{...S.td,fontWeight:700,fontSize:13}}>{d.mrp?"₹"+d.mrp:" - "}</td>,
+                              <td key={p.id+"r"} style={{...S.td,fontWeight:700,fontSize:13,color:"#2e7d32"}}>{d.rate?"₹"+d.rate:" - "}</td>,
                             ];
                           })}
                         </tr>
@@ -3818,7 +3856,7 @@ function ComparePage({ inv, mob }) {
                         </td>
                         <td style={S.td}>{items.length}</td>
                         <td style={{...S.td,fontWeight:700}}>₹{Math.round(val).toLocaleString("en-IN")}</td>
-                        <td style={{...S.td,fontSize:12,color:"#888"}}>{lastDate?fD(lastDate):"—"}</td>
+                        <td style={{...S.td,fontSize:12,color:"#888"}}>{lastDate?fD(lastDate):" - "}</td>
                       </tr>
                     );
                   })}
