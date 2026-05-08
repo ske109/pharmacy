@@ -79,7 +79,6 @@ if (CONFIGURED) {
 
 // Claude API Proxy URL (deploy worker.js to Cloudflare Workers, then paste URL here)
 const PROXY_URL = "https://atoz-pharmacy-api.sk05012024.workers.dev";
-const COMPARE_SERVER = localStorage.getItem("compareServer") || "http://localhost:3000";
 const PROXY_READY = PROXY_URL.indexOf("YOUR-WORKER") === -1;
 const CLAUDE_HEADERS = { "Content-Type": "application/json" };
 
@@ -119,19 +118,6 @@ function fStock(stock, packQty) {
   if (loose >= pq) { packs += 1; loose = 0; }
   if (loose === 0) return String(packs);
   return packs + "." + String(loose).padStart(2, "0");
-}
-
-// Parse "packs.tablets" display format back to internal decimal
-// e.g. "2.13" with packQty=15 → 2 + 13/15 = 2.8667
-// e.g. "5" → 5.0
-function parseStockInput(val, packQty) {
-  var s = String(val).trim();
-  var pq = Number(packQty) || 10;
-  var dot = s.indexOf(".");
-  if (dot === -1) return parseFloat(s) || 0;
-  var packs = parseInt(s.substring(0, dot)) || 0;
-  var loose = parseInt(s.substring(dot + 1)) || 0;
-  return Math.round((packs + loose / pq) * 10000) / 10000;
 }
 
 // ══════════════════════════════════════════════
@@ -693,7 +679,7 @@ function Login({ onLogin }) {
 // ══════════════════════════════════════════════
 function Sidebar({ page, setPage, user, onLogout, counts, mob, sideOpen, setSideOpen }) {
   const isO = user.role === "owner";
-  const nav = [{ id: "dash", i: "📊", l: "Dashboard" }, ...(isO ? [{ id: "purch", i: "📦", l: "Purchases" }, { id: "returns", i: "↩️", l: "Returns" }] : []), { id: "inv", i: "💊", l: "Inventory" }, { id: "rack", i: "🗄", l: "Racks" }, ...(isO ? [{ id: "audit", i: "📝", l: "Audit" }] : []), { id: "bill", i: "🧾", l: "New Bill" }, ...(isO ? [{ id: "profit", i: "💹", l: "Profit Margin" }] : []), { id: "stock", i: "📋", l: "Stock" }, { id: "hist", i: "🗂", l: "Bills" }, ...(isO ? [{ id: "reports", i: "📑", l: "Reports" }] : []), { id: "customers", i: "👤", l: "Customers" }, { id: "compare", i: "⚖️", l: "Price Compare" }, { id: "ency", i: "📚", l: "Encyclopedia" }, ...(isO ? [{ id: "users", i: "👥", l: "Users" }, { id: "backup", i: "💾", l: "Backup" }] : [])];
+  const nav = [{ id: "dash", i: "📊", l: "Dashboard" }, ...(isO ? [{ id: "purch", i: "📦", l: "Purchases" }, { id: "returns", i: "↩️", l: "Returns" }] : []), { id: "inv", i: "💊", l: "Inventory" }, { id: "rack", i: "🗄", l: "Racks" }, ...(isO ? [{ id: "audit", i: "📝", l: "Audit" }] : []), { id: "bill", i: "🧾", l: "New Bill" }, ...(isO ? [{ id: "profit", i: "💹", l: "Profit Margin" }] : []), { id: "stock", i: "📋", l: "Stock" }, { id: "hist", i: "🗂", l: "Bills" }, ...(isO ? [{ id: "reports", i: "📑", l: "Reports" }] : []), { id: "customers", i: "👤", l: "Customers" }, { id: "ency", i: "📚", l: "Encyclopedia" }, ...(isO ? [{ id: "users", i: "👥", l: "Users" }, { id: "backup", i: "💾", l: "Backup" }] : [])];
   if (mob && !sideOpen) return null;
   return (
     <div>
@@ -871,53 +857,9 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm, inv, s
   ];
   const [purchColVis, setPurchColVis] = useState({ invoice: true, supplier: true, date: true, items: true, amt: true, src: true });
   const shP = (k) => purchColVis[k] !== false;
-  const [viewPurch, setViewPurch] = useState(null);
 
   return (
-    <div>
-      {/* View Purchase Modal */}
-      {viewPurch && <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={function() { setViewPurch(null); }}>
-        <div style={{ background: "#fff", borderRadius: 16, maxWidth: 800, width: "100%", maxHeight: "85vh", overflow: "auto", padding: 24 }} onClick={function(e) { e.stopPropagation(); }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-            <div><h3 style={{ fontSize: 18, fontWeight: 700, color: "#0C2E24", margin: 0 }}>{viewPurch.supplier || "Purchase"}</h3>
-              <div style={{ fontSize: 12, color: "#888" }}>Invoice: {viewPurch.invoiceNo || "-"} | Date: {fD(viewPurch.date)} | Source: {(viewPurch.sourceType || "manual").toUpperCase()}</div></div>
-            <button onClick={function() { setViewPurch(null); }} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#888" }}>x</button>
-          </div>
-          <div style={{ fontWeight: 700, fontSize: 16, color: "#0D6B5B", marginBottom: 12 }}>Rs.{f2(viewPurch.netAmount)} ({viewPurch.items.length} items)</div>
-          <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
-            {["#","Medicine","Batch","Expiry","MRP","PTR","Qty","Free","Disc%","Scheme%","GST%","Amount"].map(function(h) { return <th key={h} style={{ ...ths, fontSize: 11 }}>{h}</th>; })}</tr></thead><tbody>
-            {viewPurch.items.map(function(it, i) {
-              var amt = purchCalcAmt(it);
-              return <tr key={i}>
-                <td style={{ ...tds, color: "#888" }}>{i + 1}</td>
-                <td style={{ ...tds, fontWeight: 600 }}>{it.name}</td>
-                <td style={{ ...tds, fontFamily: "monospace", fontSize: 11 }}>{it.batch || "-"}</td>
-                <td style={{ ...tds, fontSize: 11 }}>{it.expiry || "-"}</td>
-                <td style={tds}>Rs.{f2(it.mrp)}</td>
-                <td style={{ ...tds, color: "#2563EB" }}>Rs.{f2(it.ptr)}</td>
-                <td style={{ ...tds, fontWeight: 600 }}>{it.qty}</td>
-                <td style={tds}>{it.freeQty || 0}</td>
-                <td style={tds}>{it.discPct || 0}%</td>
-                <td style={tds}>{it.schemePct || 0}%</td>
-                <td style={tds}>{it.gstRate || 0}%</td>
-                <td style={{ ...tds, fontWeight: 600, color: "#0D6B5B" }}>Rs.{f2(amt)}</td>
-              </tr>;
-            })}</tbody></table></div>
-          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12, gap: 8 }}>
-            <button onClick={function() {
-              var html = "<html><head><title>Purchase " + (viewPurch.invoiceNo || "") + "</title><style>body{font-family:sans-serif;font-size:11px;padding:20px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #999;padding:4px 6px;font-size:10px}th{background:#eee}</style></head><body>";
-              html += "<h2>" + (viewPurch.supplier || "Purchase") + "</h2><p>Invoice: " + (viewPurch.invoiceNo || "-") + " | Date: " + fD(viewPurch.date) + " | Amount: Rs." + f2(viewPurch.netAmount) + "</p>";
-              html += "<table><tr><th>#</th><th>Medicine</th><th>Batch</th><th>MRP</th><th>PTR</th><th>Qty</th><th>Free</th><th>Disc%</th><th>Scheme%</th><th>GST%</th><th>Amount</th></tr>";
-              viewPurch.items.forEach(function(it, i) { html += "<tr><td>" + (i+1) + "</td><td>" + it.name + "</td><td>" + (it.batch||"-") + "</td><td>Rs." + f2(it.mrp) + "</td><td>Rs." + f2(it.ptr) + "</td><td>" + it.qty + "</td><td>" + (it.freeQty||0) + "</td><td>" + (it.discPct||0) + "%</td><td>" + (it.schemePct||0) + "%</td><td>" + (it.gstRate||0) + "%</td><td>Rs." + f2(purchCalcAmt(it)) + "</td></tr>"; });
-              html += "</table></body></html>";
-              var w = window.open("","_blank"); if(w){w.document.write(html);w.document.close();w.print();}
-            }} style={{ ...bts(true), padding: "8px 16px", fontSize: 12 }}>Print</button>
-            <button onClick={function() { setViewPurch(null); }} style={{ ...bts(false), padding: "8px 16px", fontSize: 12 }}>Close</button>
-          </div>
-        </div>
-      </div>}
-
-      <h2 style={hds}>Purchase Entry</h2>
+    <div><h2 style={hds}>Purchase Entry</h2>
       {rev ? (<div style={{ ...cds, border: "2px solid #0D6B5B" }}>
         <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
           <div><b style={{ color: "#0D6B5B", fontSize: 14 }}>Review - {rev.srcType.toUpperCase()}</b>
@@ -1035,7 +977,6 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm, inv, s
             {shP("items") && <td style={tds}>{p.items.length}</td>}
             {shP("amt") && <td style={{ ...tds, fontWeight: 600 }}>Rs.{f2(p.netAmount)}</td>}
             {shP("src") && <td style={tds}><Tag bg={p.sourceType === "csv" ? "#DBEAFE" : p.sourceType === "image" ? "#FEE2E2" : "#F3E8FF"} fg={p.sourceType === "csv" ? "#1E40AF" : p.sourceType === "image" ? "#991B1B" : "#6B21A8"}>{(p.sourceType || "?").toUpperCase()}</Tag></td>}
-            <td style={tds}><button onClick={function(){setViewPurch(p);}} style={{ background: "none", border: "none", cursor: "pointer", color: "#0D6B5B", fontSize: 11, fontWeight: 600 }}>View</button></td>
             <td style={tds}><button onClick={function(){setEditPurch({id:p.id,supplier:p.supplier,invoiceNo:p.invoiceNo,date:p.date});}} style={{ background: "none", border: "none", cursor: "pointer", color: "#2563EB", fontSize: 11, fontWeight: 600 }}>Edit</button></td>
             <td style={tds}><button onClick={() => delPurch(p.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#DC2626", fontSize: 11, fontWeight: 600 }}>Delete</button></td>
           </tr>))}</tbody></table></div>}
@@ -1089,11 +1030,8 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
   };
 
   const doSave = () => { if (!fm.name || !fm.batch) { alert("Name and Batch required"); return; }
-    const stockVal = fm._stockStr !== undefined ? parseStockInput(fm._stockStr, fm.packQty) : fm.stock;
-    const { _stockStr, ...fmRest } = fm;
-    const fmClean = { ...fmRest, stock: stockVal };
-    if (ed) saveInv(inv.map((m) => m.id === ed ? { ...fmClean, id: ed, uid: m.uid || mkUID() } : m));
-    else saveInv([...inv, { ...fmClean, id: mkId(), addedFrom: "manual", uid: mkUID() }]);
+    if (ed) saveInv(inv.map((m) => m.id === ed ? { ...fm, id: ed, uid: m.uid || mkUID() } : m));
+    else saveInv([...inv, { ...fm, id: mkId(), addedFrom: "manual", uid: mkUID() }]);
     setSf(false); setEd(null); setFm(blank); };
   const doDelete = (id) => { askConfirm("Delete this medicine?", () => saveInv(inv.filter((x) => x.id !== id))); };
 
@@ -1128,8 +1066,7 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
       {sf && <div style={{ ...cds, border: "2px solid #0D6B5B" }}><b style={{ color: "#0D6B5B" }}>{ed ? "Edit" : "Add"} Medicine</b>
         <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "1fr 1fr 1fr 1fr", gap: 10, marginTop: 12 }}>
           {[["name","Name*"],["manufacturer","Mfg"],["batch","Batch*"],["expiry","Expiry"],["pack","Pack"],["rack","Rack"],["distributor","Distributor"],["hsn","HSN"]].map(([k, l]) => <div key={k}><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>{l}</label><input value={fm[k] || ""} onChange={(e) => setFm((f) => ({ ...f, [k]: e.target.value }))} style={inps} /></div>)}
-          {[["mrp","MRP"],["ptr","PTR"],["gstRate","GST%"],["packQty","Pack Qty"]].map(([k, l]) => <div key={k}><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>{l}</label><input type="number" value={fm[k] || 0} onChange={(e) => setFm((f) => ({ ...f, [k]: Number(e.target.value) }))} style={inps} /></div>)}
-          <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Stock <span style={{ fontWeight: 400, color: "#aaa" }}>(packs.tablets)</span></label><input type="text" value={fm._stockStr !== undefined ? fm._stockStr : fStock(fm.stock, fm.packQty)} onChange={(e) => setFm((f) => ({ ...f, _stockStr: e.target.value }))} onBlur={(e) => { var parsed = parseStockInput(e.target.value, fm.packQty); setFm((f) => ({ ...f, stock: parsed, _stockStr: fStock(parsed, f.packQty) })); }} style={inps} /></div>
+          {[["mrp","MRP"],["ptr","PTR"],["stock","Stock"],["gstRate","GST%"],["packQty","Pack Qty"]].map(([k, l]) => <div key={k}><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>{l}</label><input type="number" value={fm[k] || 0} onChange={(e) => setFm((f) => ({ ...f, [k]: Number(e.target.value) }))} style={inps} /></div>)}
         </div><div style={{ display: "flex", gap: 8, marginTop: 12 }}><button onClick={doSave} style={bts(true)}>Save</button><button onClick={() => setSf(false)} style={bts(false)}>Cancel</button></div></div>}
       {/* Mobile card view */}
       {mob ? <div>
@@ -1151,7 +1088,7 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
               <span>{m.rack ? "Rack: " + m.rack : "No rack"} | {m.distributor || "-"}</span>
               <div style={{ display: "flex", gap: 6 }}>
                 <button onClick={function() { setInvExpand(invExpand === m.id ? null : m.id); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#0D6B5B", fontSize: 11, fontWeight: 600 }}>{invExpand === m.id ? "Hide Sales" : "Sales"}</button>
-                <button onClick={function() { setFm({ ...m, _stockStr: undefined }); setEd(m.id); setSf(true); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#2563EB", fontSize: 11 }}>Edit</button>
+                <button onClick={function() { setFm(m); setEd(m.id); setSf(true); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#2563EB", fontSize: 11 }}>Edit</button>
                 {isO && <button onClick={function() { doDelete(m.id); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#DC2626", fontSize: 11 }}>Del</button>}
               </div>
             </div>
@@ -1205,7 +1142,7 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
           {sh("src") && <td style={tds}><Tag bg={m.addedFrom === "csv" ? "#DBEAFE" : m.addedFrom === "image" ? "#FEE2E2" : "#E8E4DD"} fg={m.addedFrom === "csv" ? "#1E40AF" : m.addedFrom === "image" ? "#991B1B" : "#555"}>{(m.addedFrom || "M").slice(0, 3).toUpperCase()}</Tag></td>}
           <td style={tds}><button onClick={function() { setInvExpand(isExp ? null : m.id); }} style={{ ...bts(false), padding: "4px 8px", fontSize: 10, background: isExp ? "#D1FAE5" : undefined }}>{isExp ? "Hide" : "View"}</button></td>
           <td style={{ ...tds, whiteSpace: "nowrap" }}>
-            <button onClick={() => { setFm({ ...m, _stockStr: undefined }); setEd(m.id); setSf(true); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#2563EB", fontSize: 11 }}>Edit</button>
+            <button onClick={() => { setFm(m); setEd(m.id); setSf(true); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#2563EB", fontSize: 11 }}>Edit</button>
             {isO && <button onClick={() => doDelete(m.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#DC2626", fontSize: 11, marginLeft: 4 }}>Del</button>}</td></tr>
           {isExp && <tr><td colSpan="14" style={{ padding: 0, background: "#F0FDF4" }}>
             <div style={{ padding: "8px 14px", fontSize: 12 }}>
@@ -1545,17 +1482,6 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
     setEditBill({ ...b, patient: b.patient || "", doctor: b.doctor || "", paymentMode: b.paymentMode || "Cash", billDiscount: b.billDiscount || 0, items: b.items.map(function(i) { return { ...i, unitPrice: i.unitPrice || i.mrp || 0, discount: i.discount || 0, gstRate: i.gstRate || 0 }; }) });
     setTimeout(function() { if (editRef.current) editRef.current.scrollIntoView({ behavior: "smooth", block: "start" }); }, 100);
   };
-
-  // Listen for editBill event from Profit Margin page
-  useEffect(function() {
-    var handler = function(e) {
-      var billNo = e.detail;
-      var bill = bills.find(function(b) { return b.billNo === billNo; });
-      if (bill) doEdit(bill);
-    };
-    window.addEventListener("editBill", handler);
-    return function() { window.removeEventListener("editBill", handler); };
-  }, [bills]);
 
   const saveEditedBill = () => {
     if (!editBill) return;
@@ -2398,7 +2324,7 @@ function BackupPage({ inv, bills, purch, saveAll, askConfirm, saveInv, saveBills
     </div>
   );
 }
-function ProfitPage({ bills, inv, mob, purch, saveBills, showBill, setPage }) {
+function ProfitPage({ bills, inv, mob, purch, saveBills }) {
   const [view, setView] = useState("bill");
   const [profitSearch, setProfitSearch] = useState("");
   const [fromD, setFromD] = useState("");
@@ -2596,16 +2522,10 @@ function ProfitPage({ bills, inv, mob, purch, saveBills, showBill, setPage }) {
                       <td style={tds}><span style={{ fontWeight: 600, color: sl === "0" ? "#DC2626" : "#059669" }}>{sl}</span></td>
                     </tr>;
                   })}</tbody></table>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8, paddingTop: 8, borderTop: "1px solid #eee", flexWrap: "wrap", gap: 8 }}>
-                  <div style={{ display: "flex", gap: 6 }}>
-                    <button onClick={function() { showBill(b, true); }} style={{ ...bts(true), padding: "6px 14px", fontSize: 11 }}>View Bill</button>
-                    <button onClick={function() { setPage("hist"); setTimeout(function() { window.dispatchEvent(new CustomEvent("editBill", { detail: b.billNo })); }, 300); }} style={{ ...bts(false), padding: "6px 14px", fontSize: 11 }}>Edit Bill</button>
-                  </div>
-                  <div style={{ display: "flex", gap: 12, fontSize: 12 }}>
-                    {p.totalDisc > 0 && <span style={{ color: "#DC2626" }}>Discounts: -Rs.{f2(p.totalDisc)}</span>}
-                    <span style={{ color: "#B45309" }}>Total Cost: Rs.{f2(p.totalCost)}</span>
-                    <span style={{ fontWeight: 800, color: p.profit >= 0 ? "#059669" : "#DC2626" }}>Net Profit: Rs.{f2(p.profit)} ({f2(p.margin)}%)</span>
-                  </div>
+                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8, paddingTop: 8, borderTop: "1px solid #eee", gap: 12, fontSize: 12 }}>
+                  {p.totalDisc > 0 && <span style={{ color: "#DC2626" }}>Discounts: -Rs.{f2(p.totalDisc)}</span>}
+                  <span style={{ color: "#B45309" }}>Total Cost: Rs.{f2(p.totalCost)}</span>
+                  <span style={{ fontWeight: 800, color: p.profit >= 0 ? "#059669" : "#DC2626" }}>Net Profit: Rs.{f2(p.profit)} ({f2(p.margin)}%)</span>
                 </div>
               </div>}
             </div>;
@@ -3133,868 +3053,6 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm, bills, s
 // ══════════════════════════════════════════════
 // ENCYCLOPEDIA (MedGuide India Live)
 // ══════════════════════════════════════════════
-// ══════════════════════════════════════════════
-// PRICE COMPARE DASHBOARD  -  mirrors dashboard UI
-// ══════════════════════════════════════════════
-function ComparePage({ inv, mob }) {
-  // ── Portal connection state ─────────────────────────────────────────
-  const [connected, setConnected] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("pharma_connected") || "{}"); } catch(_){return {};}
-  });
-  const [creds, setCreds] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("pharma_creds") || "{}"); } catch(_){return {};}
-  });
-
-  // ── Page state ──────────────────────────────────────────────────────
-  const [activeTab, setActiveTab] = useState("login"); // login | search | browse
-  const [activeDist, setActiveDist] = useState(null);  // iframe view
-
-  // ── Login form state ────────────────────────────────────────────────
-  const [vUser, setVUser] = useState(creds.vardhman?.username || "");
-  const [vPass, setVPass] = useState(creds.vardhman?.password || "");
-  const [fUser, setFUser] = useState(creds.focus?.username || "");
-  const [fPass, setFPass] = useState(creds.focus?.password || "");
-  const [uMobile, setUMobile] = useState(creds.udaan?.mobile || "");
-  const [uOtp, setUOtp] = useState("");
-  const [udaanStep, setUdaanStep] = useState(1);
-  const [loginMsg, setLoginMsg] = useState({}); // {vardhman:'',focus:'',udaan:''}
-  const [loginStatus, setLoginStatus] = useState({}); // {vardhman:'connected',...}
-
-  // ── Search state ────────────────────────────────────────────────────
-  const [searchQ, setSearchQ] = useState("");
-  const [searchMode, setSearchMode] = useState("single"); // single | bulk
-  const [singleResults, setSingleResults] = useState({}); // {vardhman:{...}, focus:{...}, udaan:{...}}
-  const [singleLoading, setSingleLoading] = useState(false);
-  const [bulkText, setBulkText] = useState("");
-  const [bulkMeds, setBulkMeds] = useState([]);
-  const [bulkData, setBulkData] = useState([]);
-  const [bulkRunning, setBulkRunning] = useState(false);
-  const [bulkDone, setBulkDone] = useState(false);
-
-  // ── Helper: portals config ──────────────────────────────────────────
-  const PORTALS = [
-    { id: "vardhman", name: "Vardhman", abbr: "V", color: "#1565C0", bg: "#E3F2FD",
-      proxyBase: null, directUrl: null }, // vardhman if it exists locally
-    { id: "focus",    name: "Focus",    abbr: "F", color: "#6A1B9A", bg: "#F3E5F5",
-      proxyBase: "http://whitefield.float-zone.com:8080",
-      proxyPath: "/FocusOnlineOrder/Default.aspx",
-      directUrl: "http://whitefield.float-zone.com:8080/FocusOnlineOrder/Default.aspx" },
-    { id: "udaan",    name: "Udaan",    abbr: "U", color: "#E53935", bg: "#FFEBEE",
-      proxyBase: "https://udaan.com",
-      proxyPath: "/main?selectedTabId=Pharma&navId=pharma",
-      directUrl: "https://udaan.com/main?selectedTabId=Pharma&navId=pharma" },
-  ];
-
-  const proxyUrl = (p) => p.proxyBase
-    ? PROXY_URL + "/proxy?target=" + encodeURIComponent(p.proxyBase) + "&path=" + encodeURIComponent(p.proxyPath)
-    : null;
-
-  // save creds to localStorage
-  const saveCreds = (newCreds) => {
-    localStorage.setItem("pharma_creds", JSON.stringify(newCreds));
-    setCreds(newCreds);
-  };
-  const saveConnected = (newConn) => {
-    localStorage.setItem("pharma_connected", JSON.stringify(newConn));
-    setConnected(newConn);
-  };
-
-  // ── Simulate login (hits PROXY /api/login) ──────────────────────────
-  const connectPortal = async (portal) => {
-    const username = portal === "vardhman" ? vUser : fUser;
-    const password = portal === "vardhman" ? vPass : fPass;
-    if (!username || !password) {
-      setLoginMsg(m => ({...m, [portal]: "Enter username and password"}));
-      setLoginStatus(s => ({...s, [portal]: "error"}));
-      return;
-    }
-    setLoginStatus(s => ({...s, [portal]: "pending"}));
-    setLoginMsg(m => ({...m, [portal]: "Connecting..."}));
-    const newCreds = {...creds, [portal]: {username, password}};
-    saveCreds(newCreds);
-    try {
-      const resp = await fetch(PROXY_URL + "/dist-api", {
-        method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({action: "login", portal, username, password})
-      });
-      const data = await resp.json();
-      if (data.ok) {
-        setLoginStatus(s => ({...s, [portal]: "connected"}));
-        setLoginMsg(m => ({...m, [portal]: "Connected successfully"}));
-        saveConnected({...connected, [portal]: true});
-        saveCreds({...newCreds, [portal]: {username, password, session: data.session}});
-      } else {
-        setLoginStatus(s => ({...s, [portal]: "error"}));
-        setLoginMsg(m => ({...m, [portal]: data.error || "Login failed"}));
-      }
-    } catch(e) {
-      setLoginStatus(s => ({...s, [portal]: "error"}));
-      setLoginMsg(m => ({...m, [portal]: "Cannot reach server - " + e.message}));
-    }
-  };
-
-  const sendOtp = async () => {
-    if (!uMobile || uMobile.length < 10) {
-      setLoginMsg(m => ({...m, udaan:"Enter valid 10-digit mobile"}));
-      setLoginStatus(s => ({...s, udaan:"error"}));
-      return;
-    }
-    setLoginStatus(s => ({...s, udaan:"pending"}));
-    setLoginMsg(m => ({...m, udaan:"Sending OTP..."}));
-    saveCreds({...creds, udaan: {mobile: uMobile}});
-
-    // Try 1: Cloudflare Worker (REST API)
-    try {
-      var resp = await fetch(PROXY_URL + "/udaan-otp", {
-        method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({action: "send", mobile: uMobile})
-      });
-      var data = await resp.json();
-      if (data.ok) {
-        setUdaanStep(2);
-        setLoginMsg(m => ({...m, udaan:"OTP sent - check your phone"}));
-        setLoginStatus(s => ({...s, udaan:"pending"}));
-        return;
-      }
-    } catch(e) { /* Worker failed, try local */ }
-
-    // Try 2: Local comparison dashboard server
-    var localPorts = [3000, 3001, 8080];
-    for (var pi = 0; pi < localPorts.length; pi++) {
-      try {
-        var resp2 = await fetch("http://localhost:" + localPorts[pi] + "/api/udaan/send-otp", {
-          method:"POST", headers:{"Content-Type":"application/json"},
-          body: JSON.stringify({mobile: uMobile})
-        });
-        var data2 = await resp2.json();
-        if (data2.ok) {
-          setUdaanStep(2);
-          setLoginMsg(m => ({...m, udaan:"OTP sent via local server (port " + localPorts[pi] + ")"}));
-          setLoginStatus(s => ({...s, udaan:"pending"}));
-          saveCreds({...creds, udaan: {mobile: uMobile, localPort: localPorts[pi]}});
-          return;
-        }
-      } catch(e) { /* try next port */ }
-    }
-
-    // All failed - still show OTP input for manual entry
-    setUdaanStep(2);
-    setLoginMsg(m => ({...m, udaan:"Could not send OTP automatically. If you received OTP on your phone, enter it below. Or start the comparison dashboard server locally."}));
-    setLoginStatus(s => ({...s, udaan:"pending"}));
-  };
-
-  const verifyOtp = async () => {
-    if (!uOtp || uOtp.length < 4) {
-      setLoginMsg(m => ({...m, udaan:"Enter the OTP"}));
-      return;
-    }
-    setLoginStatus(s => ({...s, udaan:"pending"}));
-    setLoginMsg(m => ({...m, udaan:"Verifying..."}));
-
-    // Try 1: Cloudflare Worker
-    try {
-      var resp = await fetch(PROXY_URL + "/udaan-otp", {
-        method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({action: "verify", mobile: uMobile, otp: uOtp})
-      });
-      var data = await resp.json();
-      if (data.ok) {
-        setLoginStatus(s => ({...s, udaan:"connected"}));
-        setLoginMsg(m => ({...m, udaan:"Logged in to Udaan"}));
-        saveConnected({...connected, udaan:true});
-        if (data.token) saveCreds({...creds, udaan: {mobile: uMobile, token: data.token}});
-        return;
-      }
-    } catch(e) { /* try local */ }
-
-    // Try 2: Local comparison dashboard server
-    var localPort = (creds.udaan && creds.udaan.localPort) || 3000;
-    var localPorts = [localPort, 3000, 3001, 8080];
-    for (var pi = 0; pi < localPorts.length; pi++) {
-      try {
-        var resp2 = await fetch("http://localhost:" + localPorts[pi] + "/api/udaan/verify-otp", {
-          method:"POST", headers:{"Content-Type":"application/json"},
-          body: JSON.stringify({mobile: uMobile, otp: uOtp})
-        });
-        var data2 = await resp2.json();
-        if (data2.ok) {
-          setLoginStatus(s => ({...s, udaan:"connected"}));
-          setLoginMsg(m => ({...m, udaan:"Logged in to Udaan via local server"}));
-          saveConnected({...connected, udaan:true});
-          if (data2.token) saveCreds({...creds, udaan: {mobile: uMobile, token: data2.token, localPort: localPorts[pi]}});
-          return;
-        }
-      } catch(e) { /* try next */ }
-    }
-
-    setLoginStatus(s => ({...s, udaan:"error"}));
-    setLoginMsg(m => ({...m, udaan:"OTP verification failed. Make sure the comparison dashboard server is running locally."}));
-  };
-
-  // ── Single search via /api/search ───────────────────────────────────
-  const doSingleSearch = async () => {
-    if (!searchQ.trim()) return;
-    setSingleLoading(true);
-    setSingleResults({});
-    const activePortals = PORTALS.filter(p => connected[p.id]);
-    if (activePortals.length === 0) {
-      setSingleLoading(false);
-      alert("No distributors connected. Please connect on the Login tab first.");
-      setActiveTab("login");
-      return;
-    }
-    const results = {};
-    activePortals.forEach(p => { results[p.id] = {loading: true}; });
-    setSingleResults({...results});
-
-    await Promise.all(activePortals.map(async (p) => {
-      try {
-        if (p.id === "udaan") {
-          results[p.id] = {ok: false, error: "Udaan search not supported via API - use Browse button"};
-          setSingleResults({...results});
-          return;
-        }
-        // Step 1: Search (GetItems)
-        const session = creds[p.id]?.session || "";
-        const resp = await fetch(PROXY_URL + "/dist-api", {
-          method:"POST", headers:{"Content-Type":"application/json"},
-          body: JSON.stringify({action: "search", portal: p.id, session, query: searchQ})
-        });
-        const data = await resp.json();
-        if (!data.ok) {
-          // Session expired - try re-login
-          if (data.error && data.error.indexOf("expired") >= 0 && creds[p.id]?.username) {
-            const loginResp = await fetch(PROXY_URL + "/dist-api", {
-              method:"POST", headers:{"Content-Type":"application/json"},
-              body: JSON.stringify({action: "login", portal: p.id, username: creds[p.id].username, password: creds[p.id].password})
-            });
-            const loginData = await loginResp.json();
-            if (loginData.ok) {
-              saveCreds({...creds, [p.id]: {...creds[p.id], session: loginData.session}});
-              // Retry search
-              const resp2 = await fetch(PROXY_URL + "/dist-api", {
-                method:"POST", headers:{"Content-Type":"application/json"},
-                body: JSON.stringify({action: "search", portal: p.id, session: loginData.session, query: searchQ})
-              });
-              const data2 = await resp2.json();
-              if (data2.ok) {
-                // Get details for each result
-                const items = await Promise.all((data2.results || []).slice(0, 10).map(async (item) => {
-                  try {
-                    const dr = await fetch(PROXY_URL + "/dist-api", {
-                      method:"POST", headers:{"Content-Type":"application/json"},
-                      body: JSON.stringify({action: "details", portal: p.id, session: loginData.session, itemRaw: item.raw})
-                    });
-                    const dd = await dr.json();
-                    return {...item, mrp: dd.mrp || "", rate: dd.rate || "", detailScheme: dd.scheme || ""};
-                  } catch(e) { return item; }
-                }));
-                results[p.id] = {ok: true, items};
-                setSingleResults({...results});
-                return;
-              }
-            }
-          }
-          results[p.id] = data;
-        } else {
-          // Get details for top results
-          const items = await Promise.all((data.results || []).slice(0, 10).map(async (item) => {
-            try {
-              const dr = await fetch(PROXY_URL + "/dist-api", {
-                method:"POST", headers:{"Content-Type":"application/json"},
-                body: JSON.stringify({action: "details", portal: p.id, session, itemRaw: item.raw})
-              });
-              const dd = await dr.json();
-              return {...item, mrp: dd.mrp || "", rate: dd.rate || "", detailScheme: dd.scheme || ""};
-            } catch(e) { return item; }
-          }));
-          results[p.id] = {ok: true, items};
-        }
-      } catch(e) {
-        results[p.id] = {ok:false, error: e.message};
-      }
-      setSingleResults({...results});
-    }));
-    setSingleLoading(false);
-  };
-
-  // ── Bulk CSV compare ────────────────────────────────────────────────
-  const parseBulkText = (text) => {
-    const lines = text.split(/[\n,]+/).map(l => l.trim()).filter(l => l.length > 1);
-    setBulkMeds([...new Set(lines)]);
-  };
-
-  const runBulk = async () => {
-    if (!bulkMeds.length) return;
-    const activePortals = PORTALS.filter(p => connected[p.id] && p.id !== "udaan");
-    if (!activePortals.length) { alert("No distributors connected."); return; }
-    setBulkRunning(true); setBulkDone(false);
-    const rows = bulkMeds.map(q => ({query:q}));
-    activePortals.forEach(p => rows.forEach(r => { r[p.id] = {loading:true}; }));
-    setBulkData([...rows]);
-
-    for (let i = 0; i < bulkMeds.length; i++) {
-      await Promise.all(activePortals.map(async (p) => {
-        try {
-          const session = creds[p.id]?.session || "";
-          const resp = await fetch(PROXY_URL + "/dist-api", {
-            method:"POST", headers:{"Content-Type":"application/json"},
-            body: JSON.stringify({action: "search", portal: p.id, session, query: bulkMeds[i]})
-          });
-          const data = await resp.json();
-          if (data.ok && data.results && data.results.length > 0) {
-            const top = data.results[0];
-            try {
-              const dr = await fetch(PROXY_URL + "/dist-api", {
-                method:"POST", headers:{"Content-Type":"application/json"},
-                body: JSON.stringify({action: "details", portal: p.id, session, itemRaw: top.raw})
-              });
-              const dd = await dr.json();
-              rows[i][p.id] = {ok: true, items: [{...top, mrp: dd.mrp || "", rate: dd.rate || "", detailScheme: dd.scheme || ""}]};
-            } catch(e) { rows[i][p.id] = {ok: true, items: [top]}; }
-          } else {
-            rows[i][p.id] = data;
-          }
-        } catch(e) { rows[i][p.id] = {ok:false, error:e.message}; }
-        setBulkData([...rows]);
-      }));
-    }
-    setBulkRunning(false); setBulkDone(true);
-  };
-
-  const exportBulkCSV = () => {
-    const activePortals = PORTALS.filter(p => connected[p.id]);
-    let csv = "Medicine," + activePortals.flatMap(p => [`${p.name} Scheme`,`${p.name} MRP`,`${p.name} Rate`]).join(",") + "\n";
-    bulkData.forEach(row => {
-      let line = `"${row.query}"`;
-      activePortals.forEach(p => {
-        const d = row[p.id] || {};
-        line += `,"${d.scheme||""}","${d.mrp||""}","${d.rate||""}"`;
-      });
-      csv += line + "\n";
-    });
-    const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([csv],{type:"text/csv"}));
-    a.download = "pharma-compare-" + new Date().toISOString().slice(0,10) + ".csv"; a.click();
-  };
-
-  // ── Local inventory fallback for search ─────────────────────────────
-  const localMatches = React.useMemo(() => {
-    if (!searchQ.trim() || searchQ.length < 2) return [];
-    const q = searchQ.toLowerCase();
-    return inv.filter(m => m.name.toLowerCase().includes(q));
-  }, [searchQ, inv]);
-
-  // ── Styles mirroring dashboard UI ───────────────────────────────────
-  const S = {
-    page: { fontFamily:"'DM Sans',sans-serif", color:"#1a1a2e", minHeight:"100%" },
-    topbar: { background:"#fff", borderBottom:"1px solid #e0e0e0", padding:"14px 20px",
-      display:"flex", alignItems:"center", justifyContent:"space-between",
-      marginBottom:20, borderRadius:12, boxShadow:"0 1px 4px rgba(0,0,0,.06)" },
-    h1: { fontSize:18, fontWeight:700, color:"#1a1a2e", margin:0 },
-    h1span: { color:"#e53935" },
-    nav: { display:"flex", gap:4 },
-    navA: (active) => ({ padding:"7px 16px", borderRadius:8, fontWeight:600, fontSize:13,
-      cursor:"pointer", border:"none", fontFamily:"inherit",
-      background: active ? "#1a1a2e" : "transparent", color: active ? "#fff" : "#555",
-      transition:"all .15s" }),
-    card: { background:"#fff", borderRadius:14, padding:20,
-      boxShadow:"0 1px 4px rgba(0,0,0,.06)", border:"2px solid transparent", marginBottom:16 },
-    cardConnected: { borderColor:"#4caf50" },
-    cardPending: { borderColor:"#ff9800" },
-    label: { display:"block", fontSize:11, fontWeight:600, color:"#888", marginBottom:4,
-      textTransform:"uppercase", letterSpacing:"0.5px" },
-    input: { width:"100%", padding:"10px 12px", border:"1.5px solid #e0e0e0", borderRadius:8,
-      fontSize:14, fontFamily:"'DM Sans',sans-serif", marginBottom:12, outline:"none",
-      boxSizing:"border-box" },
-    btn: { display:"inline-flex", alignItems:"center", justifyContent:"center",
-      padding:"11px 20px", border:"none", borderRadius:8, fontSize:14, fontWeight:600,
-      fontFamily:"'DM Sans',sans-serif", cursor:"pointer", transition:"all .2s" },
-    btnPrimary: { background:"#1a1a2e", color:"#fff", width:"100%" },
-    btnDanger: { background:"#e53935", color:"#fff" },
-    badge: (status) => {
-      const map = {
-        connected:    { background:"#e8f5e9", color:"#2e7d32" },
-        pending:      { background:"#fff3e0", color:"#e65100" },
-        error:        { background:"#ffebee", color:"#c62828" },
-        disconnected: { background:"#f5f5f5", color:"#999" },
-      };
-      const s = map[status] || map.disconnected;
-      return { fontSize:11, fontWeight:700, padding:"4px 10px", borderRadius:20,
-        textTransform:"uppercase", letterSpacing:"0.5px", ...s };
-    },
-    portalIcon: (color) => ({ width:36, height:36, borderRadius:8, display:"inline-flex",
-      alignItems:"center", justifyContent:"center", fontWeight:700, fontSize:14,
-      color:"#fff", background:color, marginRight:10, flexShrink:0 }),
-    connChip: (active) => ({ display:"inline-flex", alignItems:"center", gap:6,
-      padding:"5px 12px", borderRadius:20, fontSize:12, fontWeight:600,
-      background: active ? "#e8f5e9" : "#f5f5f5", color: active ? "#2e7d32" : "#999" }),
-    dot: (active) => ({ width:7, height:7, borderRadius:"50%",
-      background: active ? "#4caf50" : "#ccc", display:"inline-block" }),
-    searchBox: { display:"flex", gap:10, marginBottom:20 },
-    searchInput: { flex:1, padding:"14px 18px", border:"2px solid #e0e0e0", borderRadius:12,
-      fontSize:16, fontFamily:"'DM Sans',sans-serif", outline:"none" },
-    searchBtn: { padding:"14px 28px", background:"#1a1a2e", color:"#fff", border:"none",
-      borderRadius:12, fontSize:15, fontWeight:600, fontFamily:"'DM Sans',sans-serif",
-      cursor:"pointer", whiteSpace:"nowrap" },
-    tabs: { display:"flex", gap:4, marginBottom:20, background:"#fff", padding:6,
-      borderRadius:12, boxShadow:"0 1px 4px rgba(0,0,0,.06)", width:"fit-content" },
-    tab: (active) => ({ padding:"8px 20px", border:"none", background: active ? "#1a1a2e" : "none",
-      color: active ? "#fff" : "#888", fontFamily:"'DM Sans',sans-serif", fontSize:14,
-      fontWeight:600, borderRadius:8, cursor:"pointer", transition:"all .2s" }),
-    resultCard: { background:"#fff", borderRadius:14, padding:20,
-      boxShadow:"0 1px 4px rgba(0,0,0,.06)", flex:1, minWidth:220 },
-    portalName: { fontSize:13, fontWeight:700, textTransform:"uppercase", letterSpacing:"0.5px",
-      marginBottom:12, display:"flex", alignItems:"center", gap:8 },
-    portalDot: (color) => ({ width:10, height:10, borderRadius:"50%",
-      background:color, display:"inline-block", flexShrink:0 }),
-    priceGrid: { display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:8, marginBottom:8 },
-    priceCell: { textAlign:"center", padding:"10px 6px", background:"#f8f9fa", borderRadius:8 },
-    priceLabel: { fontSize:11, fontWeight:600, color:"#888", textTransform:"uppercase", marginBottom:4 },
-    priceVal: { fontSize:17, fontWeight:700, color:"#1a1a2e" },
-    emptyVal: { color:"#ccc", fontSize:14 },
-    table: { width:"100%", borderCollapse:"collapse", fontSize:13 },
-    th: { textAlign:"left", padding:"10px 14px", background:"#1a1a2e", color:"#fff",
-      fontWeight:700, fontSize:11, textTransform:"uppercase", letterSpacing:"0.5px" },
-    td: { padding:"11px 14px", borderBottom:"1px solid #f2f3f5", verticalAlign:"middle" },
-  };
-
-  const getBadgeStatus = (pid) => loginStatus[pid] || (connected[pid] ? "connected" : "disconnected");
-
-  // ── Iframe portal view ──────────────────────────────────────────────
-  if (activeDist) {
-    const p = PORTALS.find(x => x.id === activeDist);
-    const iframeSrc = proxyUrl(p);
-    return (
-      <div style={S.page}>
-        <div style={S.topbar}>
-          <div style={{display:"flex",alignItems:"center",gap:12}}>
-            <button onClick={() => setActiveDist(null)} style={{background:"#f0f2f5",border:"none",borderRadius:8,padding:"7px 14px",cursor:"pointer",fontFamily:"inherit",fontWeight:600,fontSize:13,color:"#1a1a2e"}}>← Back</button>
-            <div style={{display:"flex",alignItems:"center"}}>
-              <span style={S.portalIcon(p.color)}>{p.abbr}</span>
-              <b style={{fontSize:15}}>{p.name}</b>
-            </div>
-          </div>
-          {p.directUrl && <a href={p.directUrl} target="_blank" rel="noopener noreferrer"
-            style={{background:"#1a1a2e",color:"#fff",borderRadius:8,padding:"7px 16px",textDecoration:"none",fontSize:13,fontWeight:600}}>
-            Open in New Tab ↗
-          </a>}
-        </div>
-        {iframeSrc ? (
-          <div style={{borderRadius:14,overflow:"hidden",border:"2px solid #e0e0e0"}}>
-            <iframe src={iframeSrc} style={{width:"100%",height:mob?480:640,border:"none"}}
-              title={p.name} sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-top-navigation" />
-          </div>
-        ) : (
-          <div style={{...S.card,textAlign:"center",padding:40,color:"#888"}}>
-            <div style={{fontSize:14}}>Portal browsing not available for {p.name}.<br/>Connect via credentials above then visit the portal directly.</div>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <div style={S.page}>
-      {/* ── Topbar ── */}
-      <div style={S.topbar}>
-        <h1 style={S.h1}>Pharmacy<span style={S.h1span}>Compare</span></h1>
-        <div style={S.nav}>
-          {[["login","Login"],["search","Search"],["browse","Portals"]].map(([id,l]) => (
-            <button key={id} onClick={() => setActiveTab(id)} style={S.navA(activeTab===id)}>{l}</button>
-          ))}
-        </div>
-      </div>
-
-      {/* ── Connection status chips ── */}
-      <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
-        {PORTALS.map(p => {
-          const st = getBadgeStatus(p.id);
-          const isConn = st === "connected";
-          return (
-            <div key={p.id} style={S.connChip(isConn)}>
-              <span style={S.dot(isConn)} />
-              {p.name}
-            </div>
-          );
-        })}
-      </div>
-
-      {/* ════════════════ LOGIN TAB ════════════════ */}
-      {activeTab === "login" && (
-        <div>
-          <p style={{fontSize:14,color:"#777",marginBottom:20}}>Connect your distributor accounts. Credentials are saved locally for quick access.</p>
-          <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"repeat(3,1fr)",gap:16}}>
-
-            {/* Vardhman */}
-            {(()=>{
-              const st = getBadgeStatus("vardhman");
-              return (
-                <div style={{...S.card, ...(st==="connected"?S.cardConnected:st==="pending"?S.cardPending:{})}}>
-                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
-                    <div style={{display:"flex",alignItems:"center"}}>
-                      <span style={S.portalIcon("#1565C0")}>V</span>
-                      <b style={{fontSize:17}}>Vardhman</b>
-                    </div>
-                    <span style={S.badge(st)}>{st}</span>
-                  </div>
-                  <label style={S.label}>Username</label>
-                  <input style={S.input} type="text" value={vUser} onChange={e=>setVUser(e.target.value)} placeholder="Enter username" />
-                  <label style={S.label}>Password</label>
-                  <input style={S.input} type="password" value={vPass} onChange={e=>setVPass(e.target.value)} placeholder="Enter password" />
-                  <button style={{...S.btn,...S.btnPrimary}} onClick={() => connectPortal("vardhman")}>Connect</button>
-                  {loginMsg.vardhman && <div style={{fontSize:12,marginTop:8,color:st==="error"?"#c62828":st==="connected"?"#2e7d32":"#f57c00"}}>{loginMsg.vardhman}</div>}
-                </div>
-              );
-            })()}
-
-            {/* Focus */}
-            {(()=>{
-              const st = getBadgeStatus("focus");
-              return (
-                <div style={{...S.card, ...(st==="connected"?S.cardConnected:st==="pending"?S.cardPending:{})}}>
-                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
-                    <div style={{display:"flex",alignItems:"center"}}>
-                      <span style={S.portalIcon("#6A1B9A")}>F</span>
-                      <b style={{fontSize:17}}>Focus</b>
-                    </div>
-                    <span style={S.badge(st)}>{st}</span>
-                  </div>
-                  <label style={S.label}>Username</label>
-                  <input style={S.input} type="text" value={fUser} onChange={e=>setFUser(e.target.value)} placeholder="Enter username" />
-                  <label style={S.label}>Password</label>
-                  <input style={S.input} type="password" value={fPass} onChange={e=>setFPass(e.target.value)} placeholder="Enter password" />
-                  <button style={{...S.btn,...S.btnPrimary,background:"#6A1B9A"}} onClick={() => connectPortal("focus")}>Connect</button>
-                  {loginMsg.focus && <div style={{fontSize:12,marginTop:8,color:st==="error"?"#c62828":st==="connected"?"#2e7d32":"#f57c00"}}>{loginMsg.focus}</div>}
-                  {st==="connected" && <button onClick={()=>setActiveDist("focus")} style={{...S.btn,background:"#f3e5f5",color:"#6A1B9A",width:"100%",marginTop:8,fontSize:13}}>Browse Portal →</button>}
-                </div>
-              );
-            })()}
-
-            {/* Udaan */}
-            {(()=>{
-              const st = getBadgeStatus("udaan");
-              return (
-                <div style={{...S.card, ...(st==="connected"?S.cardConnected:st==="pending"?S.cardPending:{})}}>
-                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
-                    <div style={{display:"flex",alignItems:"center"}}>
-                      <span style={S.portalIcon("#E53935")}>U</span>
-                      <b style={{fontSize:17}}>Udaan</b>
-                    </div>
-                    <span style={S.badge(st)}>{st}</span>
-                  </div>
-                  {udaanStep === 1 ? (
-                    <div>
-                      <label style={S.label}>Mobile Number</label>
-                      <input style={S.input} type="tel" value={uMobile} onChange={e=>setUMobile(e.target.value)} placeholder="10-digit mobile" maxLength={10} />
-                      <button style={{...S.btn,...S.btnPrimary,background:"#E53935"}} onClick={sendOtp}>Send OTP</button>
-                    </div>
-                  ) : (
-                    <div>
-                      <label style={S.label}>Enter OTP</label>
-                      <input style={{...S.input,fontSize:20,fontWeight:700,letterSpacing:4,textAlign:"center"}} type="text" value={uOtp} onChange={e=>setUOtp(e.target.value)} placeholder="6-digit OTP" maxLength={6} />
-                      <button style={{...S.btn,...S.btnPrimary,background:"#E53935"}} onClick={verifyOtp}>Verify</button>
-                      <div style={{height:1,background:"#eee",margin:"12px 0"}} />
-                      <button onClick={()=>{setUdaanStep(1);setUOtp("");setLoginMsg(m=>({...m,udaan:""}));setLoginStatus(s=>({...s,udaan:"disconnected"}));}}
-                        style={{...S.btn,background:"#f5f5f5",color:"#555",width:"100%",fontSize:13}}>← Change Number</button>
-                    </div>
-                  )}
-                  {loginMsg.udaan && <div style={{fontSize:12,marginTop:8,color:st==="error"?"#c62828":st==="connected"?"#2e7d32":"#f57c00"}}>{loginMsg.udaan}</div>}
-                  {st==="connected" && <button onClick={()=>setActiveDist("udaan")} style={{...S.btn,background:"#ffebee",color:"#E53935",width:"100%",marginTop:8,fontSize:13}}>Browse Portal →</button>}
-                </div>
-              );
-            })()}
-          </div>
-
-          {/* Tip */}
-          <div style={{background:"#f8f9fa",border:"1px solid #e0e0e0",borderRadius:10,padding:"12px 16px",fontSize:13,color:"#555",marginTop:4}}>
-            💡 After connecting, go to <b>Search</b> to compare prices across portals, or <b>Portals</b> to browse them directly.
-          </div>
-        </div>
-      )}
-
-      {/* ════════════════ SEARCH TAB ════════════════ */}
-      {activeTab === "search" && (
-        <div>
-          {/* Tabs: Single / Bulk */}
-          <div style={S.tabs}>
-            {[["single","Single Search"],["bulk","Bulk CSV Compare"]].map(([id,l]) => (
-              <button key={id} style={S.tab(searchMode===id)} onClick={()=>setSearchMode(id)}>{l}</button>
-            ))}
-          </div>
-
-          {/* ── Single Search ── */}
-          {searchMode === "single" && (
-            <div>
-              <div style={S.searchBox}>
-                <input style={S.searchInput} value={searchQ} onChange={e=>setSearchQ(e.target.value)}
-                  onKeyDown={e=>e.key==="Enter"&&doSingleSearch()}
-                  placeholder="Search medicine (e.g. Dolo 650, Amaryl 1mg, Pan D)" />
-                <button style={{...S.searchBtn, opacity:singleLoading?.5:1}} onClick={doSingleSearch} disabled={singleLoading}>
-                  {singleLoading ? "Searching..." : "Compare"}
-                </button>
-              </div>
-
-              {/* Local inventory quick preview */}
-              {searchQ.length >= 2 && localMatches.length > 0 && !Object.keys(singleResults).length && (
-                <div style={{...S.card,marginBottom:16}}>
-                  <div style={{fontSize:11,fontWeight:700,color:"#888",textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>Found in Your Inventory</div>
-                  <div style={{overflowX:"auto"}}>
-                    <table style={S.table}>
-                      <thead><tr>
-                        {["Medicine","Distributor","PTR","MRP","Stock","Batch"].map(h=>(
-                          <th key={h} style={S.th}>{h}</th>
-                        ))}
-                      </tr></thead>
-                      <tbody>
-                        {localMatches.slice(0,8).map((m,i)=>(
-                          <tr key={i} style={{background:i%2===0?"#fafbfc":"#fff"}}>
-                            <td style={{...S.td,fontWeight:600}}>{m.name}</td>
-                            <td style={{...S.td,fontSize:12,color:"#1565C0",fontWeight:600}}>{m.purchaseDistributor||m.distributor||" - "}</td>
-                            <td style={{...S.td,fontWeight:700}}>₹{f2(m.ptr)}</td>
-                            <td style={{...S.td,fontSize:12}}>₹{f2(m.mrp)}</td>
-                            <td style={{...S.td,fontSize:12}}>{m.stock||0}</td>
-                            <td style={{...S.td,fontSize:12,fontFamily:"monospace"}}>{m.batch||" - "}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-
-              {/* Results grid */}
-              {Object.keys(singleResults).length > 0 && (
-                <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
-                  {PORTALS.filter(p=>singleResults[p.id]!==undefined).map(p => {
-                    const d = singleResults[p.id];
-                    const isLoading = d?.loading;
-                    const isError = !d?.ok && !isLoading;
-                    const mrp = d?.mrp || " - ";
-                    const rate = d?.rate || " - ";
-                    const scheme = d?.scheme || " - ";
-                    return (
-                      <div key={p.id} style={S.resultCard}>
-                        <div style={S.portalName}>
-                          <span style={S.portalDot(p.color)} />
-                          {p.name}
-                        </div>
-                        {isLoading ? (
-                          <div>
-                            <div style={{...S.priceGrid}}>
-                              {["Scheme","MRP","Rate"].map(l=>(
-                                <div key={l} style={S.priceCell}>
-                                  <div style={S.priceLabel}>{l}</div>
-                                  <div style={{...S.priceVal,...S.emptyVal}}>…</div>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        ) : isError ? (
-                          <div style={{color:"#c62828",fontSize:13}}>{d?.error || "Not found or not connected"}</div>
-                        ) : (
-                          <div>
-                            <div style={{fontSize:14,fontWeight:600,marginBottom:10,color:"#1a1a2e"}}>{d?.suggestion || searchQ}</div>
-                            <div style={S.priceGrid}>
-                              <div style={S.priceCell}><div style={S.priceLabel}>Scheme</div><div style={{...S.priceVal,...(scheme===" - "?S.emptyVal:{})}}>{scheme}</div></div>
-                              <div style={S.priceCell}><div style={S.priceLabel}>MRP</div><div style={{...S.priceVal,...(mrp===" - "?S.emptyVal:{})}}>{mrp===" - "?" - ":"₹"+mrp}</div></div>
-                              <div style={S.priceCell}><div style={S.priceLabel}>Rate</div><div style={{...S.priceVal,...(rate===" - "?S.emptyVal:{})}}>{rate===" - "?" - ":"₹"+rate}</div></div>
-                            </div>
-                            {/* Suggestions */}
-                            {d?.suggestions && d.suggestions.length > 1 && (
-                              <details style={{marginTop:10,borderTop:"1px solid #eee",paddingTop:10}}>
-                                <summary style={{fontSize:12,color:"#888",cursor:"pointer",fontWeight:600}}>{d.suggestions.length} items found</summary>
-                                <div style={{marginTop:6}}>
-                                  {d.suggestions.slice(0,6).map((s,i)=>(
-                                    <div key={i} style={{padding:"5px 10px",background:"#f5f5f5",borderRadius:6,margin:"3px 0",fontSize:12,cursor:"pointer"}}
-                                      onClick={async()=>{
-                                        singleResults[p.id]={loading:true};setSingleResults({...singleResults});
-                                        try {
-                                          const r=await fetch(PROXY_URL + "/dist-api",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({portal:p.id,query:s.raw||s.itemName,...creds[p.id]})});
-                                          singleResults[p.id]=await r.json();
-                                        } catch(e){singleResults[p.id]={ok:false,error:e.message};}
-                                        setSingleResults({...singleResults});
-                                      }}>
-                                      {s.itemName}{s.pack?" · "+s.pack:""} {s.avail&&<span style={{color:s.avail.toUpperCase()==="AVL"?"#2e7d32":"#c62828",fontWeight:600,fontSize:11}}>{s.avail}</span>}
-                                    </div>
-                                  ))}
-                                </div>
-                              </details>
-                            )}
-                          </div>
-                        )}
-                        <button onClick={()=>setActiveDist(p.id)} style={{...S.btn,background:"#f5f5f5",color:"#1a1a2e",width:"100%",marginTop:12,fontSize:12}}>Browse {p.name} →</button>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {!Object.keys(singleResults).length && !searchQ && (
-                <div style={{textAlign:"center",padding:"48px 20px",color:"#999"}}>
-                  <div style={{fontSize:36,marginBottom:10}}>⚖️</div>
-                  <div style={{fontSize:15}}>Search for a medicine to compare prices across connected distributors</div>
-                  {!PORTALS.some(p=>connected[p.id]) && (
-                    <div style={{marginTop:12}}>
-                      <button onClick={()=>setActiveTab("login")} style={{...S.btn,background:"#1a1a2e",color:"#fff",margin:"0 auto"}}>Connect Distributors →</button>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* ── Bulk CSV ── */}
-          {searchMode === "bulk" && (
-            <div>
-              {/* Drop zone */}
-              <div style={{border:"2px dashed #d0d0d0",borderRadius:14,padding:28,textAlign:"center",background:"#fff",cursor:"pointer",marginBottom:14}}
-                onClick={()=>document.getElementById("cp-csv-input").click()}>
-                <input id="cp-csv-input" type="file" accept=".csv,.txt" style={{display:"none"}}
-                  onChange={e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>parseBulkText(ev.target.result);r.readAsText(f);}} />
-                <div style={{fontSize:32,marginBottom:6}}>📂</div>
-                <b style={{fontSize:15,color:"#1a1a2e"}}>Upload CSV file</b>
-                <p style={{fontSize:13,color:"#888",marginTop:4}}>One medicine name per row, or comma-separated. Click to browse.</p>
-              </div>
-
-              <div style={{marginBottom:14}}>
-                <div style={{fontSize:13,fontWeight:600,color:"#555",marginBottom:6}}>Or type medicine names (comma or newline separated):</div>
-                <div style={{display:"flex",gap:8}}>
-                  <textarea value={bulkText} onChange={e=>setBulkText(e.target.value)} rows={3}
-                    style={{flex:1,padding:"10px 14px",border:"2px solid #e0e0e0",borderRadius:10,fontFamily:"'DM Sans',sans-serif",fontSize:14,resize:"vertical"}}
-                    placeholder="Dolo 650, Crocin, Pan D, Amaryl 1mg ..." />
-                  <button style={{...S.btn,background:"#f5f5f5",color:"#1a1a2e",alignSelf:"flex-start",border:"2px solid #e0e0e0"}}
-                    onClick={()=>parseBulkText(bulkText)}>Load</button>
-                </div>
-              </div>
-
-              {bulkMeds.length > 0 && (
-                <div style={{background:"#fff",borderRadius:12,padding:"14px 16px",marginBottom:14,boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
-                  <b style={{fontSize:13}}>{bulkMeds.length} medicine{bulkMeds.length>1?"s":""} loaded</b>
-                  <div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:8}}>
-                    {bulkMeds.map((m,i)=>(
-                      <span key={i} style={{background:"#e8f0fe",color:"#1565c0",fontSize:12,fontWeight:600,padding:"4px 12px",borderRadius:20}}>{m}</span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap"}}>
-                <button style={{...S.btn,background:"#1a1a2e",color:"#fff"}} disabled={!bulkMeds.length||bulkRunning} onClick={runBulk}>
-                  {bulkRunning?"Running...":"▶ Run Comparison"}
-                </button>
-                {bulkDone && <button style={{...S.btn,background:"#2e7d32",color:"#fff"}} onClick={exportBulkCSV}>⬇ Download Report</button>}
-              </div>
-
-              {/* Bulk results table */}
-              {bulkData.length > 0 && (
-                <div style={{background:"#fff",borderRadius:14,boxShadow:"0 1px 4px rgba(0,0,0,.06)",overflowX:"auto"}}>
-                  <table style={{...S.table,minWidth:500}}>
-                    <thead>
-                      <tr>
-                        <th style={S.th} rowSpan={2}>Medicine</th>
-                        {PORTALS.filter(p=>connected[p.id]).map(p=>(
-                          <th key={p.id} style={{...S.th,color:p.id==="vardhman"?"#90caf9":p.id==="focus"?"#ce93d8":"#ef9a9a"}} colSpan={3}>{p.name}</th>
-                        ))}
-                      </tr>
-                      <tr>
-                        {PORTALS.filter(p=>connected[p.id]).flatMap(p=>(
-                          ["Scheme","MRP","Rate"].map(l=><th key={p.id+l} style={{...S.th,fontSize:10,fontWeight:600,background:"#2d2d4e"}}>{l}</th>)
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {bulkData.map((row,i)=>(
-                        <tr key={i} style={{background:i%2===0?"#fafbfc":"#fff"}}>
-                          <td style={{...S.td,fontWeight:600}}>{row.query}</td>
-                          {PORTALS.filter(p=>connected[p.id]).flatMap(p=>{
-                            const d = row[p.id];
-                            if (!d||d.loading) return ["Scheme","MRP","Rate"].map(l=>(
-                              <td key={p.id+l} style={{...S.td,color:"#f57c00",textAlign:"center",fontSize:12}}>⏳</td>
-                            ));
-                            if (!d.ok) return ["Scheme","MRP","Rate"].map(l=>(
-                              <td key={p.id+l} style={{...S.td,color:"#c62828",textAlign:"center",fontSize:12}}>✗</td>
-                            ));
-                            return [
-                              <td key={p.id+"s"} style={{...S.td,fontSize:12}}>{d.scheme||" - "}</td>,
-                              <td key={p.id+"m"} style={{...S.td,fontWeight:700,fontSize:13}}>{d.mrp?"₹"+d.mrp:" - "}</td>,
-                              <td key={p.id+"r"} style={{...S.td,fontWeight:700,fontSize:13,color:"#2e7d32"}}>{d.rate?"₹"+d.rate:" - "}</td>,
-                            ];
-                          })}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ════════════════ PORTALS TAB ════════════════ */}
-      {activeTab === "browse" && (
-        <div>
-          <p style={{fontSize:14,color:"#777",marginBottom:16}}>Browse distributor portals directly. Login first to access order placement.</p>
-          <div style={{display:"grid",gridTemplateColumns:mob?"1fr":"repeat(3,1fr)",gap:16,marginBottom:20}}>
-            {PORTALS.map(p => {
-              const st = getBadgeStatus(p.id);
-              const items = inv.filter(m=>(m.purchaseDistributor||m.distributor||"").toLowerCase().includes(p.name.toLowerCase()));
-              return (
-                <div key={p.id} style={{...S.card,textAlign:"center",cursor:proxyUrl(p)?"pointer":"default",border:"2px solid "+p.color+"30"}}
-                  onClick={()=>proxyUrl(p)&&setActiveDist(p.id)}>
-                  <div style={{width:56,height:56,borderRadius:14,background:p.color,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:22,color:"#fff",margin:"0 auto 12px"}}>
-                    {p.abbr}
-                  </div>
-                  <div style={{fontWeight:700,fontSize:16,color:p.color,marginBottom:4}}>{p.name}</div>
-                  <div style={{...S.badge(st),display:"inline-block",marginBottom:12}}>{st}</div>
-                  <div style={{fontSize:12,color:"#888",marginBottom:12}}>{items.length} medicines in inventory</div>
-                  {proxyUrl(p) ? (
-                    <div style={{padding:"9px 20px",background:p.color,color:"#fff",borderRadius:9,display:"inline-block",fontWeight:600,fontSize:13}}>Browse Portal →</div>
-                  ) : (
-                    <div style={{padding:"9px 20px",background:"#f5f5f5",color:"#999",borderRadius:9,display:"inline-block",fontWeight:600,fontSize:13}}>No Proxy Available</div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Purchase history by portal */}
-          <div style={S.card}>
-            <b style={{fontSize:14,display:"block",marginBottom:14}}>Purchase History by Distributor</b>
-            <div style={{overflowX:"auto"}}>
-              <table style={S.table}>
-                <thead><tr>
-                  {["Distributor","Medicines","Stock Value","Last Purchase"].map(h=><th key={h} style={S.th}>{h}</th>)}
-                </tr></thead>
-                <tbody>
-                  {PORTALS.map(p=>{
-                    const items = inv.filter(m=>(m.purchaseDistributor||m.distributor||"").toLowerCase().includes(p.name.toLowerCase()));
-                    const val = items.reduce((s,m)=>s+(m.ptr||0)*(m.stock||0),0);
-                    const lastDate = items.map(m=>m.purchaseDate||"").filter(Boolean).sort().reverse()[0];
-                    return (
-                      <tr key={p.id}>
-                        <td style={S.td}>
-                          <div style={{display:"flex",alignItems:"center",gap:8}}>
-                            <span style={{...S.portalIcon(p.color),width:28,height:28,fontSize:11,margin:0}}>{p.abbr}</span>
-                            <b>{p.name}</b>
-                          </div>
-                        </td>
-                        <td style={S.td}>{items.length}</td>
-                        <td style={{...S.td,fontWeight:700}}>₹{Math.round(val).toLocaleString("en-IN")}</td>
-                        <td style={{...S.td,fontSize:12,color:"#888"}}>{lastDate?fD(lastDate):" - "}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function EncyclopediaPage({ inv, mob }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState(null);
@@ -4759,13 +3817,12 @@ function App() {
           {page === "rack" && <RackPage inv={inv} saveInv={saveInv} mob={mob} />}
           {page === "audit" && isO && <AuditPage inv={inv} mob={mob} />}
           {page === "bill" && <BillPage inv={inv} saveInv={saveInv} addBill={addBill} mob={mob} showBill={showBill} />}
-          {page === "profit" && isO && <ProfitPage bills={bills} inv={inv} mob={mob} purch={purch} saveBills={saveBills} showBill={showBill} setPage={setPage} />}
+          {page === "profit" && isO && <ProfitPage bills={bills} inv={inv} mob={mob} purch={purch} saveBills={saveBills} />}
           {page === "stock" && <StockPage inv={inv} saveInv={saveInv} isO={isO} mob={mob} />}
           {page === "hist" && <HistPage bills={bills} showBill={showBill} saveBills={saveBills} askConfirm={askConfirm} inv={inv} saveInv={saveInv} purch={purch} />}
           {page === "customers" && <CustomersPage bills={bills} mob={mob} showBill={showBill} />}
           {page === "reports" && isO && <ReportsPage bills={bills} inv={inv} mob={mob} showBill={showBill} />}
           {page === "ency" && <EncyclopediaPage inv={inv} mob={mob} />}
-          {page === "compare" && <ComparePage inv={inv} mob={mob} />}
           {page === "users" && isO && <UsersPage sessions={sessions} mob={mob} />}
           {page === "backup" && isO && <BackupPage inv={inv} bills={bills} purch={purch} saveAll={saveAll} askConfirm={askConfirm} saveInv={saveInv} saveBills={saveBills} />}
         </div></div></div>
