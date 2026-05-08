@@ -120,6 +120,19 @@ function fStock(stock, packQty) {
   return packs + "." + String(loose).padStart(2, "0");
 }
 
+// Parse "packs.tablets" display format back to internal decimal
+// e.g. "2.13" with packQty=15 → 2 + 13/15 = 2.8667
+// e.g. "5" → 5.0
+function parseStockInput(val, packQty) {
+  var s = String(val).trim();
+  var pq = Number(packQty) || 10;
+  var dot = s.indexOf(".");
+  if (dot === -1) return parseFloat(s) || 0;
+  var packs = parseInt(s.substring(0, dot)) || 0;
+  var loose = parseInt(s.substring(dot + 1)) || 0;
+  return Math.round((packs + loose / pq) * 10000) / 10000;
+}
+
 // ══════════════════════════════════════════════
 // FIREBASE DATABASE HELPERS (real-time sync)
 // ══════════════════════════════════════════════
@@ -1030,8 +1043,11 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
   };
 
   const doSave = () => { if (!fm.name || !fm.batch) { alert("Name and Batch required"); return; }
-    if (ed) saveInv(inv.map((m) => m.id === ed ? { ...fm, id: ed, uid: m.uid || mkUID() } : m));
-    else saveInv([...inv, { ...fm, id: mkId(), addedFrom: "manual", uid: mkUID() }]);
+    const stockVal = fm._stockStr !== undefined ? parseStockInput(fm._stockStr, fm.packQty) : fm.stock;
+    const { _stockStr, ...fmRest } = fm;
+    const fmClean = { ...fmRest, stock: stockVal };
+    if (ed) saveInv(inv.map((m) => m.id === ed ? { ...fmClean, id: ed, uid: m.uid || mkUID() } : m));
+    else saveInv([...inv, { ...fmClean, id: mkId(), addedFrom: "manual", uid: mkUID() }]);
     setSf(false); setEd(null); setFm(blank); };
   const doDelete = (id) => { askConfirm("Delete this medicine?", () => saveInv(inv.filter((x) => x.id !== id))); };
 
@@ -1066,7 +1082,8 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
       {sf && <div style={{ ...cds, border: "2px solid #0D6B5B" }}><b style={{ color: "#0D6B5B" }}>{ed ? "Edit" : "Add"} Medicine</b>
         <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "1fr 1fr 1fr 1fr", gap: 10, marginTop: 12 }}>
           {[["name","Name*"],["manufacturer","Mfg"],["batch","Batch*"],["expiry","Expiry"],["pack","Pack"],["rack","Rack"],["distributor","Distributor"],["hsn","HSN"]].map(([k, l]) => <div key={k}><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>{l}</label><input value={fm[k] || ""} onChange={(e) => setFm((f) => ({ ...f, [k]: e.target.value }))} style={inps} /></div>)}
-          {[["mrp","MRP"],["ptr","PTR"],["stock","Stock"],["gstRate","GST%"],["packQty","Pack Qty"]].map(([k, l]) => <div key={k}><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>{l}</label><input type="number" value={fm[k] || 0} onChange={(e) => setFm((f) => ({ ...f, [k]: Number(e.target.value) }))} style={inps} /></div>)}
+          {[["mrp","MRP"],["ptr","PTR"],["gstRate","GST%"],["packQty","Pack Qty"]].map(([k, l]) => <div key={k}><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>{l}</label><input type="number" value={fm[k] || 0} onChange={(e) => setFm((f) => ({ ...f, [k]: Number(e.target.value) }))} style={inps} /></div>)}
+          <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Stock <span style={{ fontWeight: 400, color: "#aaa" }}>(packs.tablets)</span></label><input type="text" value={fm._stockStr !== undefined ? fm._stockStr : fStock(fm.stock, fm.packQty)} onChange={(e) => setFm((f) => ({ ...f, _stockStr: e.target.value }))} onBlur={(e) => { var parsed = parseStockInput(e.target.value, fm.packQty); setFm((f) => ({ ...f, stock: parsed, _stockStr: fStock(parsed, f.packQty) })); }} style={inps} /></div>
         </div><div style={{ display: "flex", gap: 8, marginTop: 12 }}><button onClick={doSave} style={bts(true)}>Save</button><button onClick={() => setSf(false)} style={bts(false)}>Cancel</button></div></div>}
       {/* Mobile card view */}
       {mob ? <div>
@@ -1088,7 +1105,7 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
               <span>{m.rack ? "Rack: " + m.rack : "No rack"} | {m.distributor || "-"}</span>
               <div style={{ display: "flex", gap: 6 }}>
                 <button onClick={function() { setInvExpand(invExpand === m.id ? null : m.id); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#0D6B5B", fontSize: 11, fontWeight: 600 }}>{invExpand === m.id ? "Hide Sales" : "Sales"}</button>
-                <button onClick={function() { setFm(m); setEd(m.id); setSf(true); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#2563EB", fontSize: 11 }}>Edit</button>
+                <button onClick={function() { setFm({ ...m, _stockStr: undefined }); setEd(m.id); setSf(true); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#2563EB", fontSize: 11 }}>Edit</button>
                 {isO && <button onClick={function() { doDelete(m.id); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#DC2626", fontSize: 11 }}>Del</button>}
               </div>
             </div>
@@ -1142,7 +1159,7 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
           {sh("src") && <td style={tds}><Tag bg={m.addedFrom === "csv" ? "#DBEAFE" : m.addedFrom === "image" ? "#FEE2E2" : "#E8E4DD"} fg={m.addedFrom === "csv" ? "#1E40AF" : m.addedFrom === "image" ? "#991B1B" : "#555"}>{(m.addedFrom || "M").slice(0, 3).toUpperCase()}</Tag></td>}
           <td style={tds}><button onClick={function() { setInvExpand(isExp ? null : m.id); }} style={{ ...bts(false), padding: "4px 8px", fontSize: 10, background: isExp ? "#D1FAE5" : undefined }}>{isExp ? "Hide" : "View"}</button></td>
           <td style={{ ...tds, whiteSpace: "nowrap" }}>
-            <button onClick={() => { setFm(m); setEd(m.id); setSf(true); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#2563EB", fontSize: 11 }}>Edit</button>
+            <button onClick={() => { setFm({ ...m, _stockStr: undefined }); setEd(m.id); setSf(true); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#2563EB", fontSize: 11 }}>Edit</button>
             {isO && <button onClick={() => doDelete(m.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#DC2626", fontSize: 11, marginLeft: 4 }}>Del</button>}</td></tr>
           {isExp && <tr><td colSpan="14" style={{ padding: 0, background: "#F0FDF4" }}>
             <div style={{ padding: "8px 14px", fontSize: 12 }}>
