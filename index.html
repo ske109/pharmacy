@@ -879,10 +879,42 @@ function BillView({ bill, onClose, fromHistory }) {
         if (navigator.share && navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
           navigator.share({ title: "Bill " + bill.billNo, text: thankMsg, files: [pdfFile] }).then(function() {
             // After share completes, open WhatsApp chat with template message
-            if (phone) location.href = "whatsapp://send?phone=" + phone + "&text=" + encodeURIComponent(thankMsg);
+            if (phone) (function openWA(p, t) {
+              var encoded = encodeURIComponent(t);
+              var isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
+              if (isMobile) {
+                var intentUrl = "intent://send?phone=" + p + "&text=" + encoded + "#Intent;scheme=whatsapp;package=com.whatsapp;end;";
+                var waUrl = "https://api.whatsapp.com/send?phone=" + p + "&text=" + encoded;
+                // Try intent for Android
+                if (/Android/i.test(navigator.userAgent)) {
+                  location.href = intentUrl;
+                } else {
+                  // iOS - use api.whatsapp.com
+                  location.href = waUrl;
+                }
+              } else {
+                window.open("https://web.whatsapp.com/send?phone=" + p + "&text=" + encoded, "_blank");
+              }
+            })(phone, thankMsg);
           }).catch(function() {
             // User cancelled share or error - still open WhatsApp with text
-            if (phone) location.href = "whatsapp://send?phone=" + phone + "&text=" + encodeURIComponent(thankMsg);
+            if (phone) (function openWA(p, t) {
+              var encoded = encodeURIComponent(t);
+              var isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
+              if (isMobile) {
+                var intentUrl = "intent://send?phone=" + p + "&text=" + encoded + "#Intent;scheme=whatsapp;package=com.whatsapp;end;";
+                var waUrl = "https://api.whatsapp.com/send?phone=" + p + "&text=" + encoded;
+                // Try intent for Android
+                if (/Android/i.test(navigator.userAgent)) {
+                  location.href = intentUrl;
+                } else {
+                  // iOS - use api.whatsapp.com
+                  location.href = waUrl;
+                }
+              } else {
+                window.open("https://web.whatsapp.com/send?phone=" + p + "&text=" + encoded, "_blank");
+              }
+            })(phone, thankMsg);
           });
           shared = true;
         }
@@ -893,7 +925,23 @@ function BillView({ bill, onClose, fromHistory }) {
       }
     }
     // If share API not available, open WhatsApp with text
-    if (!shared && phone) location.href = "whatsapp://send?phone=" + phone + "&text=" + encodeURIComponent(thankMsg);
+    if (!shared && phone) (function openWA(p, t) {
+              var encoded = encodeURIComponent(t);
+              var isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
+              if (isMobile) {
+                var intentUrl = "intent://send?phone=" + p + "&text=" + encoded + "#Intent;scheme=whatsapp;package=com.whatsapp;end;";
+                var waUrl = "https://api.whatsapp.com/send?phone=" + p + "&text=" + encoded;
+                // Try intent for Android
+                if (/Android/i.test(navigator.userAgent)) {
+                  location.href = intentUrl;
+                } else {
+                  // iOS - use api.whatsapp.com
+                  location.href = waUrl;
+                }
+              } else {
+                window.open("https://web.whatsapp.com/send?phone=" + p + "&text=" + encoded, "_blank");
+              }
+            })(phone, thankMsg);
   };
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center", padding: 10 }}>
