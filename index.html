@@ -542,91 +542,199 @@ function wordsInZone(row, zone) {
 
 // ── Main spatial parser ───────────────────────────────────────────────────────
 function parseWithSpatialData(words, pageW, fallbackText) {
-  const rows = spatialReconstructRows(words, pageW);
-  if (!rows.length) return null;
+  // Strategy: Use both spatial (bbox) and text-based parsing, take best result
+  var spatialItems = [];
+  var textItems = [];
 
-  const { zones, startRow } = detectColumnZones(rows, pageW);
+  // === SPATIAL APPROACH: only if we have good bbox data ===
+  try {
+    var rows = spatialReconstructRows(words, pageW);
+    if (rows.length > 0) {
+      var det = detectColumnZones(rows, pageW);
+      var zones = det.zones;
+      var startRow = det.startRow;
 
-  const SKIP_ROW = /^(total|grand|taxable|cgst|sgst|igst|discount|round|gst\s*summary|collectable|tcs|terms|authoris|scan\s*to|bank|ifsc|pan|dl\s*no|gstin|address|phone|mobile|e.?mail|buyer|seller|shipping|billing|invoice\s*no|invoice\s*date|due\s*date|order\s*no|page\s*\d)/i;
-  const EXP_RE = /\b(\d{1,2})[\/\-](\d{2,4})\b/;
-  const BATCH_RE = /\b([A-Z]{1,5}\d{3,}[A-Z0-9]*)\b/;
+      for (var ri = startRow; ri < rows.length; ri++) {
+        var row = rows[ri];
+        var fullLine = row.map(function(w) { return w.text; }).join(" ").trim();
+        if (fullLine.length < 8) continue;
+        if (/^(total|grand|taxable|cgst|sgst|igst|round|gst|bank|pan|dl|gstin|address|phone|mobile|email|invoice|page|schedule|checked|order|case|hunt|sales|mrp printed|terms|authoris|scan|collectable|tcs|billing|shipping|buyer|seller)/i.test(fullLine)) continue;
 
-  const items = [];
-  let supplier = "", invoiceNo = "", date = "";
+        var name = wordsInZone(row, zones.desc).replace(/[|\\]/g, "").trim();
+        if (!name || name.length < 3 || !/[a-zA-Z]{2,}/.test(name)) continue;
 
-  // Extract header info from first rows
-  for (let i = 0; i < Math.min(startRow + 1, rows.length, 25); i++) {
-    const line = rows[i].map(w => w.text).join(" ");
-    if (!invoiceNo) {
-      const m = line.match(/\b(VE-\d{2}-\d{5,})\b/i) || line.match(/Invoice\s*No\s*[:\s]*([A-Z0-9\/-]+)/i);
-      if (m) invoiceNo = m[1];
+        var mrpStr = wordsInZone(row, zones.mrp);
+        var tradeStr = wordsInZone(row, zones.trade);
+        var mrp = parseFloat((mrpStr || "").replace(/[^\d.]/g, "")) || 0;
+        var ptr = parseFloat((tradeStr || "").replace(/[^\d.]/g, "")) || 0;
+        if (mrp <= 0 && ptr <= 0) continue;
+
+        var qtyStr = wordsInZone(row, zones.qty);
+        var freeStr = zones.free ? wordsInZone(row, zones.free) : "";
+        var schemeStr = zones.scheme ? wordsInZone(row, zones.scheme) : "";
+        var discStr = wordsInZone(row, zones.disc);
+        var batchStr = wordsInZone(row, zones.batch);
+        var expStr = wordsInZone(row, zones.exp);
+
+        var qty = parseInt((qtyStr || "").replace(/[^\d]/g, "")) || 1;
+        var freeQty = parseInt((freeStr || "").replace(/[^\d]/g, "")) || 0;
+        var discPct = parseFloat(((discStr || "").match(/(\d+\.?\d*)/) || [])[1] || "0");
+        var schemePct = parseFloat(((schemeStr || "").match(/(\d+\.?\d*)/) || [])[1] || "0");
+        var batch = ((batchStr || fullLine).match(/\b([A-Z]{1,5}\d{3,}[A-Z0-9]*)\b/) || [])[1] || "";
+        var expM = (expStr || fullLine).match(/\b(\d{1,2})[\/\-](\d{2,4})\b/);
+        var expiry = expM ? (expM[2].length === 2 ? "20" + expM[2] : expM[2]) + "-" + expM[1].padStart(2, "0") : "";
+        var gstM = fullLine.match(/\b(5|12|18|28)\s*%?(?:\s|$)/);
+        var gstRate = gstM ? parseInt(gstM[1]) : 5;
+
+        spatialItems.push({ name: name.slice(0, 80), manufacturer: "", hsn: "300490", batch: batch, expiry: expiry, pack: "", mrp: Math.round(mrp * 100) / 100, qty: Math.max(1, qty), freeQty: freeQty, ptr: Math.round((ptr || mrp * 0.85) * 100) / 100, gstRate: gstRate, rack: "", packQty: 0, discPct: discPct, schemePct: schemePct, amount: 0 });
+      }
     }
-    if (!date) { const d = line.match(/(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4})/); if (d) date = d[1]; }
-    if (!supplier && /medisales|pharma|distributors|traders|agencies|healthcare/i.test(line))
-      supplier = line.replace(/\s+/g, " ").trim().slice(0, 80);
+  } catch(e) { /* spatial failed, continue to text */ }
+
+  // === TEXT APPROACH: parse raw OCR text line by line ===
+  textItems = parseVardhmanText(fallbackText);
+
+  // Take whichever found more items
+  var items = spatialItems.length >= textItems.length ? spatialItems : textItems;
+
+  if (items.length > 0) {
+    // Extract header info
+    var supplier = "", invoiceNo = "", date = "";
+    var headerText = fallbackText.substring(0, 2000);
+    var invM = headerText.match(/\b(VE-\d{2}-\d{4,})\b/i) || headerText.match(/Invoice[\s.#-]*No[\s.:]*([A-Z0-9\/-]+)/i) || headerText.match(/Inv\.?\s*No\.?\s*[:\s]*([A-Z0-9\/-]+)/i);
+    if (invM) invoiceNo = invM[1];
+    var dateM = headerText.match(/(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4})/);
+    if (dateM) date = dateM[1];
+    if (/vardhman|medisales/i.test(headerText)) supplier = "Vardhman Medisales";
+    else if (/pharma|distributor|health|medical|drugs|traders|agencies|marketing/i.test(headerText)) {
+      var supM = headerText.match(/([A-Z][A-Z\s&]+(?:MEDISALES|PHARMA|DISTRIBUTORS|TRADERS|AGENCIES|HEALTHCARE|MARKETING))/i);
+      supplier = supM ? supM[1].trim() : "Distributor";
+    }
+    return { supplier: supplier || "Distributor", invoiceNo: invoiceNo, date: date, items: items };
   }
 
-  for (let ri = startRow; ri < rows.length; ri++) {
-    const row = rows[ri];
-    const fullLine = row.map(w => w.text).join(" ").trim();
+  return null;
+}
 
-    // Skip totals/headers
-    if (SKIP_ROW.test(fullLine)) continue;
-    if (fullLine.length < 5) continue;
+// ── Vardhman text-based parser ───────────────────────────────────────────────
+// Parses OCR text looking for medicine rows with pattern:
+// [RackCode] MedicineName [Pack] BatchNo ExpDate MRP TradePrice Qty Disc%
+function parseVardhmanText(text) {
+  if (!text) return [];
+  var lines = text.split("\n").map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 5; });
+  var items = [];
 
-    // Extract each column
-    const name = wordsInZone(row, zones.desc).replace(/[|\\]/g, "").trim();
-    const qtyStr = wordsInZone(row, zones.qty);
-    const batchStr = wordsInZone(row, zones.batch) || wordsInZone(row, { x0: 0, x1: pageW }); // fallback to full row
-    const expStr = wordsInZone(row, zones.exp);
-    const mrpStr = wordsInZone(row, zones.mrp);
-    const tradeStr = wordsInZone(row, zones.trade);
-    const discStr = wordsInZone(row, zones.disc);
-    const freeStr = zones.free ? wordsInZone(row, zones.free) : "";
-    const schemeStr = zones.scheme ? wordsInZone(row, zones.scheme) : "";
-
-    // Validate: need a name with letters and at least one price
-    if (!name || name.length < 3 || !name.match(/[a-zA-Z]{2,}/)) continue;
-    const mrp = parseFloat(mrpStr.replace(/[^\d.]/g, "")) || 0;
-    const ptr = parseFloat(tradeStr.replace(/[^\d.]/g, "")) || 0;
-    if (mrp <= 0 && ptr <= 0) continue; // definitely not an item row
-
-    const qty = parseInt(qtyStr.replace(/[^\d]/g, "")) || 1;
-    const freeQty = parseInt(freeStr.replace(/[^\d]/g, "")) || 0;
-    const discM = discStr.match(/(\d+(?:\.\d{1,2})?)/);
-    const discPct = discM ? parseFloat(discM[1]) : 0;
-    const schemeM = schemeStr.match(/(\d+(?:\.\d{1,2})?)/);
-    const schemePct = schemeM ? parseFloat(schemeM[1]) : 0;
-
-    // Parse batch
-    let batch = "";
-    const bm = BATCH_RE.exec(batchStr || fullLine);
-    if (bm) batch = bm[1];
-
-    // Parse expiry
-    let expiry = "";
-    const em = EXP_RE.exec(expStr || fullLine);
-    if (em) {
-      let yr = em[2], mo = em[1].padStart(2, "0");
-      if (yr.length === 2) yr = "20" + yr;
-      expiry = yr + "-" + mo;
+  // Find table start: look for header keywords
+  var tableStart = 0;
+  for (var i = 0; i < Math.min(lines.length, 40); i++) {
+    var lower = lines[i].toLowerCase();
+    if ((lower.indexOf("description") >= 0 || lower.indexOf("particulars") >= 0) && (lower.indexOf("qty") >= 0 || lower.indexOf("batch") >= 0 || lower.indexOf("mrp") >= 0)) {
+      tableStart = i + 1;
+      break;
     }
-
-    // GST: look for % in disc/trailing columns or default 5
-    const gstM = fullLine.match(/\b(5|12|18|28)\s*%/);
-    const gstRate = gstM ? parseInt(gstM[1]) : 5;
-
-    items.push({
-      name: name.slice(0, 80), manufacturer: "", hsn: "300490",
-      batch, expiry, pack: "", mrp: Math.round(mrp * 100) / 100,
-      qty: Math.max(1, qty), freeQty,
-      ptr: Math.round((ptr || mrp * 0.85) * 100) / 100,
-      gstRate, rack: "", packQty: 0,
-      discPct, schemePct: schemePct, amount: 0
-    });
+    if (lower.indexOf("rack") >= 0 && lower.indexOf("batch") >= 0) { tableStart = i + 1; break; }
+    if (lower.indexOf("billed") >= 0 && lower.indexOf("trade") >= 0) { tableStart = i + 1; break; }
   }
 
-  return items.length > 0 ? { supplier: supplier || "Vardhman Medisales", invoiceNo, date, items } : null;
+  // Skip patterns - NOT medicine rows
+  var SKIP = /^(total|sub\s*total|grand|taxable|cgst|sgst|igst|round|gst\s*summary|bank|ifsc|pan|dl\s*no|gstin|address|phone|mobile|email|invoice|page|schedule|checked|order|case|hunt|sales|mrp\s*printed|terms|authoris|scan|collectable|signature|do\s*not|cash\s*payment|sign\s*slip|valid|credit|east\s*zone|west\s*zone|relation|billed\s*to|buyer|seller|shipping|net\s*value|sale\s*value|sch\s*disc)/i;
+
+  for (var li = tableStart; li < lines.length; li++) {
+    var l = lines[li];
+    if (SKIP.test(l)) continue;
+    if (l.length < 10) continue;
+
+    // Extract all numbers from the line
+    var allNums = [];
+    var numRe = /(\d+\.?\d*)/g;
+    var nm;
+    while ((nm = numRe.exec(l)) !== null) allNums.push({ val: parseFloat(nm[1]), pos: nm.index });
+    if (allNums.length < 2) continue;
+
+    // Extract medicine name: text between rack code and pack/batch info
+    // Medicine names can contain numbers (10MG, 125MCG, MGD3, etc.)
+    var rackM = l.match(/^([A-Z]\d{3,5})\s+/);
+    var nameStart = rackM ? rackM[0].length : 0;
+
+    // Find where name ends: look for pack pattern (10'S, 15S, 5X3ML, DEVICE, PCS)
+    // or batch pattern (letter+3digits like C25INH4001, V2600071)
+    var nameEnd = l.length;
+    var packM = l.match(/\b(\d{1,3}['`]?\s*[SsTt]\b|\d+X\d+\s*ML|DEVICE|PCS|BOX\b)/i);
+    if (packM && packM.index > nameStart + 3) nameEnd = packM.index;
+    else {
+      // Find batch: typically 5+ chars starting with letter(s) then digits
+      var batchPos = l.search(/\b[A-Z]{1,5}\d{4,}/);
+      if (batchPos > nameStart + 5) nameEnd = batchPos;
+    }
+
+    // Also stop at a sequence of 2+ standalone numbers (qty, prices)
+    var numSeq = l.substring(nameStart).search(/\s+\d+\s+\d+['`]?\s*[SsTt]?\s/);
+    if (numSeq > 3 && nameStart + numSeq < nameEnd) nameEnd = nameStart + numSeq;
+
+    var name = l.substring(nameStart, nameEnd).replace(/[|\\]/g, "").replace(/\s+/g, " ").trim();
+    // Clean trailing standalone numbers that aren't part of dosage
+    name = name.replace(/\s+\d+\s*$/, "").trim();
+
+    if (!name || name.length < 3 || !/[A-Z]{2,}/i.test(name)) continue;
+    // Skip if name looks like header/address
+    if (/^(NO\.|HUNT|MOBILE|EMAIL|GSTIN|STATE|DL\s*NO|PAN|EWB|IRN|ACK|INVOICE|TAX\s*INV|PAGE|CHECKED)/i.test(name)) continue;
+
+    // Get prices - find numbers with decimals (XX.XX format = prices)
+    var decNums = [];
+    var decRe = /(\d+\.\d{2})/g;
+    var dm;
+    while ((dm = decRe.exec(l)) !== null) decNums.push(parseFloat(dm[1]));
+    var priceNums = decNums.filter(function(n) { return n >= 5; }).sort(function(a, b) { return b - a; });
+
+    // MRP is the largest price, PTR is the second largest
+    var mrp = priceNums.length >= 1 ? priceNums[0] : 0;
+    var ptr = priceNums.length >= 2 ? priceNums[1] : mrp * 0.85;
+    if (mrp <= 0) continue;
+
+    // For Vardhman with OLD MRP and NEW MRP columns: 
+    // If there are 3+ prices, pattern is: OLD_MRP(0.00), NEW_MRP, TRADE_PRICE
+    // NEW_MRP > TRADE_PRICE, so mrp = 2nd highest, ptr = 3rd
+    if (priceNums.length >= 3 && priceNums[0] > 0) {
+      // If first price is much larger and there's a 0.00, adjust
+      // Usually: 0.00(old), MRP, PTR, taxable, net
+      var nonZero = priceNums.filter(function(n) { return n > 1; });
+      if (nonZero.length >= 2) { mrp = nonZero[0]; ptr = nonZero[1]; }
+    }
+
+    // Qty: look for small numbers (1-99) that aren't prices
+    var qty = 1;
+    var smallNums = allNums.filter(function(n) { return n.val >= 1 && n.val <= 99 && n.val === Math.floor(n.val); });
+    if (smallNums.length > 0) qty = smallNums[0].val;
+
+    // Batch
+    var batchM = l.match(/\b([A-Z]{1,5}\d{3,}[A-Z0-9]*)\b/);
+    var batch = batchM ? batchM[1] : "";
+
+    // Expiry
+    var expM = l.match(/\b(\d{1,2})[\/\-](\d{2,4})\b/);
+    var expiry = "";
+    if (expM) {
+      var yr = expM[2].length === 2 ? "20" + expM[2] : expM[2];
+      expiry = yr + "-" + expM[1].padStart(2, "0");
+    }
+
+    // Disc%: look for 4.00 or similar near "disc" or at end
+    var discPct = 0;
+    var discM = l.match(/(\d+\.00)\s*$/);
+    if (!discM) discM = l.match(/\b(4\.00|5\.00|8\.00|10\.00|12\.00|15\.00|20\.00)\b/);
+    if (discM) discPct = parseFloat(discM[1]);
+
+    // GST
+    var gstM = l.match(/\b(5|12|18|28)\s*$/);
+    var gstRate = gstM ? parseInt(gstM[1]) : 5;
+
+    // Pack
+    var pack = "";
+    if (packM) pack = packM[1];
+
+    items.push({ name: name.slice(0, 80), manufacturer: "", hsn: "300490", batch: batch, expiry: expiry, pack: pack, mrp: Math.round(mrp * 100) / 100, qty: Math.max(1, qty), freeQty: 0, ptr: Math.round(ptr * 100) / 100, gstRate: gstRate, rack: "", packQty: 0, discPct: discPct, schemePct: 0, amount: 0 });
+  }
+  return items;
 }
 
 // ── Main entry point called by doImg ─────────────────────────────────────────
