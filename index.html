@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>A to Z Pharmacy</title>
+<title>A to Z Pharmacy v2.0.0</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💊</text></svg>">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
 
@@ -49,6 +49,10 @@ input,select,button,textarea{font-family:inherit;-webkit-appearance:none}
   .desk-show{display:block !important}
 }
 </style>
+
+<meta name="app-version" content="2.0.0">
+<meta name="app-changes" content="["Removed Claude API dependency for image/PDF bill reading [security/privacy]", "Added local Tesseract.js OCR with canvas preprocessing for purchase bill images", "Enhanced parsing with fallback line-by-line item extraction", "Cleaner worker without hardcoded API keys or Claude proxy route", "Improved error handling and user feedback for OCR quality"]">
+<script>window.APP_VERSION = {"version": "2.0.0", "changes": ["Removed Claude API dependency for image/PDF bill reading [security/privacy]", "Added local Tesseract.js OCR with canvas preprocessing for purchase bill images", "Enhanced parsing with fallback line-by-line item extraction", "Cleaner worker without hardcoded API keys or Claude proxy route", "Improved error handling and user feedback for OCR quality"], "date": "2026-05-08", "type": "production"};</script>
 </head>
 <body>
 <div id="root"></div>
@@ -81,7 +85,6 @@ if (CONFIGURED) {
 const PROXY_URL = "https://atoz-pharmacy-api.sk05012024.workers.dev";
 const COMPARE_SERVER = localStorage.getItem("compareServer") || "http://localhost:3000";
 const PROXY_READY = PROXY_URL.indexOf("YOUR-WORKER") === -1;
-const CLAUDE_HEADERS = { "Content-Type": "application/json" };
 
 // ══════════════════════════════════════════════
 // PHARMACY INFO
@@ -153,6 +156,102 @@ function fbListen(path, callback) {
 // CSV PARSER
 // ══════════════════════════════════════════════
 function parseCSV(t) { const res = []; let row = [], f = "", q = false; for (let i = 0; i < t.length; i++) { const c = t[i]; if (c === "\"") { q = !q; continue; } if (c === "," && !q) { row.push(f.trim()); f = ""; continue; } if ((c === "\n" || c === "\r") && !q) { if (f || row.length) { row.push(f.trim()); res.push(row); row = []; f = ""; } continue; } f += c; } if (f || row.length) { row.push(f.trim()); res.push(row); } return res; }
+
+function normalizeInvoiceText(text) {
+  return String(text || "")
+    .replace(/
+/g, "
+")
+    .replace(/[|]/g, "I")
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/[ 	]+/g, " ")
+    .replace(/
+{2,}/g, "
+")
+    .trim();
+}
+
+async function ensureTesseract() {
+  if (window.Tesseract) return true;
+  return new Promise((resolve) => {
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+    s.onload = () => resolve(!!window.Tesseract);
+    s.onerror = () => resolve(false);
+    document.head.appendChild(s);
+  });
+}
+
+async function preprocessBillImage(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((res, rej) => {
+      const i = new Image();
+      i.onload = () => res(i);
+      i.onerror = rej;
+      i.src = url;
+    });
+    const maxW = 1800;
+    const scale = Math.min(1, maxW / img.width);
+    const w = Math.max(900, Math.round(img.width * scale));
+    const h = Math.round(img.height * (w / img.width));
+    const c = document.createElement("canvas");
+    c.width = w; c.height = h;
+    const x = c.getContext("2d", { willReadFrequently: true });
+    x.fillStyle = "#fff";
+    x.fillRect(0, 0, w, h);
+    x.drawImage(img, 0, 0, w, h);
+    const id = x.getImageData(0, 0, w, h);
+    const d = id.data;
+    for (let i = 0; i < d.length; i += 4) {
+      let g = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
+      g = g > 170 ? 255 : (g < 110 ? 0 : Math.min(255, Math.max(0, (g - 110) * 255 / 60)));
+      d[i] = d[i + 1] = d[i + 2] = g;
+    }
+    x.putImageData(id, 0, 0);
+    return c;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function extractImageBillText(file, onProgress) {
+  const ok = await ensureTesseract();
+  if (!ok) throw new Error("OCR engine could not be loaded");
+  const canvas = await preprocessBillImage(file);
+  const result = await Tesseract.recognize(canvas, "eng", {
+    logger: (m) => { if (onProgress && m && m.status) onProgress(m); }
+  });
+  return normalizeInvoiceText((result && result.data && result.data.text) || "");
+}
+
+function parseImageBillToItems(text) {
+  const clean = normalizeInvoiceText(text);
+  const parsed = parsePdfToItems(clean);
+  if (parsed && parsed.items && parsed.items.length) return parsed;
+  const lines = clean.split("
+").map((l) => l.trim()).filter(Boolean);
+  let supplier = "", invoiceNo = "", date = "";
+  lines.slice(0, 25).forEach((l) => {
+    if (!invoiceNo) { const m = l.match(/(?:invoice|bill)\s*(?:no|number)?\s*[:#-]?\s*([A-Z0-9\/-]+)/i); if (m) invoiceNo = m[1]; }
+    if (!date) { const d = l.match(/(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/); if (d) date = d[1]; }
+    if (!supplier && /pharma|distributor|health|medical|drug|traders|agency|agencies/i.test(l)) supplier = l.slice(0, 80);
+  });
+  const items = [];
+  lines.forEach((l) => {
+    if (/total|grand|discount|taxable|cgst|sgst|igst|round|amount/i.test(l)) return;
+    const qty = (l.match(/(\d+)\s*(?:EA|NOS|PCS|STRIP|STRIPS|TABS?|CAPS?)/i) || [])[1];
+    const nums = l.match(/\d+\.\d{1,2}/g) || [];
+    if (!qty || nums.length < 2) return;
+    const parts = l.split(/\s{2,}|	/).filter(Boolean);
+    const name = parts.filter((p) => !/^(\d+|EA|NOS|PCS|STRIP|STRIPS|TABS?|CAPS?|\d+\.\d+|\d+%)$/i.test(p)).join(" ").trim();
+    if (name.length < 3) return;
+    items.push({ name: name.slice(0, 80), manufacturer: "", hsn: "300490", batch: "", expiry: "", pack: "", mrp: parseFloat(nums[0] || 0), qty: Number(qty || 1), ptr: parseFloat(nums[1] || 0), gstRate: 5, rack: "", packQty: 0, discPct: 0, schemePct: 0, freeQty: 0, amount: 0 });
+  });
+  return { supplier: supplier || "Image Bill", invoiceNo: invoiceNo || "", date: date || "", items };
+}
+
 function csvToItems(rows) {
   if (rows.length < 2) return null; const h = rows[0].map((x) => x.toLowerCase().trim()); const ix = (n) => h.findIndex((x) => x.includes(n));
   const items = [], sup = (rows[1] && rows[1][ix("seller name")]) || (rows[1] && rows[1][ix("seller")]) || "Unknown", inv = (rows[1] && rows[1][ix("invoice")]) || "", dt = (rows[1] && rows[1][ix("date")]) || "";
@@ -777,39 +876,27 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm, inv, s
     setImgP(true);
     try {
       if (isPdf) {
-        // FREE: Use pdf.js to extract text, then parse locally
         const text = await extractPdfText(file);
-        const parsed = parsePdfToItems(text);
+        const parsed = parsePdfToItems(normalizeInvoiceText(text));
         if (parsed.items.length > 0) {
-          setRev({ ...parsed, srcType: "pdf", srcFile: file.name });
+          setRev({ ...parsed, srcType: "pdf", srcFile: file.name, rawText: normalizeInvoiceText(text) });
         } else {
-          // If local parsing failed and API is available, try API
-          if (PROXY_READY) {
-            const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result.split(",")[1]); r.onerror = rej; r.readAsDataURL(file); });
-            const resp = await fetch(PROXY_URL, { method: "POST", headers: CLAUDE_HEADERS,
-              body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 4000, messages: [{ role: "user", content: [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 } }, { type: "text", text: "Extract ALL items from this purchase invoice. Return ONLY valid JSON: {supplier, invoiceNo, date (YYYY-MM-DD), items: [{name, manufacturer, hsn, batch, expiry, pack, mrp, qty, ptr, gstRate, packQty, discPct, schemePct, freeQty, amount}]}" }] }] }) });
-            const data = await resp.json();
-            if (!data.error) {
-              let t = (data.content || []).map((c) => c.text || "").join("").trim();
-              if (t.indexOf("{") > 0) t = t.slice(t.indexOf("{"), t.lastIndexOf("}") + 1);
-              setRev({ ...JSON.parse(t), srcType: "pdf", srcFile: file.name });
-            } else { alert("PDF parsed but no items found. Try CSV format instead."); }
-          } else { alert("PDF parsed but no items detected. Try CSV format."); }
+          alert("PDF parsed but no items detected. Try a cleaner PDF or CSV.");
         }
       } else {
-        // Images need AI - use proxy if available
-        if (!PROXY_READY) { alert("Image reading requires API proxy setup."); setImgP(false); e.target.value = ""; return; }
-        const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result.split(",")[1]); r.onerror = rej; r.readAsDataURL(file); });
-        const resp = await fetch(PROXY_URL, { method: "POST", headers: CLAUDE_HEADERS,
-          body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 4000, messages: [{ role: "user", content: [{ type: "image", source: { type: "base64", media_type: file.type || "image/jpeg", data: b64 } }, { type: "text", text: "Extract ALL items from this purchase invoice. Return ONLY valid JSON: {supplier, invoiceNo, date (YYYY-MM-DD), items: [{name, manufacturer, hsn, batch, expiry, pack, mrp, qty, ptr, gstRate, packQty, discPct, schemePct, freeQty, amount}]}" }] }] }) });
-        const data = await resp.json();
-        if (data.error) { alert("API error: " + (data.error.message || "Unknown")); setImgP(false); e.target.value = ""; return; }
-        let t = (data.content || []).map((c) => c.text || "").join("").trim();
-        if (t.indexOf("{") > 0) t = t.slice(t.indexOf("{"), t.lastIndexOf("}") + 1);
-        setRev({ ...JSON.parse(t), srcType: "image", srcFile: file.name });
+        const text = await extractImageBillText(file);
+        const parsed = parseImageBillToItems(text);
+        if (parsed.items && parsed.items.length > 0) {
+          setRev({ ...parsed, srcType: "image", srcFile: file.name, rawText: text });
+        } else {
+          alert("Could not read enough items from this bill image. Use full-page, straight, bright photos.");
+        }
       }
-    } catch (err) { console.error(err); alert("Could not read file. Try again."); }
-    setImgP(false); e.target.value = "";
+    } catch (err) {
+      alert("Read failed: " + err.message);
+    }
+    setImgP(false);
+    e.target.value = "";
   };
 
   const updR = (i, f, v) => { setRev((p) => { const items = p.items.map((it, idx) => { if (idx !== i) return it; const updated = { ...it, [f]: typeof it[f] === "number" ? (Number(v) || 0) : v }; updated.amount = purchCalcAmt(updated); return updated; }); return { ...p, items }; }); };
@@ -1242,41 +1329,197 @@ function BillPage({ inv, saveInv, addBill, mob, showBill }) {
   const res = sq.length >= 1 ? inv.filter((m) => { const s = sq.toLowerCase(); return (m.name.toLowerCase().includes(s) || m.batch.toLowerCase().includes(s) || (m.uid || "") === sq.toUpperCase() || (m.uid || "").toLowerCase().includes(s)) && m.stock > 0; }).slice(0, 8) : [];
   const addIt = (med) => { const ex = items.findIndex((i) => i.mid === med.id && !i.loose); if (ex >= 0) setItems((p) => p.map((i, idx) => idx === ex ? { ...i, qty: i.qty + 1 } : i)); else setItems((p) => [...p, { mid: med.id, name: med.name, manufacturer: med.manufacturer || "", pack: med.pack || "", batch: med.batch, expiry: med.expiry, mrp: med.mrp, ptr: med.ptr || 0, gstRate: med.gstRate || 5, qty: 1, discount: 0, loose: false, packQty: med.packQty || 0, unitPrice: med.mrp, unitPtr: med.ptr || 0, uid: med.uid || "", purchaseBillNo: med.purchaseBillNo || "", purchaseDistributor: med.purchaseDistributor || med.distributor || "", purchaseDate: med.purchaseDate || "", unitCost: med.unitCost || 0, purchDiscPct: med.purchDiscPct || 0, purchSchemePct: med.purchSchemePct || 0, purchFreeRatio: med.purchFreeRatio || 1 }]); setSq(""); setSo(false); };
 
-  // Camera scan - reads medicine strip/box image and matches to inventory
+  // Camera scan - reads medicine strip/box image using local Tesseract.js v5 OCR (no API needed)
   const doScan = async (e) => {
     const file = e.target.files[0]; if (!file) return;
-    if (!PROXY_READY) { alert("Image AI not configured. See PROXY_SETUP guide to enable."); return; }
     setScanning(true); setScanResult(null);
     try {
-      const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result.split(",")[1]); r.onerror = rej; r.readAsDataURL(file); });
-      const resp = await fetch(PROXY_URL, { method: "POST", headers: CLAUDE_HEADERS,
-        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000,
-          messages: [{ role: "user", content: [
-            { type: "image", source: { type: "base64", media_type: file.type || "image/jpeg", data: b64 } },
-            { type: "text", text: "You are a pharmacy medicine identifier. Look at this medicine strip/box image and extract: Name (full name with strength like Paracetamol 500mg), Manufacturer, Batch number, Expiry (YYYY-MM), Pack (like 10 Tab), MRP (number only). Return ONLY valid JSON no markdown: {\"name\":\"\",\"manufacturer\":\"\",\"batch\":\"\",\"expiry\":\"\",\"pack\":\"\",\"mrp\":0}" }
-          ] }] }) });
-      const data = await resp.json();
-      if (data.error) { setScanResult({ type: "err", msg: "API error: " + (data.error.message || "Unknown") }); setScanning(false); return; }
-      let text = (data.content || []).map((c) => c.text || "").join("").trim();
-      if (text.indexOf("{") > 0) text = text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1);
-      const parsed = JSON.parse(text);
-      const medName = (parsed.name || "").toLowerCase();
-      const match = inv.find((m) => m.stock > 0 && (
-        m.name.toLowerCase() === medName ||
-        m.name.toLowerCase().includes(medName) ||
-        medName.includes(m.name.toLowerCase()) ||
-        (parsed.batch && m.batch === parsed.batch)
-      ));
+      // Ensure Tesseract.js v5 is loaded (lazy, cached)
+      const ok = await ensureTesseract();
+      if (!ok) { setScanResult({ type: "err", msg: "OCR engine failed to load. Check internet connection." }); setScanning(false); e.target.value = ""; return; }
+
+      // ── Advanced canvas preprocessing ──────────────────────────────────────
+      // Medicine strips/boxes: small text, coloured backgrounds, curved surfaces.
+      // Steps: upscale → greyscale → adaptive contrast stretch → sharpen → binarise
+      const preprocessMedicineImage = async (imgFile) => {
+        const url = URL.createObjectURL(imgFile);
+        try {
+          const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
+          // Upscale small images; cap at 2400px wide to keep Tesseract fast
+          const TARGET_W = Math.min(2400, Math.max(1200, img.width * 2));
+          const scale = TARGET_W / img.width;
+          const w = Math.round(img.width * scale);
+          const h = Math.round(img.height * scale);
+          const c = document.createElement("canvas"); c.width = w; c.height = h;
+          const ctx = c.getContext("2d", { willReadFrequently: true });
+          // White background (handles transparent PNGs)
+          ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, w, h);
+          // Bicubic-equivalent: draw at 2× then shrink forces browser to interpolate
+          ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
+          ctx.drawImage(img, 0, 0, w, h);
+          const id = ctx.getImageData(0, 0, w, h); const d = id.data; const len = d.length;
+
+          // Pass 1: RGB → luminance (greyscale)
+          const grey = new Float32Array(w * h);
+          for (let i = 0; i < len; i += 4) {
+            grey[i >> 2] = d[i] * 0.2126 + d[i+1] * 0.7152 + d[i+2] * 0.0722;
+          }
+
+          // Pass 2: Compute local min/max in 64×64 tiles for adaptive contrast stretch
+          const TW = 64, TH = 64;
+          const localMin = new Float32Array(w * h);
+          const localMax = new Float32Array(w * h);
+          for (let py = 0; py < h; py++) {
+            for (let px = 0; px < w; px++) {
+              const x0 = Math.max(0, px - TW), x1 = Math.min(w - 1, px + TW);
+              const y0 = Math.max(0, py - TH), y1 = Math.min(h - 1, py + TH);
+              let mn = 255, mx = 0;
+              // Sample every 4th pixel in tile for speed
+              for (let ty = y0; ty <= y1; ty += 4) {
+                for (let tx = x0; tx <= x1; tx += 4) {
+                  const v = grey[ty * w + tx];
+                  if (v < mn) mn = v; if (v > mx) mx = v;
+                }
+              }
+              localMin[py * w + px] = mn; localMax[py * w + px] = mx;
+            }
+          }
+
+          // Pass 3: Adaptive normalise + sharpen kernel [0,-1,0,-1,5,-1,0,-1,0]
+          const sharp = new Float32Array(w * h);
+          for (let py = 0; py < h; py++) {
+            for (let px = 0; px < w; px++) {
+              const idx = py * w + px;
+              const mn = localMin[idx], mx = localMax[idx];
+              const range = mx - mn || 1;
+              const norm = (grey[idx] - mn) / range * 255;
+              // Inline 3×3 sharpen
+              const get = (x, y) => { const g = grey[Math.min(h-1,Math.max(0,y)) * w + Math.min(w-1,Math.max(0,x))]; const mn2 = localMin[Math.min(h-1,Math.max(0,y)) * w + Math.min(w-1,Math.max(0,x))], mx2 = localMax[Math.min(h-1,Math.max(0,y)) * w + Math.min(w-1,Math.max(0,x))]; return (g - mn2) / (mx2 - mn2 || 1) * 255; };
+              const sharpened = 5 * norm - get(px-1,py) - get(px+1,py) - get(px,py-1) - get(px,py+1);
+              sharp[idx] = Math.min(255, Math.max(0, sharpened));
+            }
+          }
+
+          // Pass 4: Otsu global threshold for clean black-on-white binary
+          const hist = new Int32Array(256);
+          for (let i = 0; i < sharp.length; i++) hist[Math.round(sharp[i])]++;
+          const N = sharp.length; let total = 0;
+          for (let i = 0; i < 256; i++) total += i * hist[i];
+          let sumB = 0, wB = 0, best = 0, thresh = 128;
+          for (let t = 0; t < 256; t++) {
+            wB += hist[t]; if (!wB) continue;
+            const wF = N - wB; if (!wF) break;
+            sumB += t * hist[t];
+            const mB = sumB / wB, mF = (total - sumB) / wF;
+            const bcv = wB * wF * (mB - mF) * (mB - mF);
+            if (bcv > best) { best = bcv; thresh = t; }
+          }
+
+          // Write final binary image back
+          for (let i = 0; i < sharp.length; i++) {
+            const v = sharp[i] < thresh ? 0 : 255;
+            d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v; d[i * 4 + 3] = 255;
+          }
+          ctx.putImageData(id, 0, 0);
+          return c;
+        } finally { URL.revokeObjectURL(url); }
+      };
+
+      const canvas = await preprocessMedicineImage(file);
+
+      // ── Tesseract.js v5 — dual PSM pass for best medicine strip coverage ───
+      // PSM 6 = uniform block of text (good for strips with small label text)
+      // PSM 11 = sparse text (good for boxes where text is scattered)
+      const runOCR = async (psm) => {
+        const result = await Tesseract.recognize(canvas, "eng", {
+          tessedit_pageseg_mode: psm,
+          tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,:/-+%() ",
+          preserve_interword_spaces: "1",
+        });
+        return normalizeInvoiceText((result && result.data && result.data.text) || "");
+      };
+
+      // Run both PSM modes in parallel, pick the longer (more content) result
+      const [text6, text11] = await Promise.all([runOCR(6), runOCR(11)]);
+      const rawText = text6.length >= text11.length ? text6 : text11;
+
+      // ── Smart pharmacy-aware field extraction ──────────────────────────────
+      const lines = rawText.split("\n").map(l => l.trim()).filter(Boolean);
+      const joined = lines.join(" ");
+
+      // Name: longest line in top-third that looks like a medicine name (has letters + digits/mg/ml)
+      const nameLines = lines.slice(0, Math.ceil(lines.length / 2)).filter(l =>
+        l.length > 4 && /[a-z]/i.test(l) &&
+        (/\d+\s*mg|\d+\s*ml|\d+\s*mcg|\d+\s*iu|\d+\s*g\b/i.test(l) || /tab|cap|inj|syp|gel|cream|drop|spray/i.test(l))
+      );
+      const name = nameLines.sort((a, b) => b.length - a.length)[0] ||
+        lines.filter(l => l.length > 4 && /[a-z]/i.test(l))[0] || "";
+
+      // Manufacturer: line with known pharma keywords
+      const mfgLine = lines.find(l => /ltd|pvt|pharma|lab|laboratories|healthcare|biotech|lifescience|india|cipla|sun|zydus|lupin|torrent|glenmark|abbott|pfizer|novartis|sanofi|dr\.?\s*reddy|mankind|alkem|micro|cadila/i.test(l)) || "";
+      const manufacturer = mfgLine.replace(/^[^a-z]*/i, "").slice(0, 60).trim();
+
+      // Batch: B.No / Batch No / Lot / Mfg B
+      const batchM = joined.match(/(?:batch|b\.?\s*no|lot\s*no?|b\/n)[.:\s#-]*([A-Z0-9]{3,15})/i);
+      const batch = batchM ? batchM[1].trim() : "";
+
+      // Expiry: Exp / Use before / MFD patterns
+      const expiryM = joined.match(/(?:exp(?:iry|\.)?|use\s*before|expiry\s*date|exp\s*date)[.:\s]*(\d{1,2}[\/\-.]\d{2,4}(?:[\/\-.]\d{2,4})?)/i)
+        || joined.match(/(\d{2}[\/\-]\d{4})/);
+      let expiry = expiryM ? expiryM[1].trim() : "";
+      // Normalise to YYYY-MM
+      if (expiry) {
+        const parts = expiry.split(/[\/\-.]/);
+        if (parts.length === 2) {
+          const [a, b] = parts;
+          expiry = (b.length === 4 ? b : "20" + b) + "-" + a.padStart(2, "0");
+        } else if (parts.length === 3) {
+          expiry = (parts[2].length === 4 ? parts[2] : "20" + parts[2]) + "-" + parts[1].padStart(2, "0");
+        }
+      }
+
+      // Pack: 10 Tab / 15 Caps / 30ml etc.
+      const packM = joined.match(/(\d+)\s*(tablets?|tabs?|capsules?|caps?|ml|mg|strips?|units?|vials?|ampoules?)/i);
+      const pack = packM ? packM[1] + " " + packM[2] : "";
+
+      // MRP: look for ₹ / Rs / MRP followed by number
+      const mrpM = joined.match(/(?:m\.?r\.?p\.?|rs\.?|₹)[.\s:]*(\d+(?:\.\d{1,2})?)/i)
+        || joined.match(/(\d{2,4}\.\d{2})(?!\s*%)/);
+      const mrp = mrpM ? parseFloat(mrpM[1]) : 0;
+
+      const parsed = { name: name.slice(0, 80), manufacturer: manufacturer.slice(0, 60), batch, expiry, pack, mrp };
+
+      // ── Match against inventory ────────────────────────────────────────────
+      const medName = parsed.name.toLowerCase();
+      const words = medName.split(/\s+/).filter(w => w.length > 3);
+      const match = inv.find((m) => {
+        if (m.stock <= 0) return false;
+        const mn = m.name.toLowerCase();
+        if (mn === medName) return true;
+        if (parsed.batch && m.batch && m.batch === parsed.batch) return true;
+        // Full name containment
+        if (mn.includes(medName) || medName.includes(mn)) return true;
+        // Word-level: any 2+ meaningful words from OCR appear in inventory name
+        const hits = words.filter(w => mn.includes(w));
+        return hits.length >= 2;
+      });
+
       if (match) {
         addIt(match);
-        setScanResult({ type: "ok", msg: "Found: " + match.name + " (Stock: " + fStock(match.stock, match.packQty) + ")" });
+        setScanResult({ type: "ok", msg: "✅ Found: " + match.name + " (Stock: " + fStock(match.stock, match.packQty) + ")" });
       } else {
-        setScanResult({ type: "info", msg: "Read: " + (parsed.name || "Unknown") + " | MRP: " + (parsed.mrp || "?") + " | Batch: " + (parsed.batch || "?") + " - Not found in inventory." });
+        const preview = [
+          parsed.name && "Name: " + parsed.name,
+          parsed.batch && "Batch: " + parsed.batch,
+          parsed.expiry && "Exp: " + parsed.expiry,
+          parsed.mrp && "MRP: ₹" + parsed.mrp
+        ].filter(Boolean).join(" | ");
+        setScanResult({ type: "info", msg: (preview || "Could not extract details") + " — not in inventory." });
         if (parsed.name) setSq(parsed.name);
       }
     } catch (err) {
-      console.error(err);
-      setScanResult({ type: "err", msg: "Could not read medicine. Try clearer image." });
+      console.error("doScan error:", err);
+      setScanResult({ type: "err", msg: "OCR failed. Try a clearer, well-lit image." });
     }
     setScanning(false);
     e.target.value = "";
@@ -1344,7 +1587,7 @@ function BillPage({ inv, saveInv, addBill, mob, showBill }) {
             <button onClick={() => camRef.current && camRef.current.click()} disabled={scanning} style={{ ...bts(false), padding: "12px 16px", fontSize: 13, opacity: scanning ? 0.6 : 1 }}>{scanning ? "Reading..." : "📷 Scan / Upload"}</button>
           </div>
         </div>
-        {scanning && <div style={{ marginTop: 10, padding: 12, background: "#EFF6FF", borderRadius: 8, fontSize: 13, color: "#1E40AF", display: "flex", alignItems: "center", gap: 8 }}><span style={{ display: "inline-block", width: 16, height: 16, border: "2px solid #1E40AF", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.7s linear infinite" }}></span> AI is reading the medicine strip...</div>}
+        {scanning && <div style={{ marginTop: 10, padding: 12, background: "#EFF6FF", borderRadius: 8, fontSize: 13, color: "#1E40AF", display: "flex", alignItems: "center", gap: 8 }}><span style={{ display: "inline-block", width: 16, height: 16, border: "2px solid #1E40AF", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.7s linear infinite" }}></span> Reading medicine strip (local OCR)...</div>}
         {scanResult && <div style={{ marginTop: 10, padding: 12, borderRadius: 8, fontSize: 12.5, background: scanResult.type === "ok" ? "#D1FAE5" : scanResult.type === "err" ? "#FEE2E2" : "#FEF3C7", color: scanResult.type === "ok" ? "#065F46" : scanResult.type === "err" ? "#991B1B" : "#92400E" }}>
           {scanResult.type === "ok" && "✅ "}{scanResult.type === "err" && "❌ "}{scanResult.type === "info" && "ℹ️ "}{scanResult.msg}
           <button onClick={() => setScanResult(null)} style={{ marginLeft: 8, background: "none", border: "none", cursor: "pointer", fontSize: 14, opacity: 0.6 }}>x</button>
