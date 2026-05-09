@@ -159,16 +159,12 @@ function parseCSV(t) { const res = []; let row = [], f = "", q = false; for (let
 
 function normalizeInvoiceText(text) {
   return String(text || "")
-    .replace(/
-/g, "
-")
+    .replace(/\n/g, "\n")
     .replace(/[|]/g, "I")
     .replace(/[“”]/g, '"')
     .replace(/[‘’]/g, "'")
     .replace(/[ 	]+/g, " ")
-    .replace(/
-{2,}/g, "
-")
+    .replace(/\n{2,}/g, "\n")
     .trim();
 }
 
@@ -230,8 +226,7 @@ function parseImageBillToItems(text) {
   const clean = normalizeInvoiceText(text);
   const parsed = parsePdfToItems(clean);
   if (parsed && parsed.items && parsed.items.length) return parsed;
-  const lines = clean.split("
-").map((l) => l.trim()).filter(Boolean);
+  const lines = clean.split("\n").map((l) => l.trim()).filter(Boolean);
   let supplier = "", invoiceNo = "", date = "";
   lines.slice(0, 25).forEach((l) => {
     if (!invoiceNo) { const m = l.match(/(?:invoice|bill)\s*(?:no|number)?\s*[:#-]?\s*([A-Z0-9\/-]+)/i); if (m) invoiceNo = m[1]; }
@@ -244,7 +239,7 @@ function parseImageBillToItems(text) {
     const qty = (l.match(/(\d+)\s*(?:EA|NOS|PCS|STRIP|STRIPS|TABS?|CAPS?)/i) || [])[1];
     const nums = l.match(/\d+\.\d{1,2}/g) || [];
     if (!qty || nums.length < 2) return;
-    const parts = l.split(/\s{2,}|	/).filter(Boolean);
+    const parts = l.split(/\s{2,}|\t/).filter(Boolean);
     const name = parts.filter((p) => !/^(\d+|EA|NOS|PCS|STRIP|STRIPS|TABS?|CAPS?|\d+\.\d+|\d+%)$/i.test(p)).join(" ").trim();
     if (name.length < 3) return;
     items.push({ name: name.slice(0, 80), manufacturer: "", hsn: "300490", batch: "", expiry: "", pack: "", mrp: parseFloat(nums[0] || 0), qty: Number(qty || 1), ptr: parseFloat(nums[1] || 0), gstRate: 5, rack: "", packQty: 0, discPct: 0, schemePct: 0, freeQty: 0, amount: 0 });
