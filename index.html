@@ -836,7 +836,6 @@ function BillView({ bill, onClose, fromHistory }) {
   const [pdfReady, setPdfReady] = useState(null);
   const [waPhone, setWaPhone] = useState("");
   const preparePdf = async function() {
-    // Ask phone number now, before PDF generation
     var custPhone = (bill.patientContact || "").replace(/[^0-9]/g, "");
     if (!custPhone || custPhone.length < 10) {
       custPhone = prompt("Enter customer WhatsApp number (10 digits):", "");
@@ -866,28 +865,35 @@ function BillView({ bill, onClose, fromHistory }) {
       var iW = pW - 20, iH = (canvas.height / canvas.width) * iW;
       if (iH > pH - 20) { iW = iW * (pH - 20) / iH; iH = pH - 20; }
       pdf.addImage(imgData, "JPEG", 10, 10, iW, iH);
-      var blob = pdf.output("blob");
-      setPdfReady(blob);
-      alert("PDF ready! Now tap 'Send via WhatsApp' to share.");
+      setPdfReady(pdf.output("blob"));
     } catch(err) { alert("PDF failed: " + err.message); }
   };
   const sendWhatsApp = function() {
-    var thankMsg = "Thank you for visiting " + PH.name + "! Your bill " + bill.billNo + " for Rs." + f2(bill.netAmount) + " is attached. For any orders or enquiries, just call or WhatsApp us on +917619639377. We are happy to help! Get well soon!";
     var phone = waPhone;
+    var thankMsg = "Thank you for visiting " + PH.name + "! Your bill " + bill.billNo + " for Rs." + f2(bill.netAmount) + " is attached. For any orders or enquiries, just call or WhatsApp us on +917619639377. We are happy to help! Get well soon!";
+    var shared = false;
 
     if (pdfReady) {
       var pdfFile = new File([pdfReady], "Bill_" + bill.billNo + ".pdf", { type: "application/pdf" });
       try {
         if (navigator.share && navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
-          navigator.share({ title: "Bill " + bill.billNo, text: thankMsg, files: [pdfFile] });
-          return;
+          navigator.share({ title: "Bill " + bill.billNo, text: thankMsg, files: [pdfFile] }).then(function() {
+            // After share completes, open WhatsApp chat with template message
+            if (phone) window.open("https://wa.me/" + phone + "?text=" + encodeURIComponent(thankMsg), "_blank");
+          }).catch(function() {
+            // User cancelled share or error - still open WhatsApp with text
+            if (phone) window.open("https://wa.me/" + phone + "?text=" + encodeURIComponent(thankMsg), "_blank");
+          });
+          shared = true;
         }
       } catch(e) {}
-      // Fallback: download PDF
-      var a = document.createElement("a"); a.href = URL.createObjectURL(pdfReady); a.download = "Bill_" + bill.billNo + ".pdf"; a.click();
+      if (!shared) {
+        // Fallback: download PDF
+        var a = document.createElement("a"); a.href = URL.createObjectURL(pdfReady); a.download = "Bill_" + bill.billNo + ".pdf"; a.click();
+      }
     }
-    // Open WhatsApp with text
-    if (phone) window.open("https://wa.me/" + phone + "?text=" + encodeURIComponent(thankMsg), "_blank");
+    // If share API not available, open WhatsApp with text
+    if (!shared && phone) window.open("https://wa.me/" + phone + "?text=" + encodeURIComponent(thankMsg), "_blank");
   };
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center", padding: 10 }}>
