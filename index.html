@@ -833,15 +833,101 @@ function BillView({ bill, onClose, fromHistory }) {
     const html = "<html><head><title>Bill_" + bill.billNo + "</title><style>body{font-family:sans-serif;font-size:12px;padding:0;max-width:800px;margin:0 auto}table{width:100%;border-collapse:collapse}th,td{border:1px solid #333;padding:8px;font-size:12px}th{background:#f2f2f2;text-align:left}</style></head><body>" + el.innerHTML + "</body></html>";
     setDlLink(URL.createObjectURL(new Blob([html], { type: "text/html" })));
   };
+  const sendWhatsApp = async function() {
+    var custPhone = (bill.patientContact || "").replace(/[^0-9]/g, "");
+    if (!custPhone || custPhone.length < 10) {
+      custPhone = prompt("Enter customer WhatsApp number (10 digits):", "");
+      if (!custPhone) return;
+      custPhone = custPhone.replace(/[^0-9]/g, "");
+    }
+    if (custPhone.length === 10) custPhone = "91" + custPhone;
+
+    var thankMsg = "Thank you for visiting " + PH.name + "! For any orders or enquiries, just call or WhatsApp us on +917619639377. We are happy to help! Get well soon!";
+
+    // Generate PDF from bill HTML
+    var el = document.getElementById("bill-print-area");
+    if (!el) { alert("Bill not ready"); return; }
+
+    try {
+      // Load html2canvas if not loaded
+      if (!window.html2canvas) {
+        await new Promise(function(res, rej) {
+          var s = document.createElement("script");
+          s.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
+          s.onload = res; s.onerror = function() { rej(new Error("Failed to load html2canvas")); };
+          document.head.appendChild(s);
+        });
+      }
+      // Load jsPDF if not loaded
+      if (!window.jspdf) {
+        await new Promise(function(res, rej) {
+          var s = document.createElement("script");
+          s.src = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js";
+          s.onload = res; s.onerror = function() { rej(new Error("Failed to load jsPDF")); };
+          document.head.appendChild(s);
+        });
+      }
+
+      // Render bill to canvas
+      var canvas = await html2canvas(el, { scale: 2, useCORS: true, backgroundColor: "#ffffff" });
+      var imgData = canvas.toDataURL("image/jpeg", 0.95);
+
+      // Create PDF
+      var pdf = new jspdf.jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+      var pdfW = pdf.internal.pageSize.getWidth();
+      var pdfH = pdf.internal.pageSize.getHeight();
+      var imgW = pdfW - 20;
+      var imgH = (canvas.height / canvas.width) * imgW;
+      if (imgH > pdfH - 20) { imgW = imgW * (pdfH - 20) / imgH; imgH = pdfH - 20; }
+      pdf.addImage(imgData, "JPEG", 10, 10, imgW, imgH);
+      var pdfBlob = pdf.output("blob");
+      var pdfFile = new File([pdfBlob], "Bill_" + bill.billNo + ".pdf", { type: "application/pdf" });
+
+      // Try Web Share API (works on mobile)
+      if (navigator.share && navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
+        await navigator.share({
+          title: "Bill " + bill.billNo,
+          text: thankMsg,
+          files: [pdfFile]
+        });
+      } else {
+        // Fallback: download PDF + open WhatsApp with text message
+        var a = document.createElement("a");
+        a.href = URL.createObjectURL(pdfBlob);
+        a.download = "Bill_" + bill.billNo + ".pdf";
+        a.click();
+        URL.revokeObjectURL(a.href);
+
+        // Open WhatsApp with text
+        var msg = "*" + PH.name + "*\n";
+        msg += "*Bill No: " + bill.billNo + "*\n";
+        msg += "Date: " + (bill.dateIST || fDT(bill.date)) + "\n";
+        msg += "Patient: " + bill.patient + "\n";
+        msg += "*Net Amount: Rs." + f2(bill.netAmount) + "*\n\n";
+        msg += thankMsg + "\n\n";
+        msg += "_PDF bill downloaded - please attach it_";
+        window.open("https://wa.me/" + custPhone + "?text=" + encodeURIComponent(msg), "_blank");
+      }
+    } catch(err) {
+      // Final fallback: text-only WhatsApp
+      var msg2 = "*" + PH.name + "*\n" + PH.addr + "\nPh: " + PH.mob + "\n\n";
+      msg2 += "*TAX INVOICE*\nBill No: " + bill.billNo + "\nDate: " + (bill.dateIST || fDT(bill.date)) + "\nPatient: " + bill.patient + "\nPayment: " + bill.paymentMode + "\n\n*Items:*\n";
+      bill.items.forEach(function(it, i) { msg2 += (i+1) + ". " + (it.loose ? "[L] " : "") + it.name + " x" + it.qty + " @ Rs." + f2(it.unitPrice || it.mrp) + " = Rs." + f2(it.amount) + "\n"; });
+      msg2 += "\n*Net Amount: Rs." + f2(bill.netAmount) + "*\n\n" + thankMsg;
+      window.open("https://wa.me/" + custPhone + "?text=" + encodeURIComponent(msg2), "_blank");
+    }
+  };
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center", padding: 10 }}>
       <div style={{ background: "#fff", borderRadius: 12, width: "100%", maxWidth: 800, maxHeight: "95vh", overflow: "auto", padding: 20 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 6 }}>
           <b style={{ fontSize: 16 }}>Bill {fromHistory ? "" : "Generated"}</b>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            {fromHistory && !dlLink && <button onClick={makePdf} style={{ ...bts(true) }}>Prepare PDF</button>}
-            {fromHistory && dlLink && <a href={dlLink} download={"Bill_" + bill.billNo + ".html"} style={{ padding: "8px 16px", background: "#059669", color: "#fff", borderRadius: 7, fontSize: 13, fontWeight: 600, textDecoration: "none" }}>Download PDF</a>}
-            <button onClick={() => { setDlLink(null); onClose(); }} style={{ ...bts(false) }}>Close</button>
+          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            <button onClick={sendWhatsApp} style={{ border: "none", borderRadius: 7, padding: "8px 14px", fontWeight: 600, cursor: "pointer", fontSize: 12, background: "#25D366", color: "#fff", fontFamily: "inherit" }}>WhatsApp Bill</button>
+            <button onClick={function() { var el = document.getElementById("bill-print-area"); if (el) { var w = window.open("","_blank"); w.document.write("<html><head><title>Bill_" + bill.billNo + "</title><style>body{font-family:sans-serif;font-size:12px;padding:0;max-width:800px;margin:0 auto}table{width:100%;border-collapse:collapse}th,td{border:1px solid #333;padding:8px;font-size:12px}th{background:#f2f2f2;text-align:left}</style></head><body>" + el.innerHTML + "</body></html>"); w.document.close(); w.print(); } }} style={{ ...bts(true), padding: "8px 14px", fontSize: 12 }}>Print</button>
+            {fromHistory && !dlLink && <button onClick={makePdf} style={{ ...bts(false), padding: "8px 14px", fontSize: 12 }}>Download</button>}
+            {fromHistory && dlLink && <a href={dlLink} download={"Bill_" + bill.billNo + ".html"} style={{ padding: "8px 14px", background: "#059669", color: "#fff", borderRadius: 7, fontSize: 12, fontWeight: 600, textDecoration: "none" }}>Save File</a>}
+            <button onClick={() => { setDlLink(null); onClose(); }} style={{ ...bts(false), padding: "8px 14px", fontSize: 12 }}>Close</button>
           </div></div>
         <div id="bill-print-area" style={{ fontFamily: "sans-serif", fontSize: 12, border: "1px solid #ccc" }}>
           {/* Dark header */}
