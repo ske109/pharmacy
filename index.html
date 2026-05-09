@@ -879,10 +879,10 @@ function BillView({ bill, onClose, fromHistory }) {
         if (navigator.share && navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
           navigator.share({ title: "Bill " + bill.billNo, text: thankMsg, files: [pdfFile] }).then(function() {
             // After share completes, open WhatsApp chat with template message
-            if (phone) window.open("https://wa.me/" + phone + "?text=" + encodeURIComponent(thankMsg), "_blank");
+            if (phone) location.href = "https://api.whatsapp.com/send?phone=" + phone + "&text=" + encodeURIComponent(thankMsg);
           }).catch(function() {
             // User cancelled share or error - still open WhatsApp with text
-            if (phone) window.open("https://wa.me/" + phone + "?text=" + encodeURIComponent(thankMsg), "_blank");
+            if (phone) location.href = "https://api.whatsapp.com/send?phone=" + phone + "&text=" + encodeURIComponent(thankMsg);
           });
           shared = true;
         }
@@ -893,7 +893,7 @@ function BillView({ bill, onClose, fromHistory }) {
       }
     }
     // If share API not available, open WhatsApp with text
-    if (!shared && phone) window.open("https://wa.me/" + phone + "?text=" + encodeURIComponent(thankMsg), "_blank");
+    if (!shared && phone) location.href = "https://api.whatsapp.com/send?phone=" + phone + "&text=" + encodeURIComponent(thankMsg);
   };
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center", padding: 10 }}>
