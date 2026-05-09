@@ -381,207 +381,287 @@ async function preprocessBillImage(file) {
   }
 }
 
-// ── Multi-pass OCR: try all image variants and pick best result ───────────────
+// ── OCR with spatial word-box reconstruction ─────────────────────────────────
+// Key insight: Tesseract gives us bounding boxes for every word.
+// We use these to reconstruct table rows spatially instead of parsing raw text,
+// which is destroyed by column misalignment from phone photos.
 async function extractImageBillText(file, onProgress) {
   const ok = await ensureTesseract();
   if (!ok) throw new Error("OCR engine could not be loaded");
 
-  const { versions, skewAngle } = await preprocessBillImage(file);
+  const { versions } = await preprocessBillImage(file);
 
-  // Tesseract config optimised for tabular pharmacy bills
-  const TESS_PARAMS = {
-    tessedit_pageseg_mode: "6",       // Assume uniform block of text
-    tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,/-:()%+ ",
-    preserve_interword_spaces: "1",
-    user_defined_dpi: "300",
-  };
+  // Run OCR on best version (adaptive threshold), get full word data
+  let bestResult = null, bestScore = -1;
 
-  let bestText = "", bestScore = -1;
-  const totalVersions = versions.length;
-
-  for (let vi = 0; vi < totalVersions; vi++) {
+  for (let vi = 0; vi < versions.length; vi++) {
     try {
       const result = await Tesseract.recognize(versions[vi], "eng", {
         logger: (m) => {
-          if (onProgress && m && m.status === "recognizing text") {
-            onProgress({ status: "recognizing text", progress: (vi / totalVersions) + m.progress / totalVersions });
-          }
+          if (onProgress && m.status === "recognizing text")
+            onProgress({ status: "recognizing text", progress: (vi / versions.length) + m.progress / versions.length });
         },
-        ...TESS_PARAMS
-      });
-      const text = (result && result.data && result.data.text) || "";
-      // Score: count how many medicine-like tokens we see
-      const score = scoreOcrText(text);
-      if (score > bestScore) { bestScore = score; bestText = text; }
-    } catch(e) { /* try next version */ }
-  }
-
-  // If single-pass gave poor results, try PSM 4 (single column) on best canvas
-  if (bestScore < 3) {
-    try {
-      const result2 = await Tesseract.recognize(versions[0], "eng", {
-        tessedit_pageseg_mode: "4",
+        tessedit_pageseg_mode: "6",
         preserve_interword_spaces: "1",
         user_defined_dpi: "300",
       });
-      const text2 = (result2 && result2.data && result2.data.text) || "";
-      const score2 = scoreOcrText(text2);
-      if (score2 > bestScore) bestText = text2;
-    } catch(e) {}
+      const score = scoreOcrText((result && result.data && result.data.text) || "");
+      if (score > bestScore) { bestScore = score; bestResult = result; }
+    } catch(e) { /* try next */ }
   }
 
-  return normalizeInvoiceText(bestText);
+  // Store word-level bboxes on window for spatial parser
+  if (bestResult && bestResult.data && bestResult.data.words) {
+    window._ocrWords = bestResult.data.words;
+    window._ocrPageW = versions[0].width;
+    window._ocrPageH = versions[0].height;
+  } else {
+    window._ocrWords = null;
+  }
+
+  return normalizeInvoiceText((bestResult && bestResult.data && bestResult.data.text) || "");
 }
 
-// Score how many medicine-like patterns exist in OCR output
 function scoreOcrText(text) {
   if (!text) return 0;
   let score = 0;
-  const lines = text.split("\n");
-  for (const l of lines) {
-    if (/\d+\.\d{1,2}/.test(l)) score++;          // has price-like number
-    if (/\b(mg|ml|mcg|gm|tab|cap|syr|inj|oint|cream|gel|drops|inhaler|patch)\b/i.test(l)) score += 2; // medicine unit
-    if (/\b(batch|lot|exp|mrp|ptr|hsn|cgst|sgst|gst)\b/i.test(l)) score += 2; // invoice keywords
-    if (/[A-Z]{2,}\d+/.test(l)) score++;           // batch number pattern
+  for (const l of text.split("\n")) {
+    if (/\d+\.\d{1,2}/.test(l)) score++;
+    if (/\b(mg|ml|mcg|gm|tab|cap|syr|inj|oint|cream|gel|drops|inhaler|patch|strip)\b/i.test(l)) score += 2;
+    if (/\b(batch|lot|exp|mrp|ptr|hsn|cgst|sgst|gst|billed|trade|disc)\b/i.test(l)) score += 2;
+    if (/[A-Z]{2,}\d{3,}/.test(l)) score++;
   }
   return score;
 }
 
+// ── Spatial table reconstruction from Tesseract word bboxes ─────────────────
+// Groups words into rows by Y-proximity, then reconstructs columns by X-order.
+// This survives even when raw text lines are garbled by OCR column misalignment.
+function spatialReconstructRows(words, pageW) {
+  if (!words || !words.length) return [];
+  // Filter low-confidence junk
+  const good = words.filter(w => w.text && w.text.trim() && (w.confidence || 0) > 20);
+  if (!good.length) return [];
+
+  // Cluster words into rows using Y-center proximity (gap = ~half line height)
+  const avgH = good.reduce((s, w) => s + (w.bbox.y1 - w.bbox.y0), 0) / good.length;
+  const ROW_GAP = Math.max(8, avgH * 0.6);
+
+  const sorted = [...good].sort((a, b) => (a.bbox.y0 + a.bbox.y1) - (b.bbox.y0 + b.bbox.y1));
+  const rows = [];
+  let cur = [sorted[0]];
+  let curY = (sorted[0].bbox.y0 + sorted[0].bbox.y1) / 2;
+
+  for (let i = 1; i < sorted.length; i++) {
+    const w = sorted[i];
+    const wy = (w.bbox.y0 + w.bbox.y1) / 2;
+    if (Math.abs(wy - curY) < ROW_GAP) {
+      cur.push(w);
+      curY = (curY * cur.length + wy) / (cur.length + 1); // running avg
+    } else {
+      rows.push(cur.sort((a, b) => a.bbox.x0 - b.bbox.x0));
+      cur = [w]; curY = wy;
+    }
+  }
+  if (cur.length) rows.push(cur.sort((a, b) => a.bbox.x0 - b.bbox.x0));
+  return rows;
+}
+
+// ── Column zone detection ─────────────────────────────────────────────────────
+// Vardhman bill columns (% of page width):
+// RACK(0-5%) | NAME(5-35%) | QTY_BILLED(35-42%) | QTY_FREE(42-48%) |
+// PACK(48-54%) | BATCH(54-62%) | EXP(62-69%) | OLD_MRP(69-74%) |
+// NEW_MRP(74-80%) | TRADE_PRICE(80-86%) | DISC%(86-90%) | ...
+// These are approximate — we detect them from the header row.
+function detectColumnZones(rows, pageW) {
+  // Look for a header row containing known column keywords
+  const COL_KEYWORDS = {
+    rack: /^rack$/i,
+    desc: /^desc|^item|^medicine|^product|^name/i,
+    qty: /^qty|^billed|^quantity/i,
+    free: /^free/i,
+    pack: /^pack|^pkg/i,
+    batch: /^batch|^lot/i,
+    exp: /^exp|^expiry/i,
+    mrp: /^mrp|^m\.r\.p/i,
+    trade: /^trade|^ptr|^rate|^price/i,
+    disc: /^disc|^dis\s*%/i,
+  };
+
+  let headerRow = null, headerIdx = -1;
+  for (let i = 0; i < Math.min(rows.length, 20); i++) {
+    const texts = rows[i].map(w => w.text.trim());
+    const matches = texts.filter(t => Object.values(COL_KEYWORDS).some(re => re.test(t)));
+    if (matches.length >= 3) { headerRow = rows[i]; headerIdx = i; break; }
+  }
+
+  // If we found a header, compute column X-ranges from header word positions
+  if (headerRow) {
+    const zones = {};
+    for (const [col, re] of Object.entries(COL_KEYWORDS)) {
+      const hw = headerRow.find(w => re.test(w.text.trim()));
+      if (hw) zones[col] = { x0: hw.bbox.x0 - 10, x1: hw.bbox.x1 + 40 };
+    }
+    return { zones, startRow: headerIdx + 1 };
+  }
+
+  // Fallback: use fixed percentage zones based on page width
+  const p = pageW;
+  return {
+    zones: {
+      rack:  { x0: 0,          x1: p * 0.06 },
+      desc:  { x0: p * 0.05,   x1: p * 0.35 },
+      qty:   { x0: p * 0.35,   x1: p * 0.44 },
+      free:  { x0: p * 0.43,   x1: p * 0.50 },
+      pack:  { x0: p * 0.49,   x1: p * 0.56 },
+      batch: { x0: p * 0.54,   x1: p * 0.64 },
+      exp:   { x0: p * 0.63,   x1: p * 0.71 },
+      mrp:   { x0: p * 0.70,   x1: p * 0.80 },
+      trade: { x0: p * 0.79,   x1: p * 0.88 },
+      disc:  { x0: p * 0.87,   x1: p * 1.00 },
+    },
+    startRow: 0
+  };
+}
+
+// ── Extract words in a column zone from a row ────────────────────────────────
+function wordsInZone(row, zone) {
+  return row.filter(w => {
+    const cx = (w.bbox.x0 + w.bbox.x1) / 2;
+    return cx >= zone.x0 && cx <= zone.x1;
+  }).map(w => w.text.trim()).filter(Boolean).join(" ");
+}
+
+// ── Main spatial parser ───────────────────────────────────────────────────────
+function parseWithSpatialData(words, pageW, fallbackText) {
+  const rows = spatialReconstructRows(words, pageW);
+  if (!rows.length) return null;
+
+  const { zones, startRow } = detectColumnZones(rows, pageW);
+
+  const SKIP_ROW = /^(total|grand|taxable|cgst|sgst|igst|discount|round|gst\s*summary|collectable|tcs|terms|authoris|scan\s*to|bank|ifsc|pan|dl\s*no|gstin|address|phone|mobile|e.?mail|buyer|seller|shipping|billing|invoice\s*no|invoice\s*date|due\s*date|order\s*no|page\s*\d)/i;
+  const EXP_RE = /\b(\d{1,2})[\/\-](\d{2,4})\b/;
+  const BATCH_RE = /\b([A-Z]{1,5}\d{3,}[A-Z0-9]*)\b/;
+
+  const items = [];
+  let supplier = "", invoiceNo = "", date = "";
+
+  // Extract header info from first rows
+  for (let i = 0; i < Math.min(startRow + 1, rows.length, 25); i++) {
+    const line = rows[i].map(w => w.text).join(" ");
+    if (!invoiceNo) {
+      const m = line.match(/\b(VE-\d{2}-\d{5,})\b/i) || line.match(/Invoice\s*No\s*[:\s]*([A-Z0-9\/-]+)/i);
+      if (m) invoiceNo = m[1];
+    }
+    if (!date) { const d = line.match(/(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4})/); if (d) date = d[1]; }
+    if (!supplier && /medisales|pharma|distributors|traders|agencies|healthcare/i.test(line))
+      supplier = line.replace(/\s+/g, " ").trim().slice(0, 80);
+  }
+
+  for (let ri = startRow; ri < rows.length; ri++) {
+    const row = rows[ri];
+    const fullLine = row.map(w => w.text).join(" ").trim();
+
+    // Skip totals/headers
+    if (SKIP_ROW.test(fullLine)) continue;
+    if (fullLine.length < 5) continue;
+
+    // Extract each column
+    const name = wordsInZone(row, zones.desc).replace(/[|\\]/g, "").trim();
+    const qtyStr = wordsInZone(row, zones.qty);
+    const batchStr = wordsInZone(row, zones.batch) || wordsInZone(row, { x0: 0, x1: pageW }); // fallback to full row
+    const expStr = wordsInZone(row, zones.exp);
+    const mrpStr = wordsInZone(row, zones.mrp);
+    const tradeStr = wordsInZone(row, zones.trade);
+    const discStr = wordsInZone(row, zones.disc);
+    const freeStr = zones.free ? wordsInZone(row, zones.free) : "";
+
+    // Validate: need a name with letters and at least one price
+    if (!name || name.length < 3 || !name.match(/[a-zA-Z]{2,}/)) continue;
+    const mrp = parseFloat(mrpStr.replace(/[^\d.]/g, "")) || 0;
+    const ptr = parseFloat(tradeStr.replace(/[^\d.]/g, "")) || 0;
+    if (mrp <= 0 && ptr <= 0) continue; // definitely not an item row
+
+    const qty = parseInt(qtyStr.replace(/[^\d]/g, "")) || 1;
+    const freeQty = parseInt(freeStr.replace(/[^\d]/g, "")) || 0;
+    const discM = discStr.match(/(\d+(?:\.\d{1,2})?)/);
+    const discPct = discM ? parseFloat(discM[1]) : 0;
+
+    // Parse batch
+    let batch = "";
+    const bm = BATCH_RE.exec(batchStr || fullLine);
+    if (bm) batch = bm[1];
+
+    // Parse expiry
+    let expiry = "";
+    const em = EXP_RE.exec(expStr || fullLine);
+    if (em) {
+      let yr = em[2], mo = em[1].padStart(2, "0");
+      if (yr.length === 2) yr = "20" + yr;
+      expiry = yr + "-" + mo;
+    }
+
+    // GST: look for % in disc/trailing columns or default 5
+    const gstM = fullLine.match(/\b(5|12|18|28)\s*%/);
+    const gstRate = gstM ? parseInt(gstM[1]) : 5;
+
+    items.push({
+      name: name.slice(0, 80), manufacturer: "", hsn: "300490",
+      batch, expiry, pack: "", mrp: Math.round(mrp * 100) / 100,
+      qty: Math.max(1, qty), freeQty,
+      ptr: Math.round((ptr || mrp * 0.85) * 100) / 100,
+      gstRate, rack: "", packQty: 0,
+      discPct, schemePct: 0, amount: 0
+    });
+  }
+
+  return items.length > 0 ? { supplier: supplier || "Vardhman Medisales", invoiceNo, date, items } : null;
+}
+
+// ── Main entry point called by doImg ─────────────────────────────────────────
 function parseImageBillToItems(text) {
   const clean = normalizeInvoiceText(text);
 
-  // First try the structured PDF parser (handles pipe-separated output)
+  // PRIORITY: use spatial bbox data if available from last OCR run
+  if (window._ocrWords && window._ocrWords.length > 0) {
+    const spatial = parseWithSpatialData(window._ocrWords, window._ocrPageW, clean);
+    if (spatial && spatial.items && spatial.items.length >= 1) {
+      window._ocrWords = null;
+      return spatial;
+    }
+  }
+  window._ocrWords = null;
+
+  // Fallback 1: structured PDF-style parser
   const pdfParsed = parsePdfToItems(clean);
   if (pdfParsed && pdfParsed.items && pdfParsed.items.length >= 2) return pdfParsed;
 
   const lines = clean.split("\n").map(l => l.trim()).filter(Boolean);
 
-  // Extract header fields
+  // Extract header
   let supplier = "", invoiceNo = "", date = "";
   for (const l of lines.slice(0, 35)) {
-    if (!invoiceNo) {
-      const m = l.match(/(?:Invoice|Bill|Inv)[\s._#-]*(?:No|Number|#)[\s.:]*([A-Z]{1,4}[-\/]?\d{2,}[-\/]?\d{0,6})/i)
-             || l.match(/\b(VE-\d{2}-\d{5,}|INV[-\/]?\d{4,}|SI[-\/]?\d{4,})\b/i);
-      if (m) invoiceNo = m[1];
-    }
-    if (!date) { const d = l.match(/(\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4})/); if (d) date = d[1]; }
-    if (!supplier && /medisales|pharma|distributor|health|medical|drugs|traders|agencies|enterprises|surgicals|wholesale/i.test(l))
+    if (!invoiceNo) { const m = l.match(/\b(VE-\d{2}-\d{5,})\b/i) || l.match(/Invoice[\s.#-]*No[\s.:]*([A-Z0-9\/-]+)/i); if (m) invoiceNo = m[1]; }
+    if (!date) { const d = l.match(/(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4})/); if (d) date = d[1]; }
+    if (!supplier && /medisales|pharma|distributor|health|medical|drugs|traders|agencies/i.test(l))
       supplier = l.replace(/[|:]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
   }
 
-  // Strategy 1: Vardhman / columnar format
+  // Fallback 2: Vardhman columnar text parser
   const items1 = tryParseVardhmanFormat(lines);
   if (items1.length >= 2) return { supplier: supplier || "Vardhman", invoiceNo, date, items: items1 };
 
-  // Strategy 2: Flexible numeric-anchor parser
+  // Fallback 3: Flexible numeric-anchor parser
   const items2 = tryFlexibleNumericParser(lines);
   if (items2.length >= 1) return { supplier: supplier || "Image Bill", invoiceNo, date, items: items2 };
 
-  // Strategy 3: Token-based last resort
+  // Fallback 4: Token-based scanner
   const items3 = tryTokenParser(lines);
   return { supplier: supplier || "Image Bill", invoiceNo, date, items: items3 };
 }
 
-// Parser 1: Vardhman-style columnar bills
-function tryParseVardhmanFormat(lines) {
-  const items = [];
-  const SKIP = /^(total|grand|taxable|cgst|sgst|igst|discount|round|amount|cess|value|rack|description|qty|billed|free|pack|batch|exp|mrp|rate|trade|disc|scheme|hsn|sr\.?\s*no|s\.?\s*no|item|bill\s*no|invoice|date|supplier|gst|summary|bank|ifsc|pan|dl\s*no|gstin|address|phone|mobile|email|terms|authorized|generated|scan|page)/i;
-  const BATCH_RE = /\b([A-Z]{1,5}\d{4,}[A-Z0-9]*|[A-Z]{2,}\d{3,})\b/;
-  const EXP_RE = /\b(\d{1,2})[\/-](\d{2,4})\b/;
-  const PRICE_RE = /\b(\d{1,5}\.\d{2})\b/g;
 
-  for (let idx = 0; idx < lines.length; idx++) {
-    const l = lines[idx];
-    if (l.length < 8 || SKIP.test(l.split(/\s+/)[0])) continue;
-    const prices = []; let pm; PRICE_RE.lastIndex = 0;
-    while ((pm = PRICE_RE.exec(l)) !== null) prices.push(parseFloat(pm[1]));
-    PRICE_RE.lastIndex = 0;
-    if (prices.length < 2) continue;
-    const qtyM = l.match(/\b(\d{1,3})\b/);
-    const qty = qtyM ? parseInt(qtyM[1]) : 1;
-    const mrp = prices.length >= 2 ? prices[prices.length - 2] : 0;
-    const ptr = prices[prices.length - 1];
-    const firstPriceIdx = l.search(/\b\d{1,5}\.\d{2}\b/);
-    let namePart = (firstPriceIdx > 0 ? l.slice(0, firstPriceIdx) : l)
-      .replace(/\b\d{1,3}\b/g, " ").replace(/[|\\]/g, " ").replace(/\s+/g, " ").trim();
-    namePart = namePart.replace(/^[A-Z]?\d{2,5}\s+/, "").replace(/^[A-Z]\d\s+/, "").trim();
-    if (namePart.length < 3 || !namePart.match(/[a-zA-Z]{2,}/)) continue;
-    const search2 = l + (idx+1 < lines.length ? " " + lines[idx+1] : "");
-    let batch = "", expiry = "";
-    const bm = BATCH_RE.exec(search2); if (bm) batch = bm[1];
-    const em = EXP_RE.exec(search2);
-    if (em) { let yr = em[2], mo = em[1].padStart(2,"0"); if (yr.length===2) yr="20"+yr; expiry = yr+"-"+mo; }
-    const discM = l.match(/(\d+(?:\.\d{1,2})?)\s*%/);
-    items.push({
-      name: namePart.slice(0, 80), manufacturer: "", hsn: "300490",
-      batch, expiry, pack: "", mrp: Math.round(mrp*100)/100,
-      qty: Math.max(1, qty), ptr: Math.round(ptr*100)/100, gstRate: 5,
-      rack: "", packQty: 0, discPct: discM ? parseFloat(discM[1]) : 0, schemePct: 0, freeQty: 0, amount: 0
-    });
-  }
-  return items;
-}
 
-// Parser 2: Flexible numeric anchor parser
-function tryFlexibleNumericParser(lines) {
-  const items = [];
-  const SKIP = /^(total|grand|taxable|cgst|sgst|igst|discount|round|subtotal|net|tax|gst|vat|cess|summary)/i;
-  const UNIT_RE = /\b(\d{1,3})\s*(EA|NOS|PCS|STRIP|STRIPS|BOX|BTL|TAB|TABS|CAP|CAPS|NO|NOS|PKT)\b/i;
-  const PRICE_RE2 = /\b(\d{1,5}\.\d{2})\b/g;
-  const BATCH_RE2 = /\b([A-Z]{1,5}\d{4,}[A-Z0-9]*)\b/;
-  const EXP_RE2 = /\b(\d{1,2})[\/-](\d{2,4})\b/;
-
-  for (let i = 0; i < lines.length; i++) {
-    const l = lines[i];
-    if (l.length < 8 || SKIP.test(l.trim())) continue;
-    const unitM = UNIT_RE.exec(l);
-    const prices = []; let pm2; PRICE_RE2.lastIndex = 0;
-    while ((pm2 = PRICE_RE2.exec(l)) !== null) prices.push(parseFloat(pm2[1]));
-    PRICE_RE2.lastIndex = 0;
-    if (!unitM && prices.length < 2) continue;
-    const qty = unitM ? parseInt(unitM[1]) : 1;
-    const mrp = prices.length >= 2 ? prices[prices.length - 2] : 0;
-    const ptr = prices.length >= 1 ? prices[prices.length - 1] : 0;
-    const cutPos = unitM ? l.indexOf(unitM[0]) : l.search(/\d{2,5}\.\d{2}/);
-    let name = (cutPos > 0 ? l.slice(0, cutPos) : l)
-      .replace(/[|\\]/g, " ").replace(/\b\d{1,3}\b/g, " ").replace(/\s+/g, " ").trim();
-    name = name.replace(/^[A-Z]?\d+\s+/, "").replace(/^[A-Z]\d\s+/, "").trim();
-    if (name.length < 3 || !name.match(/[a-zA-Z]{2,}/)) continue;
-    const searchLine = l + (i+1 < lines.length ? " " + lines[i+1] : "");
-    let batch = "", expiry = "";
-    const bm2 = BATCH_RE2.exec(searchLine); if (bm2) batch = bm2[1];
-    const em2 = EXP_RE2.exec(searchLine);
-    if (em2) { let yr = em2[2], mo = em2[1].padStart(2,"0"); if (yr.length===2) yr="20"+yr; expiry = yr+"-"+mo; }
-    const discM = l.match(/(\d+(?:\.\d{1,2})?)\s*%/);
-    items.push({
-      name: name.slice(0, 80), manufacturer: "", hsn: "300490",
-      batch, expiry, pack: "", mrp: Math.round(mrp*100)/100,
-      qty: Math.max(1, qty), ptr: Math.round(ptr*100)/100, gstRate: 5,
-      rack: "", packQty: 0, discPct: discM ? parseFloat(discM[1]) : 0, schemePct: 0, freeQty: 0, amount: 0
-    });
-  }
-  return items;
-}
-
-// Parser 3: Token-based last resort
-function tryTokenParser(lines) {
-  const items = [];
-  const MED_RE = /\b(paracetamol|amoxicillin|metformin|amlodipine|atorvastatin|pantoprazole|omeprazole|azithromycin|cetirizine|ibuprofen|diclofenac|ranitidine|losartan|telmisartan|metoprolol|salbutamol|insulin|glimepiride|thyronorm|thyrox|levothyroxine|nexovas|cloba|acetramol|insugen|aceclofenac|dolo|calpol|combiflam)\b/i;
-  for (const l of lines) {
-    if (!MED_RE.test(l)) continue;
-    const nums = (l.match(/\b\d{1,5}(?:\.\d{1,2})?\b/g) || []).map(Number).filter(n => n > 0);
-    if (!nums.length) continue;
-    const name = l.replace(/\d[\d\s.%/-]*/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
-    if (name.length < 4) continue;
-    items.push({
-      name, manufacturer: "", hsn: "300490", batch: "", expiry: "", pack: "",
-      mrp: nums.length > 1 ? nums[nums.length-2] : 0,
-      qty: 1, ptr: nums[nums.length-1] || 0, gstRate: 5,
-      rack: "", packQty: 0, discPct: 0, schemePct: 0, freeQty: 0, amount: 0
-    });
-  }
-  return items;
-}
 function csvToItems(rows) {
   if (rows.length < 2) return null; const h = rows[0].map((x) => x.toLowerCase().trim()); const ix = (n) => h.findIndex((x) => x.includes(n));
   const items = [], sup = (rows[1] && rows[1][ix("seller name")]) || (rows[1] && rows[1][ix("seller")]) || "Unknown", inv = (rows[1] && rows[1][ix("invoice")]) || "", dt = (rows[1] && rows[1][ix("date")]) || "";
@@ -1193,7 +1273,7 @@ function purchCalcAmt(it) {
 // PURCHASES PAGE
 // ══════════════════════════════════════════════
 function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm, inv, saveInv, bills, saveBills }) {
-  const [tab, setTab] = useState("csv"); const [imgP, setImgP] = useState(false); const [rev, setRev] = useState(null); const [distSite, setDistSite] = useState(null);
+  const [tab, setTab] = useState("csv"); const [imgP, setImgP] = useState(false); const [imgStatus, setImgStatus] = useState(""); const [rev, setRev] = useState(null); const [distSite, setDistSite] = useState(null);
   const csvR = useRef(null); const imgR = useRef(null);
   const empty = { name: "", manufacturer: "", hsn: "300490", batch: "", expiry: "", pack: "", mrp: 0, qty: 1, ptr: 0, gstRate: 5, rack: "", packQty: 0, discPct: 0, schemePct: 0, freeQty: 0, amount: 0 };
   const [mf, setMf] = useState({ inv: "", sup: "", date: "", items: [{ ...empty }] });
@@ -1203,9 +1283,10 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm, inv, s
   const doImg = async (e) => {
     const file = e.target.files[0]; if (!file) return;
     const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
-    setImgP(true);
+    setImgP(true); setImgStatus("Preprocessing image...");
     try {
       if (isPdf) {
+        setImgStatus("Extracting PDF text...");
         const text = await extractPdfText(file);
         const parsed = parsePdfToItems(normalizeInvoiceText(text));
         if (parsed.items.length > 0) {
@@ -1214,18 +1295,25 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm, inv, s
           alert("PDF parsed but no items detected. Try a cleaner PDF or CSV.");
         }
       } else {
-        const text = await extractImageBillText(file);
+        setImgStatus("Running OCR (this takes 20-40s)...");
+        const text = await extractImageBillText(file, (m) => {
+          if (m && m.progress !== undefined) {
+            const pct = Math.round(m.progress * 100);
+            setImgStatus("OCR " + pct + "% — reading bill...");
+          }
+        });
+        setImgStatus("Parsing table structure...");
         const parsed = parseImageBillToItems(text);
         if (parsed.items && parsed.items.length > 0) {
           setRev({ ...parsed, srcType: "image", srcFile: file.name, rawText: text });
         } else {
-          alert("Could not read enough items from this bill image. Use full-page, straight, bright photos.");
+          alert("OCR ran but could not find medicine rows.\n\nTips:\n• Use a straight, flat, well-lit photo\n• Make sure the full bill is in frame\n• Try CSV export from your distributor portal instead");
         }
       }
     } catch (err) {
       alert("Read failed: " + err.message);
     }
-    setImgP(false);
+    setImgP(false); setImgStatus("");
     e.target.value = "";
   };
 
@@ -1357,7 +1445,7 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm, inv, s
         <div style={{ display: "flex", gap: 3, background: "#E8E4DD", borderRadius: 8, padding: 3, marginBottom: 16 }}>
           {[["csv","CSV"],["image","Photo/PDF"],["manual","Manual"],["dist","Distributors"]].map(([id, l]) => <button key={id} onClick={() => setTab(id)} style={{ flex: 1, padding: 8, border: "none", borderRadius: 6, fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: tab === id ? "#fff" : "transparent", color: tab === id ? "#0D6B5B" : "#888", boxShadow: tab === id ? "0 1px 3px rgba(0,0,0,.1)" : "none" }}>{l}</button>)}</div>
         {tab === "csv" && <div style={{ border: "2px dashed #bbb", borderRadius: 10, padding: 36, textAlign: "center", cursor: "pointer", background: "#FAFAF7" }} onClick={() => csvR.current && csvR.current.click()}><input ref={csvR} type="file" accept=".csv" onChange={doCSV} style={{ display: "none" }} /><div style={{ fontSize: 36 }}>📄</div><div style={{ fontSize: 14, fontWeight: 600, color: "#555", marginTop: 8 }}>Upload CSV</div></div>}
-        {tab === "image" && <div style={{ border: "2px dashed #bbb", borderRadius: 10, padding: 36, textAlign: "center", cursor: "pointer", background: "#FAFAF7" }} onClick={() => !imgP && imgR.current && imgR.current.click()}><input ref={imgR} type="file" accept="image/*,.pdf,application/pdf" onChange={doImg} style={{ display: "none" }} />{imgP ? <div><div style={{ fontSize: 36 }}>🔄</div><div style={{ fontSize: 14, fontWeight: 600, color: "#0D6B5B", marginTop: 8 }}>Advanced OCR — processing 3 image variants...</div><div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>This may take 20–40 seconds</div></div> : <div><div style={{ fontSize: 36 }}>📸</div><div style={{ fontSize: 14, fontWeight: 600, color: "#555", marginTop: 8 }}>Upload Invoice (Photo or PDF)</div></div>}</div>}
+        {tab === "image" && <div style={{ border: "2px dashed #bbb", borderRadius: 10, padding: 36, textAlign: "center", cursor: "pointer", background: "#FAFAF7" }} onClick={() => !imgP && imgR.current && imgR.current.click()}><input ref={imgR} type="file" accept="image/*,.pdf,application/pdf" onChange={doImg} style={{ display: "none" }} />{imgP ? <div><div style={{ fontSize: 36 }}>🔄</div><div style={{ fontSize: 14, fontWeight: 600, color: "#0D6B5B", marginTop: 8 }}>{imgStatus || "Processing..."}</div><div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>Advanced OCR — do not close this page</div></div> : <div><div style={{ fontSize: 36 }}>📸</div><div style={{ fontSize: 14, fontWeight: 600, color: "#555", marginTop: 8 }}>Upload Invoice (Photo or PDF)</div></div>}</div>}
         {tab === "manual" && <div>
           <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr 1fr", gap: 10, marginBottom: 14 }}>
             <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Supplier *</label><input value={mf.sup} onChange={(e) => setMf((f) => ({ ...f, sup: e.target.value }))} style={inps} /></div>
