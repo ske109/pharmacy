@@ -842,9 +842,8 @@ function BillView({ bill, onClose, fromHistory }) {
     }
     if (custPhone.length === 10) custPhone = "91" + custPhone;
 
-    var thankMsg = "Thank you for visiting " + PH.name + "! For any orders or enquiries, just call or WhatsApp us on +917619639377. We are happy to help! Get well soon!";
+    var thankMsg = "Thank you for visiting " + PH.name + "! Your bill " + bill.billNo + " for Rs." + f2(bill.netAmount) + " is attached. For any orders or enquiries, just call or WhatsApp us on +917619639377. We are happy to help! Get well soon!";
 
-    // Generate PDF from bill HTML
     var el = document.getElementById("bill-print-area");
     if (!el) { alert("Bill not ready"); return; }
 
@@ -858,7 +857,6 @@ function BillView({ bill, onClose, fromHistory }) {
           document.head.appendChild(s);
         });
       }
-      // Load jsPDF if not loaded
       if (!window.jspdf) {
         await new Promise(function(res, rej) {
           var s = document.createElement("script");
@@ -868,11 +866,9 @@ function BillView({ bill, onClose, fromHistory }) {
         });
       }
 
-      // Render bill to canvas
+      // Render bill to PDF
       var canvas = await html2canvas(el, { scale: 2, useCORS: true, backgroundColor: "#ffffff" });
       var imgData = canvas.toDataURL("image/jpeg", 0.95);
-
-      // Create PDF
       var pdf = new jspdf.jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
       var pdfW = pdf.internal.pageSize.getWidth();
       var pdfH = pdf.internal.pageSize.getHeight();
@@ -883,7 +879,7 @@ function BillView({ bill, onClose, fromHistory }) {
       var pdfBlob = pdf.output("blob");
       var pdfFile = new File([pdfBlob], "Bill_" + bill.billNo + ".pdf", { type: "application/pdf" });
 
-      // Try Web Share API (works on mobile)
+      // Share PDF via native share (mobile)
       if (navigator.share && navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
         await navigator.share({
           title: "Bill " + bill.billNo,
@@ -891,30 +887,18 @@ function BillView({ bill, onClose, fromHistory }) {
           files: [pdfFile]
         });
       } else {
-        // Fallback: download PDF + open WhatsApp with text message
+        // Desktop: save PDF, then open WhatsApp to manually attach
         var a = document.createElement("a");
         a.href = URL.createObjectURL(pdfBlob);
         a.download = "Bill_" + bill.billNo + ".pdf";
         a.click();
         URL.revokeObjectURL(a.href);
-
-        // Open WhatsApp with text
-        var msg = "*" + PH.name + "*\n";
-        msg += "*Bill No: " + bill.billNo + "*\n";
-        msg += "Date: " + (bill.dateIST || fDT(bill.date)) + "\n";
-        msg += "Patient: " + bill.patient + "\n";
-        msg += "*Net Amount: Rs." + f2(bill.netAmount) + "*\n\n";
-        msg += thankMsg + "\n\n";
-        msg += "_PDF bill downloaded - please attach it_";
-        window.open("https://wa.me/" + custPhone + "?text=" + encodeURIComponent(msg), "_blank");
+        alert("PDF saved! Now attach it in WhatsApp.");
+        window.open("https://wa.me/" + custPhone + "?text=" + encodeURIComponent(thankMsg), "_blank");
       }
     } catch(err) {
-      // Final fallback: text-only WhatsApp
-      var msg2 = "*" + PH.name + "*\n" + PH.addr + "\nPh: " + PH.mob + "\n\n";
-      msg2 += "*TAX INVOICE*\nBill No: " + bill.billNo + "\nDate: " + (bill.dateIST || fDT(bill.date)) + "\nPatient: " + bill.patient + "\nPayment: " + bill.paymentMode + "\n\n*Items:*\n";
-      bill.items.forEach(function(it, i) { msg2 += (i+1) + ". " + (it.loose ? "[L] " : "") + it.name + " x" + it.qty + " @ Rs." + f2(it.unitPrice || it.mrp) + " = Rs." + f2(it.amount) + "\n"; });
-      msg2 += "\n*Net Amount: Rs." + f2(bill.netAmount) + "*\n\n" + thankMsg;
-      window.open("https://wa.me/" + custPhone + "?text=" + encodeURIComponent(msg2), "_blank");
+      alert("PDF generation failed: " + err.message + ". Opening WhatsApp with text instead.");
+      window.open("https://wa.me/" + custPhone + "?text=" + encodeURIComponent(thankMsg), "_blank");
     }
   };
   return (
