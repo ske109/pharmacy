@@ -189,8 +189,8 @@ async function preprocessBillImage(file) {
     });
 
     // Scale up significantly for better OCR accuracy
-    const TARGET_W = 2400;
-    const scale = Math.max(1, TARGET_W / img.width);
+    const TARGET_W = 3600;
+    const scale = Math.max(1.5, TARGET_W / img.width);
     const w = Math.round(img.width * scale);
     const h = Math.round(img.height * scale);
 
@@ -391,23 +391,29 @@ async function extractImageBillText(file, onProgress) {
 
   const { versions } = await preprocessBillImage(file);
 
-  // Run OCR on best version (adaptive threshold), get full word data
+  // Run OCR on multiple versions with multiple PSM modes, pick best
   let bestResult = null, bestScore = -1;
+  var PSM_MODES = ["6", "4", "3"];
 
   for (let vi = 0; vi < versions.length; vi++) {
-    try {
-      const result = await Tesseract.recognize(versions[vi], "eng", {
-        logger: (m) => {
-          if (onProgress && m.status === "recognizing text")
-            onProgress({ status: "recognizing text", progress: (vi / versions.length) + m.progress / versions.length });
-        },
-        tessedit_pageseg_mode: "6",
-        preserve_interword_spaces: "1",
-        user_defined_dpi: "300",
-      });
-      const score = scoreOcrText((result && result.data && result.data.text) || "");
-      if (score > bestScore) { bestScore = score; bestResult = result; }
-    } catch(e) { /* try next */ }
+    for (let pi = 0; pi < PSM_MODES.length; pi++) {
+      try {
+        const result = await Tesseract.recognize(versions[vi], "eng", {
+          logger: (m) => {
+            if (onProgress && m.status === "recognizing text") {
+              var totalPasses = versions.length * PSM_MODES.length;
+              var currentPass = vi * PSM_MODES.length + pi;
+              onProgress({ status: "recognizing text", progress: (currentPass + m.progress) / totalPasses });
+            }
+          },
+          tessedit_pageseg_mode: PSM_MODES[pi],
+          preserve_interword_spaces: "1",
+          user_defined_dpi: "300",
+        });
+        const score = scoreOcrText((result && result.data && result.data.text) || "");
+        if (score > bestScore) { bestScore = score; bestResult = result; }
+      } catch(e) { /* try next */ }
+    }
   }
 
   // Store word-level bboxes on window for spatial parser
@@ -426,10 +432,21 @@ function scoreOcrText(text) {
   if (!text) return 0;
   let score = 0;
   for (const l of text.split("\n")) {
-    if (/\d+\.\d{1,2}/.test(l)) score++;
-    if (/\b(mg|ml|mcg|gm|tab|cap|syr|inj|oint|cream|gel|drops|inhaler|patch|strip)\b/i.test(l)) score += 2;
-    if (/\b(batch|lot|exp|mrp|ptr|hsn|cgst|sgst|gst|billed|trade|disc)\b/i.test(l)) score += 2;
-    if (/[A-Z]{2,}\d{3,}/.test(l)) score++;
+    // Price patterns (XX.XX) strongly indicate invoice data
+    var prices = l.match(/\d{2,}\.\d{2}/g);
+    if (prices) score += prices.length * 3;
+    // Medicine keywords
+    if (/\b(mg|ml|mcg|gm|tab|cap|syr|inj|oint|cream|gel|drops|inhaler|patch|strip|refil|pen|device)\b/i.test(l)) score += 4;
+    // Invoice structure keywords
+    if (/\b(batch|lot|exp|mrp|ptr|hsn|cgst|sgst|gst|billed|trade|disc|qty|rack|description|pack|taxable|net\s*value)\b/i.test(l)) score += 3;
+    // Batch number patterns (letters+digits)
+    if (/[A-Z]{1,4}\d{4,}/.test(l)) score += 2;
+    // Expiry date patterns (MM/YY)
+    if (/\d{2}\/\d{2}/.test(l)) score += 2;
+    // Rack codes (A0060, C0221 etc)
+    if (/\b[A-Z]\d{4}\b/.test(l)) score += 1;
+    // Penalize garbage/header lines
+    if (/^[^a-zA-Z]*$/.test(l)) score -= 1;
   }
   return score;
 }
@@ -1429,11 +1446,11 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm, inv, s
           alert("PDF parsed but no items detected. Try a cleaner PDF or CSV.");
         }
       } else {
-        setImgStatus("Running OCR (this takes 20-40s)...");
+        setImgStatus("Running advanced OCR (9 passes, ~60s)...");
         const text = await extractImageBillText(file, (m) => {
           if (m && m.progress !== undefined) {
             const pct = Math.round(m.progress * 100);
-            setImgStatus("OCR " + pct + "% — reading bill...");
+            setImgStatus("Advanced OCR " + pct + "% - reading bill...");
           }
         });
         setImgStatus("Parsing table structure...");
