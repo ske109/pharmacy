@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>A to Z Pharmacy v2.0.0</title>
+<title>A to Z Pharmacy v2.1.0</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💊</text></svg>">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
 
@@ -51,8 +51,8 @@ input,select,button,textarea{font-family:inherit;-webkit-appearance:none}
 </style>
 
 <meta name="app-version" content="2.0.0">
-<meta name="app-changes" content="["Removed Claude API dependency for image/PDF bill reading [security/privacy]", "Added local Tesseract.js OCR with canvas preprocessing for purchase bill images", "Enhanced parsing with fallback line-by-line item extraction", "Cleaner worker without hardcoded API keys or Claude proxy route", "Improved error handling and user feedback for OCR quality"]">
-<script>window.APP_VERSION = {"version": "2.0.0", "changes": ["Removed Claude API dependency for image/PDF bill reading [security/privacy]", "Added local Tesseract.js OCR with canvas preprocessing for purchase bill images", "Enhanced parsing with fallback line-by-line item extraction", "Cleaner worker without hardcoded API keys or Claude proxy route", "Improved error handling and user feedback for OCR quality"], "date": "2026-05-08", "type": "production"};</script>
+<meta name="app-changes" content="["Removed Claude API dependency for image/PDF bill reading [security/privacy]", "Added local Tesseract.js OCR with canvas preprocessing for purchase bill images", "Enhanced parsing with fallback line-by-line item extraction", "Cleaner worker without hardcoded API keys or Claude proxy route", "Improved error handling and user feedback for OCR quality", "v2.1.0: Advanced multi-pass image processing with deskew, adaptive thresholding, Sauvola binarization, OTSU thresholding, unsharp mask sharpening, multi-PSM Tesseract passes, and 3-strategy invoice parser (Vardhman columnar, flexible numeric-anchor, token-based)"]">
+<script>window.APP_VERSION = {"version": "2.1.0", "changes": ["Removed Claude API dependency for image/PDF bill reading [security/privacy]", "Added local Tesseract.js OCR with canvas preprocessing for purchase bill images", "Enhanced parsing with fallback line-by-line item extraction", "Cleaner worker without hardcoded API keys or Claude proxy route", "Improved error handling and user feedback for OCR quality", "v2.1.0: Advanced multi-pass image processing with deskew, adaptive thresholding, Sauvola binarization, OTSU thresholding, unsharp mask sharpening, multi-PSM Tesseract passes, and 3-strategy invoice parser (Vardhman columnar, flexible numeric-anchor, token-based)"], "date": "2026-05-08", "type": "production"};</script>
 </head>
 <body>
 <div id="root"></div>
@@ -179,74 +179,409 @@ async function ensureTesseract() {
   });
 }
 
+// ── Advanced image preprocessing for pharmacy bills ──────────────────────────
+// Returns multiple canvas variants to try with OCR
 async function preprocessBillImage(file) {
   const url = URL.createObjectURL(file);
   try {
     const img = await new Promise((res, rej) => {
-      const i = new Image();
-      i.onload = () => res(i);
-      i.onerror = rej;
-      i.src = url;
+      const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url;
     });
-    const maxW = 1800;
-    const scale = Math.min(1, maxW / img.width);
-    const w = Math.max(900, Math.round(img.width * scale));
-    const h = Math.round(img.height * (w / img.width));
-    const c = document.createElement("canvas");
-    c.width = w; c.height = h;
-    const x = c.getContext("2d", { willReadFrequently: true });
-    x.fillStyle = "#fff";
-    x.fillRect(0, 0, w, h);
-    x.drawImage(img, 0, 0, w, h);
-    const id = x.getImageData(0, 0, w, h);
-    const d = id.data;
-    for (let i = 0; i < d.length; i += 4) {
-      let g = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
-      g = g > 170 ? 255 : (g < 110 ? 0 : Math.min(255, Math.max(0, (g - 110) * 255 / 60)));
-      d[i] = d[i + 1] = d[i + 2] = g;
+
+    // Scale up significantly for better OCR accuracy
+    const TARGET_W = 2400;
+    const scale = Math.max(1, TARGET_W / img.width);
+    const w = Math.round(img.width * scale);
+    const h = Math.round(img.height * scale);
+
+    // ── Helper: draw image to canvas ─────────────────────────────────────────
+    function makeCanvas(w, h) {
+      const c = document.createElement("canvas");
+      c.width = w; c.height = h;
+      return c;
     }
-    x.putImageData(id, 0, 0);
-    return c;
+
+    // ── Step 1: detect rotation and deskew ───────────────────────────────────
+    // Draw raw image first
+    const raw = makeCanvas(w, h);
+    const rx = raw.getContext("2d", { willReadFrequently: true });
+    rx.fillStyle = "#fff"; rx.fillRect(0, 0, w, h);
+    rx.drawImage(img, 0, 0, w, h);
+
+    // ── Step 2: auto-detect and correct rotation ─────────────────────────────
+    function getImageData(canvas) {
+      return canvas.getContext("2d", { willReadFrequently: true }).getImageData(0, 0, canvas.width, canvas.height);
+    }
+    function toGray(id) {
+      const d = id.data, out = new Uint8Array(id.width * id.height);
+      for (let i = 0, j = 0; i < d.length; i += 4, j++) {
+        out[j] = Math.round(d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114);
+      }
+      return out;
+    }
+
+    // Detect skew angle using Hough-like horizontal projection
+    function detectSkew(canvas) {
+      const gray = toGray(getImageData(canvas));
+      const W = canvas.width, H = canvas.height;
+      const STEP = 4; // sample every 4 pixels
+      let bestAngle = 0, bestScore = -1;
+      for (let angleDeg = -8; angleDeg <= 8; angleDeg += 0.5) {
+        const rad = angleDeg * Math.PI / 180;
+        const cos = Math.cos(rad), sin = Math.sin(rad);
+        const rowSums = new Array(H).fill(0);
+        for (let y = 0; y < H; y += STEP) {
+          for (let x = 0; x < W; x += STEP) {
+            const nx = Math.round(x * cos - y * sin + W/2 * (1-cos) + H/2 * sin);
+            const ny = Math.round(x * sin + y * cos - W/2 * sin + H/2 * (1-cos));
+            if (nx >= 0 && nx < W && ny >= 0 && ny < H) {
+              if (gray[ny * W + nx] < 128) rowSums[y]++;
+            }
+          }
+        }
+        // Score = variance of row sums (higher = more distinct text lines)
+        const mean = rowSums.reduce((a,b) => a+b, 0) / rowSums.length;
+        const variance = rowSums.reduce((a,b) => a + (b-mean)**2, 0) / rowSums.length;
+        if (variance > bestScore) { bestScore = variance; bestAngle = angleDeg; }
+      }
+      return bestAngle;
+    }
+
+    const skewAngle = detectSkew(raw);
+
+    // Apply deskew if needed
+    function deskewCanvas(src, angle) {
+      if (Math.abs(angle) < 0.3) return src;
+      const rad = angle * Math.PI / 180;
+      const cos = Math.abs(Math.cos(rad)), sin = Math.abs(Math.sin(rad));
+      const nw = Math.round(src.width * cos + src.height * sin);
+      const nh = Math.round(src.width * sin + src.height * cos);
+      const c = makeCanvas(nw, nh);
+      const ctx = c.getContext("2d");
+      ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, nw, nh);
+      ctx.translate(nw/2, nh/2);
+      ctx.rotate(-rad);
+      ctx.drawImage(src, -src.width/2, -src.height/2);
+      return c;
+    }
+
+    const deskewed = deskewCanvas(raw, skewAngle);
+    const dw = deskewed.width, dh = deskewed.height;
+
+    // ── Step 3: adaptive thresholding (Sauvola method) ───────────────────────
+    function adaptiveThreshold(canvas, blockSize, k) {
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      const id = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const gray = toGray(id);
+      const W = canvas.width, H = canvas.height;
+      const half = Math.floor(blockSize / 2);
+
+      // Build integral image for fast mean/std computation
+      const integ = new Float64Array(W * H);
+      const integ2 = new Float64Array(W * H);
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const v = gray[y * W + x];
+          integ[y*W+x] = v + (x>0?integ[y*W+x-1]:0) + (y>0?integ[(y-1)*W+x]:0) - (x>0&&y>0?integ[(y-1)*W+x-1]:0);
+          integ2[y*W+x] = v*v + (x>0?integ2[y*W+x-1]:0) + (y>0?integ2[(y-1)*W+x]:0) - (x>0&&y>0?integ2[(y-1)*W+x-1]:0);
+        }
+      }
+
+      const out = makeCanvas(W, H);
+      const outCtx = out.getContext("2d");
+      const outId = outCtx.createImageData(W, H);
+      const od = outId.data;
+
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const x1 = Math.max(0, x - half), y1 = Math.max(0, y - half);
+          const x2 = Math.min(W-1, x + half), y2 = Math.min(H-1, y + half);
+          const cnt = (x2-x1+1) * (y2-y1+1);
+          const sum = integ[y2*W+x2] - (x1>0?integ[y2*W+x1-1]:0) - (y1>0?integ[(y1-1)*W+x2]:0) + (x1>0&&y1>0?integ[(y1-1)*W+x1-1]:0);
+          const sum2 = integ2[y2*W+x2] - (x1>0?integ2[y2*W+x1-1]:0) - (y1>0?integ2[(y1-1)*W+x2]:0) + (x1>0&&y1>0?integ2[(y1-1)*W+x1-1]:0);
+          const mean = sum / cnt;
+          const std = Math.sqrt(Math.max(0, sum2/cnt - mean*mean));
+          const threshold = mean * (1 + k * (std / 128 - 1));
+          const v = gray[y*W+x] <= threshold ? 0 : 255;
+          const idx = (y*W+x)*4;
+          od[idx] = od[idx+1] = od[idx+2] = v; od[idx+3] = 255;
+        }
+      }
+      outCtx.putImageData(outId, 0, 0);
+      return out;
+    }
+
+    // ── Step 4: produce multiple versions for best OCR result ────────────────
+
+    // Version A: Adaptive threshold (best for low-contrast, uneven lighting)
+    const versionA = adaptiveThreshold(deskewed, 51, -0.15);
+
+    // Version B: Global OTSU-like threshold with contrast stretch
+    const versionB = makeCanvas(dw, dh);
+    (function() {
+      const ctx = versionB.getContext("2d", { willReadFrequently: true });
+      ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, dw, dh);
+      ctx.drawImage(deskewed, 0, 0);
+      const id2 = ctx.getImageData(0, 0, dw, dh);
+      const gray2 = toGray(id2);
+      // Build histogram
+      const hist = new Array(256).fill(0);
+      for (let i = 0; i < gray2.length; i++) hist[gray2[i]]++;
+      // OTSU threshold
+      const total = gray2.length;
+      let sum = 0; for (let i = 0; i < 256; i++) sum += i * hist[i];
+      let sumB = 0, wB = 0, maxVar = 0, thresh = 128;
+      for (let t = 0; t < 256; t++) {
+        wB += hist[t]; if (!wB) continue;
+        const wF = total - wB; if (!wF) break;
+        sumB += t * hist[t];
+        const mB = sumB / wB, mF = (sum - sumB) / wF;
+        const v = wB * wF * (mB - mF) ** 2;
+        if (v > maxVar) { maxVar = v; thresh = t; }
+      }
+      // Apply with slight bias toward keeping more ink
+      const bId = ctx.createImageData(dw, dh);
+      const bd = bId.data;
+      for (let i = 0; i < gray2.length; i++) {
+        const v = gray2[i] < thresh + 10 ? 0 : 255;
+        const idx = i * 4; bd[idx] = bd[idx+1] = bd[idx+2] = v; bd[idx+3] = 255;
+      }
+      ctx.putImageData(bId, 0, 0);
+    })();
+
+    // Version C: Enhanced contrast + sharpen then threshold
+    const versionC = makeCanvas(dw, dh);
+    (function() {
+      const ctx = versionC.getContext("2d", { willReadFrequently: true });
+      ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, dw, dh);
+      ctx.drawImage(deskewed, 0, 0);
+      const id3 = ctx.getImageData(0, 0, dw, dh);
+      const d3 = id3.data;
+      const gray3 = toGray(id3);
+      // Unsharp mask (simple 3x3)
+      const sharpened = new Uint8Array(gray3.length);
+      for (let y = 1; y < dh-1; y++) {
+        for (let x = 1; x < dw-1; x++) {
+          const center = gray3[y*dw+x];
+          const blur = (gray3[(y-1)*dw+x] + gray3[(y+1)*dw+x] + gray3[y*dw+x-1] + gray3[y*dw+x+1]) / 4;
+          sharpened[y*dw+x] = Math.min(255, Math.max(0, center + 1.5 * (center - blur)));
+        }
+      }
+      // Adaptive threshold on sharpened
+      for (let i = 0; i < sharpened.length; i++) {
+        const v = sharpened[i] > 140 ? 255 : 0;
+        const idx = i*4; d3[idx] = d3[idx+1] = d3[idx+2] = v; d3[idx+3] = 255;
+      }
+      ctx.putImageData(id3, 0, 0);
+    })();
+
+    return { best: versionA, versions: [versionA, versionB, versionC], skewAngle };
   } finally {
     URL.revokeObjectURL(url);
   }
 }
 
+// ── Multi-pass OCR: try all image variants and pick best result ───────────────
 async function extractImageBillText(file, onProgress) {
   const ok = await ensureTesseract();
   if (!ok) throw new Error("OCR engine could not be loaded");
-  const canvas = await preprocessBillImage(file);
-  const result = await Tesseract.recognize(canvas, "eng", {
-    logger: (m) => { if (onProgress && m && m.status) onProgress(m); }
-  });
-  return normalizeInvoiceText((result && result.data && result.data.text) || "");
+
+  const { versions, skewAngle } = await preprocessBillImage(file);
+
+  // Tesseract config optimised for tabular pharmacy bills
+  const TESS_PARAMS = {
+    tessedit_pageseg_mode: "6",       // Assume uniform block of text
+    tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,/-:()%+ ",
+    preserve_interword_spaces: "1",
+    user_defined_dpi: "300",
+  };
+
+  let bestText = "", bestScore = -1;
+  const totalVersions = versions.length;
+
+  for (let vi = 0; vi < totalVersions; vi++) {
+    try {
+      const result = await Tesseract.recognize(versions[vi], "eng", {
+        logger: (m) => {
+          if (onProgress && m && m.status === "recognizing text") {
+            onProgress({ status: "recognizing text", progress: (vi / totalVersions) + m.progress / totalVersions });
+          }
+        },
+        ...TESS_PARAMS
+      });
+      const text = (result && result.data && result.data.text) || "";
+      // Score: count how many medicine-like tokens we see
+      const score = scoreOcrText(text);
+      if (score > bestScore) { bestScore = score; bestText = text; }
+    } catch(e) { /* try next version */ }
+  }
+
+  // If single-pass gave poor results, try PSM 4 (single column) on best canvas
+  if (bestScore < 3) {
+    try {
+      const result2 = await Tesseract.recognize(versions[0], "eng", {
+        tessedit_pageseg_mode: "4",
+        preserve_interword_spaces: "1",
+        user_defined_dpi: "300",
+      });
+      const text2 = (result2 && result2.data && result2.data.text) || "";
+      const score2 = scoreOcrText(text2);
+      if (score2 > bestScore) bestText = text2;
+    } catch(e) {}
+  }
+
+  return normalizeInvoiceText(bestText);
+}
+
+// Score how many medicine-like patterns exist in OCR output
+function scoreOcrText(text) {
+  if (!text) return 0;
+  let score = 0;
+  const lines = text.split("\n");
+  for (const l of lines) {
+    if (/\d+\.\d{1,2}/.test(l)) score++;          // has price-like number
+    if (/\b(mg|ml|mcg|gm|tab|cap|syr|inj|oint|cream|gel|drops|inhaler|patch)\b/i.test(l)) score += 2; // medicine unit
+    if (/\b(batch|lot|exp|mrp|ptr|hsn|cgst|sgst|gst)\b/i.test(l)) score += 2; // invoice keywords
+    if (/[A-Z]{2,}\d+/.test(l)) score++;           // batch number pattern
+  }
+  return score;
 }
 
 function parseImageBillToItems(text) {
   const clean = normalizeInvoiceText(text);
-  const parsed = parsePdfToItems(clean);
-  if (parsed && parsed.items && parsed.items.length) return parsed;
-  const lines = clean.split("\n").map((l) => l.trim()).filter(Boolean);
+
+  // First try the structured PDF parser (handles pipe-separated output)
+  const pdfParsed = parsePdfToItems(clean);
+  if (pdfParsed && pdfParsed.items && pdfParsed.items.length >= 2) return pdfParsed;
+
+  const lines = clean.split("\n").map(l => l.trim()).filter(Boolean);
+
+  // Extract header fields
   let supplier = "", invoiceNo = "", date = "";
-  lines.slice(0, 25).forEach((l) => {
-    if (!invoiceNo) { const m = l.match(/(?:invoice|bill)\s*(?:no|number)?\s*[:#-]?\s*([A-Z0-9\/-]+)/i); if (m) invoiceNo = m[1]; }
-    if (!date) { const d = l.match(/(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/); if (d) date = d[1]; }
-    if (!supplier && /pharma|distributor|health|medical|drug|traders|agency|agencies/i.test(l)) supplier = l.slice(0, 80);
-  });
-  const items = [];
-  lines.forEach((l) => {
-    if (/total|grand|discount|taxable|cgst|sgst|igst|round|amount/i.test(l)) return;
-    const qty = (l.match(/(\d+)\s*(?:EA|NOS|PCS|STRIP|STRIPS|TABS?|CAPS?)/i) || [])[1];
-    const nums = l.match(/\d+\.\d{1,2}/g) || [];
-    if (!qty || nums.length < 2) return;
-    const parts = l.split(/\s{2,}|\t/).filter(Boolean);
-    const name = parts.filter((p) => !/^(\d+|EA|NOS|PCS|STRIP|STRIPS|TABS?|CAPS?|\d+\.\d+|\d+%)$/i.test(p)).join(" ").trim();
-    if (name.length < 3) return;
-    items.push({ name: name.slice(0, 80), manufacturer: "", hsn: "300490", batch: "", expiry: "", pack: "", mrp: parseFloat(nums[0] || 0), qty: Number(qty || 1), ptr: parseFloat(nums[1] || 0), gstRate: 5, rack: "", packQty: 0, discPct: 0, schemePct: 0, freeQty: 0, amount: 0 });
-  });
-  return { supplier: supplier || "Image Bill", invoiceNo: invoiceNo || "", date: date || "", items };
+  for (const l of lines.slice(0, 35)) {
+    if (!invoiceNo) {
+      const m = l.match(/(?:Invoice|Bill|Inv)[\s._#-]*(?:No|Number|#)[\s.:]*([A-Z]{1,4}[-\/]?\d{2,}[-\/]?\d{0,6})/i)
+             || l.match(/\b(VE-\d{2}-\d{5,}|INV[-\/]?\d{4,}|SI[-\/]?\d{4,})\b/i);
+      if (m) invoiceNo = m[1];
+    }
+    if (!date) { const d = l.match(/(\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4})/); if (d) date = d[1]; }
+    if (!supplier && /medisales|pharma|distributor|health|medical|drugs|traders|agencies|enterprises|surgicals|wholesale/i.test(l))
+      supplier = l.replace(/[|:]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+  }
+
+  // Strategy 1: Vardhman / columnar format
+  const items1 = tryParseVardhmanFormat(lines);
+  if (items1.length >= 2) return { supplier: supplier || "Vardhman", invoiceNo, date, items: items1 };
+
+  // Strategy 2: Flexible numeric-anchor parser
+  const items2 = tryFlexibleNumericParser(lines);
+  if (items2.length >= 1) return { supplier: supplier || "Image Bill", invoiceNo, date, items: items2 };
+
+  // Strategy 3: Token-based last resort
+  const items3 = tryTokenParser(lines);
+  return { supplier: supplier || "Image Bill", invoiceNo, date, items: items3 };
 }
 
+// Parser 1: Vardhman-style columnar bills
+function tryParseVardhmanFormat(lines) {
+  const items = [];
+  const SKIP = /^(total|grand|taxable|cgst|sgst|igst|discount|round|amount|cess|value|rack|description|qty|billed|free|pack|batch|exp|mrp|rate|trade|disc|scheme|hsn|sr\.?\s*no|s\.?\s*no|item|bill\s*no|invoice|date|supplier|gst|summary|bank|ifsc|pan|dl\s*no|gstin|address|phone|mobile|email|terms|authorized|generated|scan|page)/i;
+  const BATCH_RE = /\b([A-Z]{1,5}\d{4,}[A-Z0-9]*|[A-Z]{2,}\d{3,})\b/;
+  const EXP_RE = /\b(\d{1,2})[\/-](\d{2,4})\b/;
+  const PRICE_RE = /\b(\d{1,5}\.\d{2})\b/g;
+
+  for (let idx = 0; idx < lines.length; idx++) {
+    const l = lines[idx];
+    if (l.length < 8 || SKIP.test(l.split(/\s+/)[0])) continue;
+    const prices = []; let pm; PRICE_RE.lastIndex = 0;
+    while ((pm = PRICE_RE.exec(l)) !== null) prices.push(parseFloat(pm[1]));
+    PRICE_RE.lastIndex = 0;
+    if (prices.length < 2) continue;
+    const qtyM = l.match(/\b(\d{1,3})\b/);
+    const qty = qtyM ? parseInt(qtyM[1]) : 1;
+    const mrp = prices.length >= 2 ? prices[prices.length - 2] : 0;
+    const ptr = prices[prices.length - 1];
+    const firstPriceIdx = l.search(/\b\d{1,5}\.\d{2}\b/);
+    let namePart = (firstPriceIdx > 0 ? l.slice(0, firstPriceIdx) : l)
+      .replace(/\b\d{1,3}\b/g, " ").replace(/[|\\]/g, " ").replace(/\s+/g, " ").trim();
+    namePart = namePart.replace(/^[A-Z]?\d{2,5}\s+/, "").replace(/^[A-Z]\d\s+/, "").trim();
+    if (namePart.length < 3 || !namePart.match(/[a-zA-Z]{2,}/)) continue;
+    const search2 = l + (idx+1 < lines.length ? " " + lines[idx+1] : "");
+    let batch = "", expiry = "";
+    const bm = BATCH_RE.exec(search2); if (bm) batch = bm[1];
+    const em = EXP_RE.exec(search2);
+    if (em) { let yr = em[2], mo = em[1].padStart(2,"0"); if (yr.length===2) yr="20"+yr; expiry = yr+"-"+mo; }
+    const discM = l.match(/(\d+(?:\.\d{1,2})?)\s*%/);
+    items.push({
+      name: namePart.slice(0, 80), manufacturer: "", hsn: "300490",
+      batch, expiry, pack: "", mrp: Math.round(mrp*100)/100,
+      qty: Math.max(1, qty), ptr: Math.round(ptr*100)/100, gstRate: 5,
+      rack: "", packQty: 0, discPct: discM ? parseFloat(discM[1]) : 0, schemePct: 0, freeQty: 0, amount: 0
+    });
+  }
+  return items;
+}
+
+// Parser 2: Flexible numeric anchor parser
+function tryFlexibleNumericParser(lines) {
+  const items = [];
+  const SKIP = /^(total|grand|taxable|cgst|sgst|igst|discount|round|subtotal|net|tax|gst|vat|cess|summary)/i;
+  const UNIT_RE = /\b(\d{1,3})\s*(EA|NOS|PCS|STRIP|STRIPS|BOX|BTL|TAB|TABS|CAP|CAPS|NO|NOS|PKT)\b/i;
+  const PRICE_RE2 = /\b(\d{1,5}\.\d{2})\b/g;
+  const BATCH_RE2 = /\b([A-Z]{1,5}\d{4,}[A-Z0-9]*)\b/;
+  const EXP_RE2 = /\b(\d{1,2})[\/-](\d{2,4})\b/;
+
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (l.length < 8 || SKIP.test(l.trim())) continue;
+    const unitM = UNIT_RE.exec(l);
+    const prices = []; let pm2; PRICE_RE2.lastIndex = 0;
+    while ((pm2 = PRICE_RE2.exec(l)) !== null) prices.push(parseFloat(pm2[1]));
+    PRICE_RE2.lastIndex = 0;
+    if (!unitM && prices.length < 2) continue;
+    const qty = unitM ? parseInt(unitM[1]) : 1;
+    const mrp = prices.length >= 2 ? prices[prices.length - 2] : 0;
+    const ptr = prices.length >= 1 ? prices[prices.length - 1] : 0;
+    const cutPos = unitM ? l.indexOf(unitM[0]) : l.search(/\d{2,5}\.\d{2}/);
+    let name = (cutPos > 0 ? l.slice(0, cutPos) : l)
+      .replace(/[|\\]/g, " ").replace(/\b\d{1,3}\b/g, " ").replace(/\s+/g, " ").trim();
+    name = name.replace(/^[A-Z]?\d+\s+/, "").replace(/^[A-Z]\d\s+/, "").trim();
+    if (name.length < 3 || !name.match(/[a-zA-Z]{2,}/)) continue;
+    const searchLine = l + (i+1 < lines.length ? " " + lines[i+1] : "");
+    let batch = "", expiry = "";
+    const bm2 = BATCH_RE2.exec(searchLine); if (bm2) batch = bm2[1];
+    const em2 = EXP_RE2.exec(searchLine);
+    if (em2) { let yr = em2[2], mo = em2[1].padStart(2,"0"); if (yr.length===2) yr="20"+yr; expiry = yr+"-"+mo; }
+    const discM = l.match(/(\d+(?:\.\d{1,2})?)\s*%/);
+    items.push({
+      name: name.slice(0, 80), manufacturer: "", hsn: "300490",
+      batch, expiry, pack: "", mrp: Math.round(mrp*100)/100,
+      qty: Math.max(1, qty), ptr: Math.round(ptr*100)/100, gstRate: 5,
+      rack: "", packQty: 0, discPct: discM ? parseFloat(discM[1]) : 0, schemePct: 0, freeQty: 0, amount: 0
+    });
+  }
+  return items;
+}
+
+// Parser 3: Token-based last resort
+function tryTokenParser(lines) {
+  const items = [];
+  const MED_RE = /\b(paracetamol|amoxicillin|metformin|amlodipine|atorvastatin|pantoprazole|omeprazole|azithromycin|cetirizine|ibuprofen|diclofenac|ranitidine|losartan|telmisartan|metoprolol|salbutamol|insulin|glimepiride|thyronorm|thyrox|levothyroxine|nexovas|cloba|acetramol|insugen|aceclofenac|dolo|calpol|combiflam)\b/i;
+  for (const l of lines) {
+    if (!MED_RE.test(l)) continue;
+    const nums = (l.match(/\b\d{1,5}(?:\.\d{1,2})?\b/g) || []).map(Number).filter(n => n > 0);
+    if (!nums.length) continue;
+    const name = l.replace(/\d[\d\s.%/-]*/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+    if (name.length < 4) continue;
+    items.push({
+      name, manufacturer: "", hsn: "300490", batch: "", expiry: "", pack: "",
+      mrp: nums.length > 1 ? nums[nums.length-2] : 0,
+      qty: 1, ptr: nums[nums.length-1] || 0, gstRate: 5,
+      rack: "", packQty: 0, discPct: 0, schemePct: 0, freeQty: 0, amount: 0
+    });
+  }
+  return items;
+}
 function csvToItems(rows) {
   if (rows.length < 2) return null; const h = rows[0].map((x) => x.toLowerCase().trim()); const ix = (n) => h.findIndex((x) => x.includes(n));
   const items = [], sup = (rows[1] && rows[1][ix("seller name")]) || (rows[1] && rows[1][ix("seller")]) || "Unknown", inv = (rows[1] && rows[1][ix("invoice")]) || "", dt = (rows[1] && rows[1][ix("date")]) || "";
@@ -1022,7 +1357,7 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm, inv, s
         <div style={{ display: "flex", gap: 3, background: "#E8E4DD", borderRadius: 8, padding: 3, marginBottom: 16 }}>
           {[["csv","CSV"],["image","Photo/PDF"],["manual","Manual"],["dist","Distributors"]].map(([id, l]) => <button key={id} onClick={() => setTab(id)} style={{ flex: 1, padding: 8, border: "none", borderRadius: 6, fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: tab === id ? "#fff" : "transparent", color: tab === id ? "#0D6B5B" : "#888", boxShadow: tab === id ? "0 1px 3px rgba(0,0,0,.1)" : "none" }}>{l}</button>)}</div>
         {tab === "csv" && <div style={{ border: "2px dashed #bbb", borderRadius: 10, padding: 36, textAlign: "center", cursor: "pointer", background: "#FAFAF7" }} onClick={() => csvR.current && csvR.current.click()}><input ref={csvR} type="file" accept=".csv" onChange={doCSV} style={{ display: "none" }} /><div style={{ fontSize: 36 }}>📄</div><div style={{ fontSize: 14, fontWeight: 600, color: "#555", marginTop: 8 }}>Upload CSV</div></div>}
-        {tab === "image" && <div style={{ border: "2px dashed #bbb", borderRadius: 10, padding: 36, textAlign: "center", cursor: "pointer", background: "#FAFAF7" }} onClick={() => !imgP && imgR.current && imgR.current.click()}><input ref={imgR} type="file" accept="image/*,.pdf,application/pdf" onChange={doImg} style={{ display: "none" }} />{imgP ? <div><div style={{ fontSize: 36 }}>🔄</div><div style={{ fontSize: 14, fontWeight: 600, color: "#0D6B5B", marginTop: 8 }}>AI reading...</div></div> : <div><div style={{ fontSize: 36 }}>📸</div><div style={{ fontSize: 14, fontWeight: 600, color: "#555", marginTop: 8 }}>Upload Invoice (Photo or PDF)</div></div>}</div>}
+        {tab === "image" && <div style={{ border: "2px dashed #bbb", borderRadius: 10, padding: 36, textAlign: "center", cursor: "pointer", background: "#FAFAF7" }} onClick={() => !imgP && imgR.current && imgR.current.click()}><input ref={imgR} type="file" accept="image/*,.pdf,application/pdf" onChange={doImg} style={{ display: "none" }} />{imgP ? <div><div style={{ fontSize: 36 }}>🔄</div><div style={{ fontSize: 14, fontWeight: 600, color: "#0D6B5B", marginTop: 8 }}>Advanced OCR — processing 3 image variants...</div><div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>This may take 20–40 seconds</div></div> : <div><div style={{ fontSize: 36 }}>📸</div><div style={{ fontSize: 14, fontWeight: 600, color: "#555", marginTop: 8 }}>Upload Invoice (Photo or PDF)</div></div>}</div>}
         {tab === "manual" && <div>
           <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr 1fr", gap: 10, marginBottom: 14 }}>
             <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Supplier *</label><input value={mf.sup} onChange={(e) => setMf((f) => ({ ...f, sup: e.target.value }))} style={inps} /></div>
