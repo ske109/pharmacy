@@ -413,8 +413,8 @@ async function extractImageBillText(file, onProgress) {
   // Store word-level bboxes on window for spatial parser
   if (bestResult && bestResult.data && bestResult.data.words) {
     window._ocrWords = bestResult.data.words;
-    window._ocrPageW = versions[0].width;
-    window._ocrPageH = versions[0].height;
+    try { window._ocrPageW = versions[0].width || versions[0].naturalWidth || 1000; } catch(e) { window._ocrPageW = 1000; }
+    try { window._ocrPageH = versions[0].height || versions[0].naturalHeight || 1400; } catch(e) { window._ocrPageH = 1400; }
   } else {
     window._ocrWords = null;
   }
@@ -439,8 +439,8 @@ function scoreOcrText(text) {
 // This survives even when raw text lines are garbled by OCR column misalignment.
 function spatialReconstructRows(words, pageW) {
   if (!words || !words.length) return [];
-  // Filter low-confidence junk
-  const good = words.filter(w => w.text && w.text.trim() && (w.confidence || 0) > 20);
+  // Filter low-confidence junk AND words without bbox
+  const good = words.filter(w => w && w.text && w.text.trim() && (w.confidence || 0) > 20 && w.bbox && typeof w.bbox.x0 === "number");
   if (!good.length) return [];
 
   // Cluster words into rows using Y-center proximity (gap = ~half line height)
@@ -500,25 +500,29 @@ function detectColumnZones(rows, pageW) {
     const zones = {};
     for (const [col, re] of Object.entries(COL_KEYWORDS)) {
       const hw = headerRow.find(w => re.test(w.text.trim()));
-      if (hw) zones[col] = { x0: hw.bbox.x0 - 10, x1: hw.bbox.x1 + 40 };
+      if (hw && hw.bbox) zones[col] = { x0: hw.bbox.x0 - 10, x1: hw.bbox.x1 + 40 };
     }
     return { zones, startRow: headerIdx + 1 };
   }
 
-  // Fallback: use fixed percentage zones based on page width
+  // Fallback: use fixed percentage zones based on Vardhman invoice layout
+  // RACK(0-5%) | DESCRIPTION(5-25%) | QTY_BILLED(25-30%) | FREE/SCM(30-35%) |
+  // PACK(35-40%) | BATCH(40-48%) | EXP(48-53%) | OLD_MRP(53-58%) | NEW_MRP(58-65%) |
+  // TRADE_PRICE(65-72%) | DISC%(72-76%) | SCM_DISC(76-80%) | TAXABLE(80-86%) |
+  // GST%(86-89%) | NET(89-95%) | HSN(95-100%)
   const p = pageW;
   return {
     zones: {
-      rack:  { x0: 0,          x1: p * 0.06 },
-      desc:  { x0: p * 0.05,   x1: p * 0.35 },
-      qty:   { x0: p * 0.35,   x1: p * 0.44 },
-      free:  { x0: p * 0.43,   x1: p * 0.50 },
-      pack:  { x0: p * 0.49,   x1: p * 0.56 },
-      batch: { x0: p * 0.54,   x1: p * 0.64 },
-      exp:   { x0: p * 0.63,   x1: p * 0.71 },
-      mrp:   { x0: p * 0.70,   x1: p * 0.80 },
-      trade: { x0: p * 0.79,   x1: p * 0.88 },
-      disc:  { x0: p * 0.87,   x1: p * 1.00 },
+      rack:  { x0: 0,          x1: p * 0.05 },
+      desc:  { x0: p * 0.04,   x1: p * 0.26 },
+      qty:   { x0: p * 0.25,   x1: p * 0.31 },
+      free:  { x0: p * 0.30,   x1: p * 0.36 },
+      pack:  { x0: p * 0.35,   x1: p * 0.41 },
+      batch: { x0: p * 0.40,   x1: p * 0.49 },
+      exp:   { x0: p * 0.48,   x1: p * 0.54 },
+      mrp:   { x0: p * 0.57,   x1: p * 0.66 },
+      trade: { x0: p * 0.65,   x1: p * 0.73 },
+      disc:  { x0: p * 0.72,   x1: p * 0.77 },
     },
     startRow: 0
   };
@@ -526,7 +530,9 @@ function detectColumnZones(rows, pageW) {
 
 // ── Extract words in a column zone from a row ────────────────────────────────
 function wordsInZone(row, zone) {
+  if (!zone) return "";
   return row.filter(w => {
+    if (!w || !w.bbox) return false;
     const cx = (w.bbox.x0 + w.bbox.x1) / 2;
     return cx >= zone.x0 && cx <= zone.x1;
   }).map(w => w.text.trim()).filter(Boolean).join(" ");
