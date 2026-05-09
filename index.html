@@ -834,7 +834,18 @@ function BillView({ bill, onClose, fromHistory }) {
     setDlLink(URL.createObjectURL(new Blob([html], { type: "text/html" })));
   };
   const [pdfReady, setPdfReady] = useState(null);
+  const [waPhone, setWaPhone] = useState("");
   const preparePdf = async function() {
+    // Ask phone number now, before PDF generation
+    var custPhone = (bill.patientContact || "").replace(/[^0-9]/g, "");
+    if (!custPhone || custPhone.length < 10) {
+      custPhone = prompt("Enter customer WhatsApp number (10 digits):", "");
+      if (!custPhone) return;
+      custPhone = custPhone.replace(/[^0-9]/g, "");
+    }
+    if (custPhone.length === 10) custPhone = "91" + custPhone;
+    setWaPhone(custPhone);
+
     var el = document.getElementById("bill-print-area");
     if (!el) { alert("Bill not ready"); return; }
     try {
@@ -857,29 +868,26 @@ function BillView({ bill, onClose, fromHistory }) {
       pdf.addImage(imgData, "JPEG", 10, 10, iW, iH);
       var blob = pdf.output("blob");
       setPdfReady(blob);
+      alert("PDF ready! Now tap 'Send via WhatsApp' to share.");
     } catch(err) { alert("PDF failed: " + err.message); }
   };
   const sendWhatsApp = function() {
-    var custPhone = (bill.patientContact || "").replace(/[^0-9]/g, "");
-    if (!custPhone || custPhone.length < 10) {
-      custPhone = prompt("Enter customer WhatsApp number (10 digits):", "");
-      if (!custPhone) return;
-      custPhone = custPhone.replace(/[^0-9]/g, "");
-    }
-    if (custPhone.length === 10) custPhone = "91" + custPhone;
     var thankMsg = "Thank you for visiting " + PH.name + "! Your bill " + bill.billNo + " for Rs." + f2(bill.netAmount) + " is attached. For any orders or enquiries, just call or WhatsApp us on +917619639377. We are happy to help! Get well soon!";
+    var phone = waPhone;
 
     if (pdfReady) {
       var pdfFile = new File([pdfReady], "Bill_" + bill.billNo + ".pdf", { type: "application/pdf" });
-      if (navigator.share && navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
-        navigator.share({ title: "Bill " + bill.billNo, text: thankMsg, files: [pdfFile] }).catch(function(){});
-        return;
-      }
-      // Fallback: download + open WhatsApp
+      try {
+        if (navigator.share && navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
+          navigator.share({ title: "Bill " + bill.billNo, text: thankMsg, files: [pdfFile] });
+          return;
+        }
+      } catch(e) {}
+      // Fallback: download PDF
       var a = document.createElement("a"); a.href = URL.createObjectURL(pdfReady); a.download = "Bill_" + bill.billNo + ".pdf"; a.click();
-      alert("PDF saved! Attach it in WhatsApp.");
     }
-    window.open("https://wa.me/" + custPhone + "?text=" + encodeURIComponent(thankMsg), "_blank");
+    // Open WhatsApp with text
+    if (phone) window.open("https://wa.me/" + phone + "?text=" + encodeURIComponent(thankMsg), "_blank");
   };
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center", padding: 10 }}>
