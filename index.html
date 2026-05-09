@@ -833,7 +833,33 @@ function BillView({ bill, onClose, fromHistory }) {
     const html = "<html><head><title>Bill_" + bill.billNo + "</title><style>body{font-family:sans-serif;font-size:12px;padding:0;max-width:800px;margin:0 auto}table{width:100%;border-collapse:collapse}th,td{border:1px solid #333;padding:8px;font-size:12px}th{background:#f2f2f2;text-align:left}</style></head><body>" + el.innerHTML + "</body></html>";
     setDlLink(URL.createObjectURL(new Blob([html], { type: "text/html" })));
   };
-  const sendWhatsApp = async function() {
+  const [pdfReady, setPdfReady] = useState(null);
+  const preparePdf = async function() {
+    var el = document.getElementById("bill-print-area");
+    if (!el) { alert("Bill not ready"); return; }
+    try {
+      if (!window.html2canvas) {
+        var h2cUrls = ["https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js","https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js","https://unpkg.com/html2canvas@1.4.1/dist/html2canvas.min.js"];
+        for (var hi = 0; hi < h2cUrls.length; hi++) { try { await new Promise(function(res,rej){var s=document.createElement("script");s.src=h2cUrls[hi];s.onload=res;s.onerror=rej;document.head.appendChild(s);}); if(window.html2canvas)break; } catch(e){} }
+        if (!window.html2canvas) throw new Error("html2canvas failed");
+      }
+      if (!window.jspdf) {
+        var jpUrls = ["https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js","https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js","https://unpkg.com/jspdf@2.5.2/dist/jspdf.umd.min.js"];
+        for (var ji = 0; ji < jpUrls.length; ji++) { try { await new Promise(function(res,rej){var s=document.createElement("script");s.src=jpUrls[ji];s.onload=res;s.onerror=rej;document.head.appendChild(s);}); if(window.jspdf)break; } catch(e){} }
+        if (!window.jspdf) throw new Error("jsPDF failed");
+      }
+      var canvas = await html2canvas(el, { scale: 2, useCORS: true, backgroundColor: "#ffffff" });
+      var imgData = canvas.toDataURL("image/jpeg", 0.95);
+      var pdf = new jspdf.jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+      var pW = pdf.internal.pageSize.getWidth(), pH = pdf.internal.pageSize.getHeight();
+      var iW = pW - 20, iH = (canvas.height / canvas.width) * iW;
+      if (iH > pH - 20) { iW = iW * (pH - 20) / iH; iH = pH - 20; }
+      pdf.addImage(imgData, "JPEG", 10, 10, iW, iH);
+      var blob = pdf.output("blob");
+      setPdfReady(blob);
+    } catch(err) { alert("PDF failed: " + err.message); }
+  };
+  const sendWhatsApp = function() {
     var custPhone = (bill.patientContact || "").replace(/[^0-9]/g, "");
     if (!custPhone || custPhone.length < 10) {
       custPhone = prompt("Enter customer WhatsApp number (10 digits):", "");
@@ -841,84 +867,19 @@ function BillView({ bill, onClose, fromHistory }) {
       custPhone = custPhone.replace(/[^0-9]/g, "");
     }
     if (custPhone.length === 10) custPhone = "91" + custPhone;
-
     var thankMsg = "Thank you for visiting " + PH.name + "! Your bill " + bill.billNo + " for Rs." + f2(bill.netAmount) + " is attached. For any orders or enquiries, just call or WhatsApp us on +917619639377. We are happy to help! Get well soon!";
 
-    var el = document.getElementById("bill-print-area");
-    if (!el) { alert("Bill not ready"); return; }
-
-    try {
-      // Load html2canvas
-      if (!window.html2canvas) {
-        var h2cUrls = [
-          "https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js",
-          "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js",
-          "https://unpkg.com/html2canvas@1.4.1/dist/html2canvas.min.js"
-        ];
-        for (var hi = 0; hi < h2cUrls.length; hi++) {
-          try {
-            await new Promise(function(res, rej) {
-              var s = document.createElement("script"); s.src = h2cUrls[hi];
-              s.onload = res; s.onerror = rej; document.head.appendChild(s);
-            });
-            if (window.html2canvas) break;
-          } catch(e) { /* try next CDN */ }
-        }
-        if (!window.html2canvas) throw new Error("Failed to load html2canvas");
-      }
-      // Load jsPDF
-      if (!window.jspdf) {
-        var jpUrls = [
-          "https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js",
-          "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js",
-          "https://unpkg.com/jspdf@2.5.2/dist/jspdf.umd.min.js"
-        ];
-        for (var ji = 0; ji < jpUrls.length; ji++) {
-          try {
-            await new Promise(function(res, rej) {
-              var s = document.createElement("script"); s.src = jpUrls[ji];
-              s.onload = res; s.onerror = rej; document.head.appendChild(s);
-            });
-            if (window.jspdf) break;
-          } catch(e) { /* try next CDN */ }
-        }
-        if (!window.jspdf) throw new Error("Failed to load jsPDF");
-      }
-
-      // Render bill to PDF
-      var canvas = await html2canvas(el, { scale: 2, useCORS: true, backgroundColor: "#ffffff" });
-      var imgData = canvas.toDataURL("image/jpeg", 0.95);
-      var pdf = new jspdf.jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
-      var pdfW = pdf.internal.pageSize.getWidth();
-      var pdfH = pdf.internal.pageSize.getHeight();
-      var imgW = pdfW - 20;
-      var imgH = (canvas.height / canvas.width) * imgW;
-      if (imgH > pdfH - 20) { imgW = imgW * (pdfH - 20) / imgH; imgH = pdfH - 20; }
-      pdf.addImage(imgData, "JPEG", 10, 10, imgW, imgH);
-      var pdfBlob = pdf.output("blob");
-      var pdfFile = new File([pdfBlob], "Bill_" + bill.billNo + ".pdf", { type: "application/pdf" });
-
-      // Share PDF via native share (mobile)
+    if (pdfReady) {
+      var pdfFile = new File([pdfReady], "Bill_" + bill.billNo + ".pdf", { type: "application/pdf" });
       if (navigator.share && navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
-        await navigator.share({
-          title: "Bill " + bill.billNo,
-          text: thankMsg,
-          files: [pdfFile]
-        });
-      } else {
-        // Desktop: save PDF, then open WhatsApp to manually attach
-        var a = document.createElement("a");
-        a.href = URL.createObjectURL(pdfBlob);
-        a.download = "Bill_" + bill.billNo + ".pdf";
-        a.click();
-        URL.revokeObjectURL(a.href);
-        alert("PDF saved! Now attach it in WhatsApp.");
-        window.open("https://wa.me/" + custPhone + "?text=" + encodeURIComponent(thankMsg), "_blank");
+        navigator.share({ title: "Bill " + bill.billNo, text: thankMsg, files: [pdfFile] }).catch(function(){});
+        return;
       }
-    } catch(err) {
-      alert("PDF generation failed: " + err.message + ". Opening WhatsApp with text instead.");
-      window.open("https://wa.me/" + custPhone + "?text=" + encodeURIComponent(thankMsg), "_blank");
+      // Fallback: download + open WhatsApp
+      var a = document.createElement("a"); a.href = URL.createObjectURL(pdfReady); a.download = "Bill_" + bill.billNo + ".pdf"; a.click();
+      alert("PDF saved! Attach it in WhatsApp.");
     }
+    window.open("https://wa.me/" + custPhone + "?text=" + encodeURIComponent(thankMsg), "_blank");
   };
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center", padding: 10 }}>
@@ -926,7 +887,8 @@ function BillView({ bill, onClose, fromHistory }) {
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 6 }}>
           <b style={{ fontSize: 16 }}>Bill {fromHistory ? "" : "Generated"}</b>
           <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-            <button onClick={sendWhatsApp} style={{ border: "none", borderRadius: 7, padding: "8px 14px", fontWeight: 600, cursor: "pointer", fontSize: 12, background: "#25D366", color: "#fff", fontFamily: "inherit" }}>WhatsApp Bill</button>
+            {!pdfReady && <button onClick={preparePdf} style={{ border: "none", borderRadius: 7, padding: "8px 14px", fontWeight: 600, cursor: "pointer", fontSize: 12, background: "#25D366", color: "#fff", fontFamily: "inherit" }}>Prepare WhatsApp Bill</button>}
+            {pdfReady && <button onClick={sendWhatsApp} style={{ border: "none", borderRadius: 7, padding: "8px 14px", fontWeight: 600, cursor: "pointer", fontSize: 12, background: "#25D366", color: "#fff", fontFamily: "inherit", animation: "fadeIn 0.3s" }}>Send via WhatsApp</button>}
             <button onClick={function() { var el = document.getElementById("bill-print-area"); if (el) { var w = window.open("","_blank"); w.document.write("<html><head><title>Bill_" + bill.billNo + "</title><style>body{font-family:sans-serif;font-size:12px;padding:0;max-width:800px;margin:0 auto}table{width:100%;border-collapse:collapse}th,td{border:1px solid #333;padding:8px;font-size:12px}th{background:#f2f2f2;text-align:left}</style></head><body>" + el.innerHTML + "</body></html>"); w.document.close(); w.print(); } }} style={{ ...bts(true), padding: "8px 14px", fontSize: 12 }}>Print</button>
             {fromHistory && !dlLink && <button onClick={makePdf} style={{ ...bts(false), padding: "8px 14px", fontSize: 12 }}>Download</button>}
             {fromHistory && dlLink && <a href={dlLink} download={"Bill_" + bill.billNo + ".html"} style={{ padding: "8px 14px", background: "#059669", color: "#fff", borderRadius: 7, fontSize: 12, fontWeight: 600, textDecoration: "none" }}>Save File</a>}
