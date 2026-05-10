@@ -3003,6 +3003,39 @@ function BackupPage({ inv, bills, purch, saveAll, askConfirm, saveInv, saveBills
 
   return (
     <div><h2 style={hds}>Backup, Restore, Reset</h2>
+        {/* Multi-Outlet Data Migration */}
+        <div style={{ ...cds, marginTop: 20, border: "2px solid #0D6B5B" }}>
+          <b style={{ color: "#0D6B5B", fontSize: 14 }}>Multi-Outlet Data Migration</b>
+          <p style={{ fontSize: 12, color: "#555", marginTop: 6, lineHeight: 1.6 }}>
+            Migrate existing flat data (at root level) into the current outlet's namespace.
+            This copies inventory, bills, purchases, returns, racks, audits, and customers from <b>/inventory</b> to <b>/outlets/{getCurrentOutlet()}/inventory</b> etc.
+          </p>
+          <p style={{ fontSize: 11, color: "#D97706", marginTop: 6 }}>Current outlet: <b>{getCurrentOutlet()}</b> ({PH.shortName}). Only run this ONCE per outlet.</p>
+          <button onClick={function() {
+            askConfirm("Migrate ALL root data to outlet '" + getCurrentOutlet() + "' (" + PH.shortName + ")? This copies data - original root data stays intact.", function() {
+              var outletId = getCurrentOutlet();
+              var paths = ["inventory", "bills", "purchases", "returns", "billReturns", "racks", "audits", "customers", "ledger"];
+              var done = 0;
+              paths.forEach(function(p) {
+                db.ref(p).once("value").then(function(snap) {
+                  var val = snap.val();
+                  if (val) {
+                    db.ref("outlets/" + outletId + "/" + p).set(val).then(function() {
+                      done++;
+                      if (done === paths.length) {
+                        alert("Migration complete! " + done + " data paths copied to outlets/" + outletId + "/. Reload the page.");
+                        window.location.reload();
+                      }
+                    });
+                  } else { done++; if (done === paths.length) { alert("Migration complete! Reload the page."); window.location.reload(); } }
+                });
+              });
+            });
+          }} style={{ ...bts(true), marginTop: 10, padding: "10px 20px", background: "#0D6B5B" }}>
+            Migrate Root Data to {getCurrentOutlet()}
+          </button>
+        </div>
+
       <div style={{ ...cds, marginBottom: 14, fontSize: 12, color: "#555" }}>
         <b>Data Summary:</b> {inv.length} medicines, {bills.length} bills, {purch.length} purchases, {returns.length} purchase returns, {billReturns.length} bill returns
       </div>
@@ -3539,38 +3572,7 @@ function ProfitPage({ bills, inv, mob, purch, saveBills, showBill, setPage }) {
           })}
         </div>}
 
-        {/* Multi-Outlet Data Migration */}
-        <div style={{ ...cds, marginTop: 20, border: "2px solid #0D6B5B" }}>
-          <b style={{ color: "#0D6B5B", fontSize: 14 }}>Multi-Outlet Data Migration</b>
-          <p style={{ fontSize: 12, color: "#555", marginTop: 6, lineHeight: 1.6 }}>
-            Migrate existing flat data (at root level) into the current outlet's namespace.
-            This copies inventory, bills, purchases, returns, racks, audits, and customers from <b>/inventory</b> to <b>/outlets/{getCurrentOutlet()}/inventory</b> etc.
-          </p>
-          <p style={{ fontSize: 11, color: "#D97706", marginTop: 6 }}>Current outlet: <b>{getCurrentOutlet()}</b> ({PH.shortName}). Only run this ONCE per outlet.</p>
-          <button onClick={function() {
-            askConfirm("Migrate ALL root data to outlet '" + getCurrentOutlet() + "' (" + PH.shortName + ")? This copies data - original root data stays intact.", function() {
-              var outletId = getCurrentOutlet();
-              var paths = ["inventory", "bills", "purchases", "returns", "billReturns", "racks", "audits", "customers", "ledger"];
-              var done = 0;
-              paths.forEach(function(p) {
-                db.ref(p).once("value").then(function(snap) {
-                  var val = snap.val();
-                  if (val) {
-                    db.ref("outlets/" + outletId + "/" + p).set(val).then(function() {
-                      done++;
-                      if (done === paths.length) {
-                        alert("Migration complete! " + done + " data paths copied to outlets/" + outletId + "/. Reload the page.");
-                        window.location.reload();
-                      }
-                    });
-                  } else { done++; if (done === paths.length) { alert("Migration complete! Reload the page."); window.location.reload(); } }
-                });
-              });
-            });
-          }} style={{ ...bts(true), marginTop: 10, padding: "10px 20px", background: "#0D6B5B" }}>
-            Migrate Root Data to {getCurrentOutlet()}
-          </button>
-        </div>
+        
       </div>
     </div>
   );
