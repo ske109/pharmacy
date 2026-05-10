@@ -54,9 +54,8 @@ input,select,button,textarea{font-family:inherit;-webkit-appearance:none}
 <meta name="app-changes" content="["Removed Claude API dependency for image/PDF bill reading [security/privacy]", "Added local Tesseract.js OCR with canvas preprocessing for purchase bill images", "Enhanced parsing with fallback line-by-line item extraction", "Cleaner worker without hardcoded API keys or Claude proxy route", "Improved error handling and user feedback for OCR quality", "v2.2.0: Advanced multi-pass image processing with deskew, adaptive thresholding, Sauvola binarization, OTSU thresholding, unsharp mask sharpening, multi-PSM Tesseract passes, and 3-strategy invoice parser (Vardhman columnar, flexible numeric-anchor, token-based)"]">
 <script>window.APP_VERSION = {"version": "2.3.0", "changes": ["Replaced EmailJS with Cloudflare Worker + Resend for reliable OTP delivery (no Gmail scope issues)", "Added /send-otp-email route to Cloudflare Worker", "3000 free emails/month via Resend vs 200 via EmailJS", "Proper error handling — shows actual failure reason instead of silent swallow", "OTP always logged to console as fallback"], "date": "2026-05-10", "type": "production"};</script>
 
-<!-- OTP emails sent via Cloudflare Worker + Resend (3000 free/month, no Gmail scope issues) -->
-<!-- Setup: 1) Sign up at resend.com  2) Get API key  3) Add as RESEND_API_KEY secret in your Cloudflare Worker -->
-<!-- 4) Verify your sending domain OR use free onboarding@resend.dev for testing -->
+<!-- OTP emails sent via Cloudflare Worker + Brevo (300 free/day, ANY recipient, no domain needed) -->
+<!-- Setup: 1) Sign up at brevo.com  2) Get API key  3) Add as BREVO_API_KEY secret in your Cloudflare Worker -->
 </head>
 <body>
 <div id="root"></div>
@@ -148,25 +147,18 @@ const ALL_PAGES = [
 // ── OTP helpers (6-digit, stored in Firebase with 10min expiry) ───────────
 function genOTP() { return String(Math.floor(100000 + Math.random() * 900000)); }
 async function sendOTPEmail(toEmail, otp, recipientName) {
-  // Send OTP via Cloudflare Worker → Resend API (server-side, no Gmail scope issues)
   console.log("OTP for", toEmail, ":", otp);
   try {
     var resp = await fetch(PROXY_URL + "/send-otp-email", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        to_email: toEmail,
-        to_name: recipientName || toEmail,
-        otp_code: otp
-      })
+      body: JSON.stringify({ to_email: toEmail, to_name: recipientName || toEmail, otp_code: otp })
     });
     var data = await resp.json();
     if (!resp.ok || !data.ok) {
-      var errMsg = data.error || ("HTTP " + resp.status);
-      console.error("Worker /send-otp-email failed:", errMsg);
-      throw new Error(errMsg);
+      throw new Error(data.error || "HTTP " + resp.status);
     }
-    console.log("OTP email sent successfully to", toEmail);
+    console.log("OTP email sent to", toEmail);
   } catch(e) {
     console.error("OTP email failed:", e);
     throw new Error("Email failed: " + e.message);
@@ -1483,8 +1475,8 @@ function Login({ onLogin }) {
       if (emailOk) {
         setInfo("OTP sent to " + em + ". Check inbox & spam.");
       } else {
-        setErr("Email failed: " + emailErr + ". Check browser console (F12) for the OTP code.");
-        setInfo("OTP generated — enter it below. (Check console if email didn't arrive.)");
+        setErr("Email failed: " + emailErr);
+        setInfo("OTP is in browser console (F12). Open console to get the code.");
       }
     } catch(e) {
       setErr("Failed to send OTP: " + e.message);
