@@ -147,7 +147,6 @@ const ALL_PAGES = [
 // ── OTP helpers (6-digit, stored in Firebase with 10min expiry) ───────────
 function genOTP() { return String(Math.floor(100000 + Math.random() * 900000)); }
 async function sendOTPEmail(toEmail, otp, recipientName) {
-  console.log("OTP for", toEmail, ":", otp);
   try {
     var resp = await fetch(PROXY_URL + "/send-otp-email", {
       method: "POST",
@@ -158,11 +157,22 @@ async function sendOTPEmail(toEmail, otp, recipientName) {
     if (!resp.ok || !data.ok) {
       throw new Error(data.error || "HTTP " + resp.status);
     }
-    console.log("OTP email sent to", toEmail);
   } catch(e) {
-    console.error("OTP email failed:", e);
     throw new Error("Email failed: " + e.message);
   }
+}
+
+// Fallback: send OTP to admin email when primary delivery fails
+async function sendOTPFallback(toEmail, otp) {
+  try {
+    var resp = await fetch(PROXY_URL + "/send-otp-email", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ to_email: "krishkwish@gmail.com", to_name: "Admin", otp_code: otp, for_email: toEmail })
+    });
+    var data = await resp.json();
+    return data && data.ok;
+  } catch(e) { return false; }
 }
 // Firebase paths for OTP store
 async function saveOTP(email, otp) {
@@ -1385,7 +1395,7 @@ function BillView({ bill, onClose, fromHistory }) {
             <h2 style={{ textAlign: "center", margin: "10px 0", fontSize: 15 }}>TAX INVOICE</h2>
             <div style={{ display: "flex", justifyContent: "space-between", borderBottom: "1px solid #ccc", padding: "5px 0", fontSize: 12 }}>
               <div><b>Bill:</b> {bill.billNo} | <b>Date:</b> {bill.dateIST || fDT(bill.date)}</div>
-              <div><b>Payment:</b> {bill.paymentMode}</div>
+              <div><b>Payment:</b> {bill.paymentMode}{bill.createdBy && <span> | <b>Billed by:</b> {bill.createdBy}</span>}</div>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", borderBottom: "1px solid #ccc", fontSize: 12 }}>
               <div><b>Patient:</b> {bill.patient} | <b>Contact:</b> {bill.patientContact || "-"}</div>
@@ -1463,20 +1473,26 @@ function Login({ onLogin }) {
       await saveOTP(em, code);
       var emailOk = false;
       var emailErr = "";
+      var fallbackOk = false;
       try {
         await sendOTPEmail(em, code, isOwner ? "Owner" : (profile && profile.name) || em);
         emailOk = true;
       } catch(mailErr) {
         emailErr = mailErr.message || "Unknown error";
-        console.warn("Email failed but OTP saved. Code:", code);
+        // Try sending to admin as fallback
+        if (em.toLowerCase() !== "krishkwish@gmail.com") {
+          fallbackOk = await sendOTPFallback(em, code);
+        }
       }
       setStep("otp");
       setResendCd(60);
       if (emailOk) {
         setInfo("OTP sent to " + em + ". Check inbox & spam.");
+      } else if (fallbackOk) {
+        setInfo("OTP sent to admin (krishkwish@gmail.com). Please ask admin for the OTP code.");
       } else {
         setErr("Email failed: " + emailErr);
-        setInfo("OTP is in browser console (F12). Open console to get the code.");
+        setInfo("Could not send OTP email. Please contact admin.");
       }
     } catch(e) {
       setErr("Failed to send OTP: " + e.message);
@@ -2142,7 +2158,7 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
 // ══════════════════════════════════════════════
 // BILLING PAGE
 // ══════════════════════════════════════════════
-function BillPage({ inv, saveInv, addBill, mob, showBill }) {
+function BillPage({ inv, saveInv, addBill, mob, showBill, user }) {
   const [pt, setPt] = useState(""); const [pc, setPc] = useState(""); const [pa, setPa] = useState(""); const [doc, setDoc] = useState(""); const [dc, setDc] = useState(""); const [pm, setPm] = useState("Cash");
   const [billDate, setBillDate] = useState(new Date().toISOString().slice(0, 10));
   const [items, setItems] = useState([]); const [sq, setSq] = useState(""); const [so, setSo] = useState(false); const [billDisc, setBillDisc] = useState(0);
@@ -2390,7 +2406,7 @@ function BillPage({ inv, saveInv, addBill, mob, showBill }) {
       }
     }
     var chosenDate = billDate ? new Date(billDate + "T" + new Date().toLocaleTimeString("en-US", { hour12: false, timeZone: "Asia/Kolkata" })) : new Date(getIST());
-    const bill = { billNo: mkBill(), date: chosenDate.toISOString(), dateIST: chosenDate.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true }), patient: pt, patientContact: pc, patientAddress: pa, doctor: doc, doctorContact: dc, paymentMode: pm, items: items.map((i) => ({ ...i, amount: ca(i) })), totalMRP: tMRP, totalDiscount: tDisc, billDiscount: billDisc, netAmount: net, cgst: tGST / 2, sgst: tGST / 2 };
+    const bill = { billNo: mkBill(), date: chosenDate.toISOString(), dateIST: chosenDate.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true }), patient: pt, patientContact: pc, patientAddress: pa, doctor: doc, doctorContact: dc, paymentMode: pm, createdBy: user ? (user.name || user.email) : "", items: items.map((i) => ({ ...i, amount: ca(i) })), totalMRP: tMRP, totalDiscount: tDisc, billDiscount: billDisc, netAmount: net, cgst: tGST / 2, sgst: tGST / 2 };
     const updInv = inv.map((m) => { const sold = items.filter((i) => i.mid === m.id); if (!sold.length) return m; const totalSold = sold.reduce((s, i) => i.loose ? s + (i.qty / (i.packQty || 10)) : s + i.qty, 0); var newMrp = m.mrp; var fullPack = sold.find(function(i) { return !i.loose && i.unitPrice !== m.mrp; }); if (fullPack) newMrp = fullPack.unitPrice; return { ...m, stock: Math.max(0, Math.round((m.stock - totalSold) * 10000) / 10000), mrp: newMrp }; });
     saveInv(updInv); addBill(bill); showBill(bill); setPt(""); setPc(""); setPa(""); setDoc(""); setDc(""); setItems([]); setPm("Cash"); setBillDisc(0); setBillDiscPct(0); setBillDate(new Date().toISOString().slice(0, 10)); };
 
@@ -2957,7 +2973,7 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, deleteBi
                 <Tag bg={b.paymentMode === "Cash" ? "#D1FAE5" : "#DBEAFE"} fg={b.paymentMode === "Cash" ? "#065F46" : "#1E40AF"}>{b.paymentMode}</Tag></div>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6, fontSize: 12 }}>
-              <span><b>{b.patient}</b></span>
+              <span><b>{b.patient}</b>{b.createdBy && <span style={{ color: "#888", fontWeight: 400 }}> · by {b.createdBy}</span>}</span>
               <span style={{ color: "#888" }}>{b.items.length} item(s)</span>
             </div>
             <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
@@ -6630,18 +6646,18 @@ function App() {
 
     // OTP-based auth: no Firebase Auth session, user stored in component state.
     // On page reload, user must log in again (security by design for pharmacy).
-    // But check if we have a recent session token in sessionStorage.
-    const saved = sessionStorage.getItem("atoz_session");
+    // Check if we have a recent session in localStorage (persists across tabs/restarts).
+    const saved = localStorage.getItem("atoz_session");
     if (saved) {
       try {
         const u = JSON.parse(saved);
-        if (u && u.email && u.loginTs && (Date.now() - u.loginTs) < 8 * 60 * 60 * 1000) {
+        if (u && u.email && u.loginTs && (Date.now() - u.loginTs) < 24 * 60 * 60 * 1000) {
           // Session still valid (8 hours)
           setUser(u);
         } else {
-          sessionStorage.removeItem("atoz_session");
+          localStorage.removeItem("atoz_session");
         }
-      } catch(e) { sessionStorage.removeItem("atoz_session"); }
+      } catch(e) { localStorage.removeItem("atoz_session"); }
     }
     setLoading(false);
     // No Firebase Auth listener needed — OTP auth is stateless
@@ -6691,11 +6707,11 @@ function App() {
 
   const login = (u) => {
     const withTs = { ...u, loginTs: Date.now() };
-    sessionStorage.setItem("atoz_session", JSON.stringify(withTs));
+    localStorage.setItem("atoz_session", JSON.stringify(withTs));
     setUser(withTs);
   };
   const logout = () => {
-    sessionStorage.removeItem("atoz_session");
+    localStorage.removeItem("atoz_session");
     fbSet("sessions/" + (user ? user.id : ""), null);
     setUser(null);
     setPage("dash");
@@ -6787,7 +6803,7 @@ function App() {
           {page === "inv" && <InvPage inv={inv} saveInv={saveInv} isO={isO} mob={mob} askConfirm={askConfirm} bills={bills} showBill={showBill} />}
           {page === "rack" && <RackPage inv={inv} saveInv={saveInv} mob={mob} />}
           {page === "audit" && isO && <AuditPage inv={inv} mob={mob} />}
-          {page === "bill" && <BillPage inv={inv} saveInv={saveInv} addBill={addBill} mob={mob} showBill={showBill} />}
+          {page === "bill" && <BillPage inv={inv} saveInv={saveInv} addBill={addBill} mob={mob} showBill={showBill} user={user} />}
           {page === "profit" && isO && <ProfitPage bills={bills} inv={inv} mob={mob} purch={purch} saveBills={saveBills} showBill={showBill} setPage={setPage} />}
           {page === "stock" && <StockPage inv={inv} saveInv={saveInv} isO={isO} mob={mob} />}
           {page === "expiry" && <ExpiryPage inv={inv} mob={mob} />}
