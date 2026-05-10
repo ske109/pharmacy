@@ -168,238 +168,650 @@ function normalizeInvoiceText(text) {
     .trim();
 }
 
-// ── Simple OCR using Tesseract.js v5 createWorker ────────────────────────────
-// Based on image.html approach - simple, direct, no heavy preprocessing
-var _ocrWorker = null;
-
-async function getOcrWorker() {
-  if (_ocrWorker) return _ocrWorker;
-  // Load Tesseract.js if not loaded
-  if (!window.Tesseract) {
-    await new Promise(function(res, rej) {
-      var s = document.createElement("script");
-      s.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
-      s.onload = function() { res(); };
-      s.onerror = function() { rej(new Error("Failed to load Tesseract.js")); };
-      document.head.appendChild(s);
-    });
-  }
-  _ocrWorker = await Tesseract.createWorker("eng");
-  return _ocrWorker;
-}
-
-// Scale up image for better OCR
-function scaleImageForOcr(file) {
-  return new Promise(function(res, rej) {
-    var url = URL.createObjectURL(file);
-    var img = new Image();
-    img.onload = function() {
-      var TARGET = 3000;
-      var scale = Math.max(1, TARGET / Math.max(img.width, img.height));
-      var w = Math.round(img.width * scale);
-      var h = Math.round(img.height * scale);
-      var c = document.createElement("canvas");
-      c.width = w; c.height = h;
-      var ctx = c.getContext("2d");
-      ctx.fillStyle = "#fff";
-      ctx.fillRect(0, 0, w, h);
-      ctx.drawImage(img, 0, 0, w, h);
-      // Increase contrast
-      var id = ctx.getImageData(0, 0, w, h);
-      var d = id.data;
-      for (var i = 0; i < d.length; i += 4) {
-        var gray = d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114;
-        var v = gray < 140 ? 0 : 255;
-        d[i] = d[i+1] = d[i+2] = v;
-      }
-      ctx.putImageData(id, 0, 0);
-      c.toBlob(function(blob) {
-        URL.revokeObjectURL(url);
-        res(blob);
-      }, "image/png");
-    };
-    img.onerror = function() { URL.revokeObjectURL(url); rej(new Error("Image load failed")); };
-    img.src = url;
+async function ensureTesseract() {
+  if (window.Tesseract) return true;
+  return new Promise((resolve) => {
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+    s.onload = () => resolve(!!window.Tesseract);
+    s.onerror = () => resolve(false);
+    document.head.appendChild(s);
   });
 }
 
+// ── Advanced image preprocessing for pharmacy bills ──────────────────────────
+// Returns multiple canvas variants to try with OCR
+async function preprocessBillImage(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((res, rej) => {
+      const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url;
+    });
+
+    // Scale up significantly for better OCR accuracy
+    const TARGET_W = 3600;
+    const scale = Math.max(1.5, TARGET_W / img.width);
+    const w = Math.round(img.width * scale);
+    const h = Math.round(img.height * scale);
+
+    // ── Helper: draw image to canvas ─────────────────────────────────────────
+    function makeCanvas(w, h) {
+      const c = document.createElement("canvas");
+      c.width = w; c.height = h;
+      return c;
+    }
+
+    // ── Step 1: detect rotation and deskew ───────────────────────────────────
+    // Draw raw image first
+    const raw = makeCanvas(w, h);
+    const rx = raw.getContext("2d", { willReadFrequently: true });
+    rx.fillStyle = "#fff"; rx.fillRect(0, 0, w, h);
+    rx.drawImage(img, 0, 0, w, h);
+
+    // ── Step 2: auto-detect and correct rotation ─────────────────────────────
+    function getImageData(canvas) {
+      return canvas.getContext("2d", { willReadFrequently: true }).getImageData(0, 0, canvas.width, canvas.height);
+    }
+    function toGray(id) {
+      const d = id.data, out = new Uint8Array(id.width * id.height);
+      for (let i = 0, j = 0; i < d.length; i += 4, j++) {
+        out[j] = Math.round(d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114);
+      }
+      return out;
+    }
+
+    // Detect skew angle using Hough-like horizontal projection
+    function detectSkew(canvas) {
+      const gray = toGray(getImageData(canvas));
+      const W = canvas.width, H = canvas.height;
+      const STEP = 4; // sample every 4 pixels
+      let bestAngle = 0, bestScore = -1;
+      for (let angleDeg = -8; angleDeg <= 8; angleDeg += 0.5) {
+        const rad = angleDeg * Math.PI / 180;
+        const cos = Math.cos(rad), sin = Math.sin(rad);
+        const rowSums = new Array(H).fill(0);
+        for (let y = 0; y < H; y += STEP) {
+          for (let x = 0; x < W; x += STEP) {
+            const nx = Math.round(x * cos - y * sin + W/2 * (1-cos) + H/2 * sin);
+            const ny = Math.round(x * sin + y * cos - W/2 * sin + H/2 * (1-cos));
+            if (nx >= 0 && nx < W && ny >= 0 && ny < H) {
+              if (gray[ny * W + nx] < 128) rowSums[y]++;
+            }
+          }
+        }
+        // Score = variance of row sums (higher = more distinct text lines)
+        const mean = rowSums.reduce((a,b) => a+b, 0) / rowSums.length;
+        const variance = rowSums.reduce((a,b) => a + (b-mean)**2, 0) / rowSums.length;
+        if (variance > bestScore) { bestScore = variance; bestAngle = angleDeg; }
+      }
+      return bestAngle;
+    }
+
+    const skewAngle = detectSkew(raw);
+
+    // Apply deskew if needed
+    function deskewCanvas(src, angle) {
+      if (Math.abs(angle) < 0.3) return src;
+      const rad = angle * Math.PI / 180;
+      const cos = Math.abs(Math.cos(rad)), sin = Math.abs(Math.sin(rad));
+      const nw = Math.round(src.width * cos + src.height * sin);
+      const nh = Math.round(src.width * sin + src.height * cos);
+      const c = makeCanvas(nw, nh);
+      const ctx = c.getContext("2d");
+      ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, nw, nh);
+      ctx.translate(nw/2, nh/2);
+      ctx.rotate(-rad);
+      ctx.drawImage(src, -src.width/2, -src.height/2);
+      return c;
+    }
+
+    const deskewed = deskewCanvas(raw, skewAngle);
+    const dw = deskewed.width, dh = deskewed.height;
+
+    // ── Step 3: adaptive thresholding (Sauvola method) ───────────────────────
+    function adaptiveThreshold(canvas, blockSize, k) {
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      const id = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const gray = toGray(id);
+      const W = canvas.width, H = canvas.height;
+      const half = Math.floor(blockSize / 2);
+
+      // Build integral image for fast mean/std computation
+      const integ = new Float64Array(W * H);
+      const integ2 = new Float64Array(W * H);
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const v = gray[y * W + x];
+          integ[y*W+x] = v + (x>0?integ[y*W+x-1]:0) + (y>0?integ[(y-1)*W+x]:0) - (x>0&&y>0?integ[(y-1)*W+x-1]:0);
+          integ2[y*W+x] = v*v + (x>0?integ2[y*W+x-1]:0) + (y>0?integ2[(y-1)*W+x]:0) - (x>0&&y>0?integ2[(y-1)*W+x-1]:0);
+        }
+      }
+
+      const out = makeCanvas(W, H);
+      const outCtx = out.getContext("2d");
+      const outId = outCtx.createImageData(W, H);
+      const od = outId.data;
+
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const x1 = Math.max(0, x - half), y1 = Math.max(0, y - half);
+          const x2 = Math.min(W-1, x + half), y2 = Math.min(H-1, y + half);
+          const cnt = (x2-x1+1) * (y2-y1+1);
+          const sum = integ[y2*W+x2] - (x1>0?integ[y2*W+x1-1]:0) - (y1>0?integ[(y1-1)*W+x2]:0) + (x1>0&&y1>0?integ[(y1-1)*W+x1-1]:0);
+          const sum2 = integ2[y2*W+x2] - (x1>0?integ2[y2*W+x1-1]:0) - (y1>0?integ2[(y1-1)*W+x2]:0) + (x1>0&&y1>0?integ2[(y1-1)*W+x1-1]:0);
+          const mean = sum / cnt;
+          const std = Math.sqrt(Math.max(0, sum2/cnt - mean*mean));
+          const threshold = mean * (1 + k * (std / 128 - 1));
+          const v = gray[y*W+x] <= threshold ? 0 : 255;
+          const idx = (y*W+x)*4;
+          od[idx] = od[idx+1] = od[idx+2] = v; od[idx+3] = 255;
+        }
+      }
+      outCtx.putImageData(outId, 0, 0);
+      return out;
+    }
+
+    // ── Step 4: produce multiple versions for best OCR result ────────────────
+
+    // Version A: Adaptive threshold (best for low-contrast, uneven lighting)
+    const versionA = adaptiveThreshold(deskewed, 51, -0.15);
+
+    // Version B: Global OTSU-like threshold with contrast stretch
+    const versionB = makeCanvas(dw, dh);
+    (function() {
+      const ctx = versionB.getContext("2d", { willReadFrequently: true });
+      ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, dw, dh);
+      ctx.drawImage(deskewed, 0, 0);
+      const id2 = ctx.getImageData(0, 0, dw, dh);
+      const gray2 = toGray(id2);
+      // Build histogram
+      const hist = new Array(256).fill(0);
+      for (let i = 0; i < gray2.length; i++) hist[gray2[i]]++;
+      // OTSU threshold
+      const total = gray2.length;
+      let sum = 0; for (let i = 0; i < 256; i++) sum += i * hist[i];
+      let sumB = 0, wB = 0, maxVar = 0, thresh = 128;
+      for (let t = 0; t < 256; t++) {
+        wB += hist[t]; if (!wB) continue;
+        const wF = total - wB; if (!wF) break;
+        sumB += t * hist[t];
+        const mB = sumB / wB, mF = (sum - sumB) / wF;
+        const v = wB * wF * (mB - mF) ** 2;
+        if (v > maxVar) { maxVar = v; thresh = t; }
+      }
+      // Apply with slight bias toward keeping more ink
+      const bId = ctx.createImageData(dw, dh);
+      const bd = bId.data;
+      for (let i = 0; i < gray2.length; i++) {
+        const v = gray2[i] < thresh + 10 ? 0 : 255;
+        const idx = i * 4; bd[idx] = bd[idx+1] = bd[idx+2] = v; bd[idx+3] = 255;
+      }
+      ctx.putImageData(bId, 0, 0);
+    })();
+
+    // Version C: Enhanced contrast + sharpen then threshold
+    const versionC = makeCanvas(dw, dh);
+    (function() {
+      const ctx = versionC.getContext("2d", { willReadFrequently: true });
+      ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, dw, dh);
+      ctx.drawImage(deskewed, 0, 0);
+      const id3 = ctx.getImageData(0, 0, dw, dh);
+      const d3 = id3.data;
+      const gray3 = toGray(id3);
+      // Unsharp mask (simple 3x3)
+      const sharpened = new Uint8Array(gray3.length);
+      for (let y = 1; y < dh-1; y++) {
+        for (let x = 1; x < dw-1; x++) {
+          const center = gray3[y*dw+x];
+          const blur = (gray3[(y-1)*dw+x] + gray3[(y+1)*dw+x] + gray3[y*dw+x-1] + gray3[y*dw+x+1]) / 4;
+          sharpened[y*dw+x] = Math.min(255, Math.max(0, center + 1.5 * (center - blur)));
+        }
+      }
+      // Adaptive threshold on sharpened
+      for (let i = 0; i < sharpened.length; i++) {
+        const v = sharpened[i] > 140 ? 255 : 0;
+        const idx = i*4; d3[idx] = d3[idx+1] = d3[idx+2] = v; d3[idx+3] = 255;
+      }
+      ctx.putImageData(id3, 0, 0);
+    })();
+
+    return { best: versionA, versions: [versionA, versionB, versionC], skewAngle };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+// ── OCR with spatial word-box reconstruction ─────────────────────────────────
+// Key insight: Tesseract gives us bounding boxes for every word.
+// We use these to reconstruct table rows spatially instead of parsing raw text,
+// which is destroyed by column misalignment from phone photos.
 async function extractImageBillText(file, onProgress) {
-  var worker = await getOcrWorker();
-  // Scale and binarize
-  if (onProgress) onProgress({ progress: 0.1 });
-  var processed = await scaleImageForOcr(file);
-  if (onProgress) onProgress({ progress: 0.2 });
+  const ok = await ensureTesseract();
+  if (!ok) throw new Error("OCR engine could not be loaded");
 
-  var result = await worker.recognize(processed);
-  if (onProgress) onProgress({ progress: 0.9 });
-  var text = (result && result.data && result.data.text) || "";
+  const { versions } = await preprocessBillImage(file);
 
-  // Store word bboxes for spatial fallback
-  if (result && result.data && result.data.words) {
-    window._ocrWords = result.data.words;
-    window._ocrPageW = result.data.width || 3000;
+  // Run OCR on multiple versions with multiple PSM modes, pick best
+  let bestResult = null, bestScore = -1;
+  var PSM_MODES = ["6", "4", "3"];
+
+  for (let vi = 0; vi < versions.length; vi++) {
+    for (let pi = 0; pi < PSM_MODES.length; pi++) {
+      try {
+        const result = await Tesseract.recognize(versions[vi], "eng", {
+          logger: (m) => {
+            if (onProgress && m.status === "recognizing text") {
+              var totalPasses = versions.length * PSM_MODES.length;
+              var currentPass = vi * PSM_MODES.length + pi;
+              onProgress({ status: "recognizing text", progress: (currentPass + m.progress) / totalPasses });
+            }
+          },
+          tessedit_pageseg_mode: PSM_MODES[pi],
+          preserve_interword_spaces: "1",
+          user_defined_dpi: "300",
+        });
+        const score = scoreOcrText((result && result.data && result.data.text) || "");
+        if (score > bestScore) { bestScore = score; bestResult = result; }
+      } catch(e) { /* try next */ }
+    }
+  }
+
+  // Store word-level bboxes on window for spatial parser
+  if (bestResult && bestResult.data && bestResult.data.words) {
+    window._ocrWords = bestResult.data.words;
+    try { window._ocrPageW = versions[0].width || versions[0].naturalWidth || 1000; } catch(e) { window._ocrPageW = 1000; }
+    try { window._ocrPageH = versions[0].height || versions[0].naturalHeight || 1400; } catch(e) { window._ocrPageH = 1400; }
   } else {
     window._ocrWords = null;
   }
 
-  if (onProgress) onProgress({ progress: 1.0 });
-  return normalizeInvoiceText(text);
+  return normalizeInvoiceText((bestResult && bestResult.data && bestResult.data.text) || "");
 }
 
-// ── Invoice text parser ──────────────────────────────────────────────────────
-// Parses raw OCR text to extract purchase invoice items
-function parseImageBillToItems(text) {
-  if (!text || text.trim().length < 20) return { supplier: "", invoiceNo: "", date: "", items: [] };
+function scoreOcrText(text) {
+  if (!text) return 0;
+  let score = 0;
+  for (const l of text.split("\n")) {
+    // Price patterns (XX.XX) strongly indicate invoice data
+    var prices = l.match(/\d{2,}\.\d{2}/g);
+    if (prices) score += prices.length * 3;
+    // Medicine keywords
+    if (/\b(mg|ml|mcg|gm|tab|cap|syr|inj|oint|cream|gel|drops|inhaler|patch|strip|refil|pen|device)\b/i.test(l)) score += 4;
+    // Invoice structure keywords
+    if (/\b(batch|lot|exp|mrp|ptr|hsn|cgst|sgst|gst|billed|trade|disc|qty|rack|description|pack|taxable|net\s*value)\b/i.test(l)) score += 3;
+    // Batch number patterns (letters+digits)
+    if (/[A-Z]{1,4}\d{4,}/.test(l)) score += 2;
+    // Expiry date patterns (MM/YY)
+    if (/\d{2}\/\d{2}/.test(l)) score += 2;
+    // Rack codes (A0060, C0221 etc)
+    if (/\b[A-Z]\d{4}\b/.test(l)) score += 1;
+    // Penalize garbage/header lines
+    if (/^[^a-zA-Z]*$/.test(l)) score -= 1;
+  }
+  return score;
+}
 
-  var lines = text.split("\n").map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 3; });
+// ── Spatial table reconstruction from Tesseract word bboxes ─────────────────
+// Groups words into rows by Y-proximity, then reconstructs columns by X-order.
+// This survives even when raw text lines are garbled by OCR column misalignment.
+function spatialReconstructRows(words, pageW) {
+  if (!words || !words.length) return [];
+  // Filter low-confidence junk AND words without bbox
+  const good = words.filter(w => w && w.text && w.text.trim() && (w.confidence || 0) > 20 && w.bbox && typeof w.bbox.x0 === "number");
+  if (!good.length) return [];
 
-  // Extract header info
-  var supplier = "", invoiceNo = "", date = "";
-  for (var hi = 0; hi < Math.min(lines.length, 30); hi++) {
-    var hl = lines[hi];
-    if (!invoiceNo) { var im = hl.match(/\b(VE-\d{2}-\d{4,})\b/i) || hl.match(/Inv[oice.]*\s*No[.:\s]*([A-Z0-9\/-]+)/i) || hl.match(/MAX-\d+/i); if (im) invoiceNo = im[1] || im[0]; }
-    if (!date) { var dm = hl.match(/(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/); if (dm) date = dm[1]; }
-    if (!supplier) {
-      if (/vardhman|medisales/i.test(hl)) supplier = "Vardhman Medisales";
-      else if (/marketing|pharma|distributors?|traders|agencies|healthcare/i.test(hl)) {
-        var sm = hl.match(/([A-Z][A-Z\s&]{3,}(?:MARKETING|MEDISALES|PHARMA|DISTRIBUTORS?|TRADERS|AGENCIES|HEALTHCARE))/i);
-        if (sm) supplier = sm[1].trim();
-      }
+  // Cluster words into rows using Y-center proximity (gap = ~half line height)
+  const avgH = good.reduce((s, w) => s + (w.bbox.y1 - w.bbox.y0), 0) / good.length;
+  const ROW_GAP = Math.max(8, avgH * 0.6);
+
+  const sorted = [...good].sort((a, b) => (a.bbox.y0 + a.bbox.y1) - (b.bbox.y0 + b.bbox.y1));
+  const rows = [];
+  let cur = [sorted[0]];
+  let curY = (sorted[0].bbox.y0 + sorted[0].bbox.y1) / 2;
+
+  for (let i = 1; i < sorted.length; i++) {
+    const w = sorted[i];
+    const wy = (w.bbox.y0 + w.bbox.y1) / 2;
+    if (Math.abs(wy - curY) < ROW_GAP) {
+      cur.push(w);
+      curY = (curY * cur.length + wy) / (cur.length + 1); // running avg
+    } else {
+      rows.push(cur.sort((a, b) => a.bbox.x0 - b.bbox.x0));
+      cur = [w]; curY = wy;
     }
   }
+  if (cur.length) rows.push(cur.sort((a, b) => a.bbox.x0 - b.bbox.x0));
+  return rows;
+}
 
-  // Find table start - look for header row
-  var tableStart = 0;
-  for (var ti = 0; ti < Math.min(lines.length, 40); ti++) {
-    var tl = lines[ti].toLowerCase();
-    var headerScore = 0;
-    if (tl.indexOf("description") >= 0 || tl.indexOf("particulars") >= 0 || tl.indexOf("product") >= 0) headerScore += 3;
-    if (tl.indexOf("qty") >= 0 || tl.indexOf("billed") >= 0) headerScore += 2;
-    if (tl.indexOf("batch") >= 0) headerScore += 2;
-    if (tl.indexOf("mrp") >= 0) headerScore += 2;
-    if (tl.indexOf("trade") >= 0 || tl.indexOf("ptr") >= 0 || tl.indexOf("rate") >= 0) headerScore += 2;
-    if (tl.indexOf("disc") >= 0) headerScore += 1;
-    if (tl.indexOf("rack") >= 0) headerScore += 1;
-    if (tl.indexOf("pack") >= 0) headerScore += 1;
-    if (tl.indexOf("exp") >= 0) headerScore += 1;
-    if (headerScore >= 5) { tableStart = ti + 1; break; }
+// ── Column zone detection ─────────────────────────────────────────────────────
+// Vardhman bill columns (% of page width):
+// RACK(0-5%) | NAME(5-35%) | QTY_BILLED(35-42%) | QTY_FREE(42-48%) |
+// PACK(48-54%) | BATCH(54-62%) | EXP(62-69%) | OLD_MRP(69-74%) |
+// NEW_MRP(74-80%) | TRADE_PRICE(80-86%) | DISC%(86-90%) | ...
+// These are approximate — we detect them from the header row.
+function detectColumnZones(rows, pageW) {
+  // Look for a header row containing known column keywords
+  const COL_KEYWORDS = {
+    rack: /^rack$/i,
+    desc: /^desc|^item|^medicine|^product|^name/i,
+    qty: /^qty|^billed|^quantity/i,
+    free: /^free/i,
+    scheme: /^scm|^scheme|^sch/i,
+    pack: /^pack|^pkg/i,
+    batch: /^batch|^lot/i,
+    exp: /^exp|^expiry/i,
+    mrp: /^mrp|^m\.r\.p|^new\s*mrp/i,
+    trade: /^trade|^ptr|^rate|^price/i,
+    disc: /^disc|^dis\s*%/i,
+  };
+
+  let headerRow = null, headerIdx = -1;
+  for (let i = 0; i < Math.min(rows.length, 20); i++) {
+    const texts = rows[i].map(w => w.text.trim());
+    const matches = texts.filter(t => Object.values(COL_KEYWORDS).some(re => re.test(t)));
+    if (matches.length >= 3) { headerRow = rows[i]; headerIdx = i; break; }
   }
 
-  // Skip patterns
-  var SKIP = /^(total|sub.?total|grand|net|taxable|cgst|sgst|igst|round|gst|bank|ifsc|pan|dl.?no|gstin|address|phone|mobile|email|invoice|page|schedule|checked|order|case|hunt|sales|mrp.?printed|terms|authoris|scan|collectable|signature|do.?not|cash.?payment|sign|valid|credit|east.?zone|west|relation|billed.?to|buyer|seller|shipping|sale.?value|sch.?disc|tot.?items|tot.?qty|mrp.?value|[*]|rupees|amount|ic\b|cs\b|cov\b)/i;
+  // If we found a header, compute column X-ranges from header word positions
+  if (headerRow) {
+    const zones = {};
+    for (const [col, re] of Object.entries(COL_KEYWORDS)) {
+      const hw = headerRow.find(w => re.test(w.text.trim()));
+      if (hw && hw.bbox) zones[col] = { x0: hw.bbox.x0 - 10, x1: hw.bbox.x1 + 40 };
+    }
+    return { zones, startRow: headerIdx + 1 };
+  }
 
+  // Fallback: use fixed percentage zones based on Vardhman invoice layout
+  // RACK(0-5%) | DESCRIPTION(5-25%) | QTY_BILLED(25-30%) | FREE/SCM(30-35%) |
+  // PACK(35-40%) | BATCH(40-48%) | EXP(48-53%) | OLD_MRP(53-58%) | NEW_MRP(58-65%) |
+  // TRADE_PRICE(65-72%) | DISC%(72-76%) | SCM_DISC(76-80%) | TAXABLE(80-86%) |
+  // GST%(86-89%) | NET(89-95%) | HSN(95-100%)
+  const p = pageW;
+  return {
+    zones: {
+      rack:   { x0: 0,          x1: p * 0.05 },
+      desc:   { x0: p * 0.04,   x1: p * 0.26 },
+      qty:    { x0: p * 0.25,   x1: p * 0.30 },
+      free:   { x0: p * 0.29,   x1: p * 0.33 },
+      scheme: { x0: p * 0.32,   x1: p * 0.36 },
+      pack:   { x0: p * 0.35,   x1: p * 0.41 },
+      batch:  { x0: p * 0.40,   x1: p * 0.49 },
+      exp:    { x0: p * 0.48,   x1: p * 0.54 },
+      mrp:    { x0: p * 0.57,   x1: p * 0.66 },
+      trade:  { x0: p * 0.65,   x1: p * 0.73 },
+      disc:   { x0: p * 0.72,   x1: p * 0.77 },
+    },
+    startRow: 0
+  };
+}
+
+// ── Extract words in a column zone from a row ────────────────────────────────
+function wordsInZone(row, zone) {
+  if (!zone) return "";
+  return row.filter(w => {
+    if (!w || !w.bbox) return false;
+    const cx = (w.bbox.x0 + w.bbox.x1) / 2;
+    return cx >= zone.x0 && cx <= zone.x1;
+  }).map(w => w.text.trim()).filter(Boolean).join(" ");
+}
+
+// ── Main spatial parser ───────────────────────────────────────────────────────
+function parseWithSpatialData(words, pageW, fallbackText) {
+  // Strategy: Use both spatial (bbox) and text-based parsing, take best result
+  var spatialItems = [];
+  var textItems = [];
+
+  // === SPATIAL APPROACH: only if we have good bbox data ===
+  try {
+    var rows = spatialReconstructRows(words, pageW);
+    if (rows.length > 0) {
+      var det = detectColumnZones(rows, pageW);
+      var zones = det.zones;
+      var startRow = det.startRow;
+
+      for (var ri = startRow; ri < rows.length; ri++) {
+        var row = rows[ri];
+        var fullLine = row.map(function(w) { return w.text; }).join(" ").trim();
+        if (fullLine.length < 8) continue;
+        if (/^(total|grand|taxable|cgst|sgst|igst|round|gst|bank|pan|dl|gstin|address|phone|mobile|email|invoice|page|schedule|checked|order|case|hunt|sales|mrp printed|terms|authoris|scan|collectable|tcs|billing|shipping|buyer|seller)/i.test(fullLine)) continue;
+
+        var name = wordsInZone(row, zones.desc).replace(/[|\\]/g, "").trim();
+        if (!name || name.length < 3 || !/[a-zA-Z]{2,}/.test(name)) continue;
+
+        var mrpStr = wordsInZone(row, zones.mrp);
+        var tradeStr = wordsInZone(row, zones.trade);
+        var mrp = parseFloat((mrpStr || "").replace(/[^\d.]/g, "")) || 0;
+        var ptr = parseFloat((tradeStr || "").replace(/[^\d.]/g, "")) || 0;
+        if (mrp <= 0 && ptr <= 0) continue;
+
+        var qtyStr = wordsInZone(row, zones.qty);
+        var freeStr = zones.free ? wordsInZone(row, zones.free) : "";
+        var schemeStr = zones.scheme ? wordsInZone(row, zones.scheme) : "";
+        var discStr = wordsInZone(row, zones.disc);
+        var batchStr = wordsInZone(row, zones.batch);
+        var expStr = wordsInZone(row, zones.exp);
+
+        var qty = parseInt((qtyStr || "").replace(/[^\d]/g, "")) || 1;
+        var freeQty = parseInt((freeStr || "").replace(/[^\d]/g, "")) || 0;
+        var discPct = parseFloat(((discStr || "").match(/(\d+\.?\d*)/) || [])[1] || "0");
+        var schemePct = parseFloat(((schemeStr || "").match(/(\d+\.?\d*)/) || [])[1] || "0");
+        var batch = ((batchStr || fullLine).match(/\b([A-Z]{1,5}\d{3,}[A-Z0-9]*)\b/) || [])[1] || "";
+        var expM = (expStr || fullLine).match(/\b(\d{1,2})[\/\-](\d{2,4})\b/);
+        var expiry = expM ? (expM[2].length === 2 ? "20" + expM[2] : expM[2]) + "-" + expM[1].padStart(2, "0") : "";
+        var gstM = fullLine.match(/\b(5|12|18|28)\s*%?(?:\s|$)/);
+        var gstRate = gstM ? parseInt(gstM[1]) : 5;
+
+        spatialItems.push({ name: name.slice(0, 80), manufacturer: "", hsn: "300490", batch: batch, expiry: expiry, pack: "", mrp: Math.round(mrp * 100) / 100, qty: Math.max(1, qty), freeQty: freeQty, ptr: Math.round((ptr || mrp * 0.85) * 100) / 100, gstRate: gstRate, rack: "", packQty: 0, discPct: discPct, schemePct: schemePct, amount: 0 });
+      }
+    }
+  } catch(e) { /* spatial failed, continue to text */ }
+
+  // === TEXT APPROACH: parse raw OCR text line by line ===
+  textItems = parseVardhmanText(fallbackText);
+
+  // Take whichever found more items
+  var items = spatialItems.length >= textItems.length ? spatialItems : textItems;
+
+  if (items.length > 0) {
+    // Extract header info
+    var supplier = "", invoiceNo = "", date = "";
+    var headerText = fallbackText.substring(0, 2000);
+    var invM = headerText.match(/\b(VE-\d{2}-\d{4,})\b/i) || headerText.match(/Invoice[\s.#-]*No[\s.:]*([A-Z0-9\/-]+)/i) || headerText.match(/Inv\.?\s*No\.?\s*[:\s]*([A-Z0-9\/-]+)/i);
+    if (invM) invoiceNo = invM[1];
+    var dateM = headerText.match(/(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4})/);
+    if (dateM) date = dateM[1];
+    if (/vardhman|medisales/i.test(headerText)) supplier = "Vardhman Medisales";
+    else if (/pharma|distributor|health|medical|drugs|traders|agencies|marketing/i.test(headerText)) {
+      var supM = headerText.match(/([A-Z][A-Z\s&]+(?:MEDISALES|PHARMA|DISTRIBUTORS|TRADERS|AGENCIES|HEALTHCARE|MARKETING))/i);
+      supplier = supM ? supM[1].trim() : "Distributor";
+    }
+    return { supplier: supplier || "Distributor", invoiceNo: invoiceNo, date: date, items: items };
+  }
+
+  return null;
+}
+
+// ── Vardhman text-based parser ───────────────────────────────────────────────
+// Parses OCR text looking for medicine rows with pattern:
+// [RackCode] MedicineName [Pack] BatchNo ExpDate MRP TradePrice Qty Disc%
+function parseVardhmanText(text) {
+  if (!text) return [];
+  var lines = text.split("\n").map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 5; });
   var items = [];
+
+  // Find table start: look for header keywords
+  var tableStart = 0;
+  for (var i = 0; i < Math.min(lines.length, 40); i++) {
+    var lower = lines[i].toLowerCase();
+    if ((lower.indexOf("description") >= 0 || lower.indexOf("particulars") >= 0) && (lower.indexOf("qty") >= 0 || lower.indexOf("batch") >= 0 || lower.indexOf("mrp") >= 0)) {
+      tableStart = i + 1;
+      break;
+    }
+    if (lower.indexOf("rack") >= 0 && lower.indexOf("batch") >= 0) { tableStart = i + 1; break; }
+    if (lower.indexOf("billed") >= 0 && lower.indexOf("trade") >= 0) { tableStart = i + 1; break; }
+  }
+
+  // Skip patterns - NOT medicine rows
+  var SKIP = /^(total|sub\s*total|grand|taxable|cgst|sgst|igst|round|gst\s*summary|bank|ifsc|pan|dl\s*no|gstin|address|phone|mobile|email|invoice|page|schedule|checked|order|case|hunt|sales|mrp\s*printed|terms|authoris|scan|collectable|signature|do\s*not|cash\s*payment|sign\s*slip|valid|credit|east\s*zone|west\s*zone|relation|billed\s*to|buyer|seller|shipping|net\s*value|sale\s*value|sch\s*disc)/i;
 
   for (var li = tableStart; li < lines.length; li++) {
     var l = lines[li];
-    if (l.length < 8) continue;
-    if (SKIP.test(l.trim())) continue;
+    if (SKIP.test(l)) continue;
+    if (l.length < 10) continue;
 
-    // Find all decimal numbers (prices: XX.XX)
-    var decNums = [];
-    var decRe = /(\d+\.\d{2})/g;
-    var decM;
-    while ((decM = decRe.exec(l)) !== null) decNums.push({ val: parseFloat(decM[1]), pos: decM.index });
+    // Extract all numbers from the line
+    var allNums = [];
+    var numRe = /(\d+\.?\d*)/g;
+    var nm;
+    while ((nm = numRe.exec(l)) !== null) allNums.push({ val: parseFloat(nm[1]), pos: nm.index });
+    if (allNums.length < 2) continue;
 
-    // Find all integers
-    var intNums = [];
-    var intRe = /\b(\d{1,3})\b/g;
-    var intM;
-    while ((intM = intRe.exec(l)) !== null) intNums.push({ val: parseInt(intM[1]), pos: intM.index });
-
-    // Need at least 1 decimal number (a price)
-    if (decNums.length < 1) continue;
-
-    // Extract name: text at start of line before prices/pack/batch
+    // Extract medicine name: text between rack code and pack/batch info
+    // Medicine names can contain numbers (10MG, 125MCG, MGD3, etc.)
     var rackM = l.match(/^([A-Z]\d{3,5})\s+/);
     var nameStart = rackM ? rackM[0].length : 0;
 
-    // Find where name ends
+    // Find where name ends: look for pack pattern (10'S, 15S, 5X3ML, DEVICE, PCS)
+    // or batch pattern (letter+3digits like C25INH4001, V2600071)
     var nameEnd = l.length;
-    // Stop at pack pattern
-    var packM = l.match(/\b(\d{1,3}['\x60]?\s*[SsTt]\b|\d+[Xx]\d+\s*ML|DEVICE|PCS|BOX)\b/i);
-    if (packM && packM.index > nameStart + 3) nameEnd = Math.min(nameEnd, packM.index);
-    // Stop at batch pattern (letters followed by 4+ digits)
-    var batchPos = l.substring(nameStart).search(/\s[A-Z]{1,5}\d{4,}/);
-    if (batchPos > 3) nameEnd = Math.min(nameEnd, nameStart + batchPos);
-    // Stop at first decimal price if it comes before other markers
-    if (decNums.length > 0 && decNums[0].pos > nameStart + 3 && decNums[0].pos < nameEnd) {
-      // Only stop at price if there's enough name before it
-      var possibleName = l.substring(nameStart, decNums[0].pos).trim();
-      if (possibleName.length > 3 && /[A-Z]{2,}/i.test(possibleName)) nameEnd = decNums[0].pos;
+    var packM = l.match(/\b(\d{1,3}['`]?\s*[SsTt]\b|\d+X\d+\s*ML|DEVICE|PCS|BOX\b)/i);
+    if (packM && packM.index > nameStart + 3) nameEnd = packM.index;
+    else {
+      // Find batch: typically 5+ chars starting with letter(s) then digits
+      var batchPos = l.search(/\b[A-Z]{1,5}\d{4,}/);
+      if (batchPos > nameStart + 5) nameEnd = batchPos;
     }
-    // Stop at qty-pack sequence like "1 10S" or "6 10'S"
-    var qpM = l.substring(nameStart).match(/\s+(\d{1,2})\s+(\d{1,3}['\x60]?\s*[SsTt])/);
-    if (qpM && qpM.index > 3) nameEnd = Math.min(nameEnd, nameStart + qpM.index);
+
+    // Also stop at a sequence of 2+ standalone numbers (qty, prices)
+    var numSeq = l.substring(nameStart).search(/\s+\d+\s+\d+['`]?\s*[SsTt]?\s/);
+    if (numSeq > 3 && nameStart + numSeq < nameEnd) nameEnd = nameStart + numSeq;
 
     var name = l.substring(nameStart, nameEnd).replace(/[|\\]/g, "").replace(/\s+/g, " ").trim();
-    name = name.replace(/\s+\d+\s*$/, "").trim(); // remove trailing number
+    // Clean trailing standalone numbers that aren't part of dosage
+    name = name.replace(/\s+\d+\s*$/, "").trim();
 
-    if (!name || name.length < 2 || !/[A-Za-z]{2,}/.test(name)) continue;
-    // Skip header-like names
-    if (/^(NO\.|HUNT|MOBILE|EMAIL|GSTIN|STATE|DL|PAN|EWB|IRN|ACK|TAX|PAGE|CHECK|SALES|CARRIER|CREDIT|VALID|AREA|VEHICLE|PLACE|S\.?No)/i.test(name)) continue;
+    if (!name || name.length < 3 || !/[A-Z]{2,}/i.test(name)) continue;
+    // Skip if name looks like header/address
+    if (/^(NO\.|HUNT|MOBILE|EMAIL|GSTIN|STATE|DL\s*NO|PAN|EWB|IRN|ACK|INVOICE|TAX\s*INV|PAGE|CHECKED)/i.test(name)) continue;
 
-    // Prices: find MRP and PTR from decimal numbers
-    var prices = decNums.filter(function(n) { return n.val >= 5 && n.val < 100000; }).sort(function(a, b) { return b.val - a.val; });
-    if (prices.length < 1) continue;
+    // Get prices - find numbers with decimals (XX.XX format = prices)
+    var decNums = [];
+    var decRe = /(\d+\.\d{2})/g;
+    var dm;
+    while ((dm = decRe.exec(l)) !== null) decNums.push(parseFloat(dm[1]));
+    var priceNums = decNums.filter(function(n) { return n >= 5; }).sort(function(a, b) { return b - a; });
 
-    // Remove 0.00 values
-    var nonZeroPrices = prices.filter(function(p) { return p.val > 0.01; });
-    if (nonZeroPrices.length < 1) continue;
+    // MRP is the largest price, PTR is the second largest
+    var mrp = priceNums.length >= 1 ? priceNums[0] : 0;
+    var ptr = priceNums.length >= 2 ? priceNums[1] : mrp * 0.85;
+    if (mrp <= 0) continue;
 
-    var mrp = nonZeroPrices[0].val;
-    var ptr = nonZeroPrices.length >= 2 ? nonZeroPrices[1].val : Math.round(mrp * 0.8 * 100) / 100;
-    if (ptr > mrp) { var tmp = mrp; mrp = ptr; ptr = tmp; }
+    // For Vardhman with OLD MRP and NEW MRP columns: 
+    // If there are 3+ prices, pattern is: OLD_MRP(0.00), NEW_MRP, TRADE_PRICE
+    // NEW_MRP > TRADE_PRICE, so mrp = 2nd highest, ptr = 3rd
+    if (priceNums.length >= 3 && priceNums[0] > 0) {
+      // If first price is much larger and there's a 0.00, adjust
+      // Usually: 0.00(old), MRP, PTR, taxable, net
+      var nonZero = priceNums.filter(function(n) { return n > 1; });
+      if (nonZero.length >= 2) { mrp = nonZero[0]; ptr = nonZero[1]; }
+    }
 
-    // Qty: small integer before the prices
+    // Qty: look for small numbers (1-99) that aren't prices
     var qty = 1;
-    var priceStart = nonZeroPrices.length > 0 ? Math.min.apply(null, nonZeroPrices.map(function(p) { return p.pos; })) : l.length;
-    var qtyNums = intNums.filter(function(n) { return n.val >= 1 && n.val <= 200 && n.pos < priceStart && n.pos > nameStart; });
-    if (qtyNums.length > 0) qty = qtyNums[0].val;
+    var smallNums = allNums.filter(function(n) { return n.val >= 1 && n.val <= 99 && n.val === Math.floor(n.val); });
+    if (smallNums.length > 0) qty = smallNums[0].val;
 
     // Batch
-    var batch = "";
-    var batchM2 = l.match(/\b([A-Z]{1,5}\d{4,}[A-Z0-9]*)\b/);
-    if (batchM2) batch = batchM2[1];
+    var batchM = l.match(/\b([A-Z]{1,5}\d{3,}[A-Z0-9]*)\b/);
+    var batch = batchM ? batchM[1] : "";
 
     // Expiry
+    var expM = l.match(/\b(\d{1,2})[\/\-](\d{2,4})\b/);
     var expiry = "";
-    var expM = l.match(/\b(\d{1,2})[\/-](\d{2,4})\b/);
     if (expM) {
       var yr = expM[2].length === 2 ? "20" + expM[2] : expM[2];
       expiry = yr + "-" + expM[1].padStart(2, "0");
     }
 
+    // Disc%: look for 4.00 or similar near "disc" or at end
+    var discPct = 0;
+    var discM = l.match(/(\d+\.00)\s*$/);
+    if (!discM) discM = l.match(/\b(4\.00|5\.00|8\.00|10\.00|12\.00|15\.00|20\.00)\b/);
+    if (discM) discPct = parseFloat(discM[1]);
+
+    // GST
+    var gstM = l.match(/\b(5|12|18|28)\s*$/);
+    var gstRate = gstM ? parseInt(gstM[1]) : 5;
+
     // Pack
     var pack = "";
     if (packM) pack = packM[1];
 
-    // Disc%: look for X.00 pattern (4.00, 5.00 etc) or standalone small decimal
-    var discPct = 0;
-    var discNums = decNums.filter(function(n) { return n.val >= 1 && n.val <= 30 && n.val === Math.floor(n.val); });
-    if (discNums.length > 0) discPct = discNums[discNums.length - 1].val;
+    items.push({ name: name.slice(0, 80), manufacturer: "", hsn: "300490", batch: batch, expiry: expiry, pack: pack, mrp: Math.round(mrp * 100) / 100, qty: Math.max(1, qty), freeQty: 0, ptr: Math.round(ptr * 100) / 100, gstRate: gstRate, rack: "", packQty: 0, discPct: discPct, schemePct: 0, amount: 0 });
+  }
+  return items;
+}
 
-    // GST: look for 5, 12, 18, 28 standalone
-    var gstRate = 5;
-    var gstM2 = l.match(/\b(5|12|18|28)\b/g);
-    if (gstM2) gstRate = parseInt(gstM2[gstM2.length - 1]);
+// ── Main entry point called by doImg ─────────────────────────────────────────
+function parseImageBillToItems(text) {
+  const clean = normalizeInvoiceText(text);
 
-    // Free qty: look for small integer near "free" or in free column position
-    var freeQty = 0;
+  // PRIORITY: use spatial bbox data if available from last OCR run
+  if (window._ocrWords && window._ocrWords.length > 0) {
+    const spatial = parseWithSpatialData(window._ocrWords, window._ocrPageW, clean);
+    if (spatial && spatial.items && spatial.items.length >= 1) {
+      window._ocrWords = null;
+      return spatial;
+    }
+  }
+  window._ocrWords = null;
 
-    items.push({
-      name: name.slice(0, 80), manufacturer: "", hsn: "300490",
-      batch: batch, expiry: expiry, pack: pack,
-      mrp: Math.round(mrp * 100) / 100,
-      qty: Math.max(1, qty), freeQty: freeQty,
-      ptr: Math.round(ptr * 100) / 100,
-      gstRate: gstRate, rack: "", packQty: 0,
-      discPct: discPct, schemePct: 0, amount: 0
-    });
+  // Fallback 1: structured PDF-style parser
+  const pdfParsed = parsePdfToItems(clean);
+  if (pdfParsed && pdfParsed.items && pdfParsed.items.length >= 2) return pdfParsed;
+
+  const lines = clean.split("\n").map(l => l.trim()).filter(Boolean);
+
+  // Extract header
+  let supplier = "", invoiceNo = "", date = "";
+  for (const l of lines.slice(0, 35)) {
+    if (!invoiceNo) { const m = l.match(/\b(VE-\d{2}-\d{5,})\b/i) || l.match(/Invoice[\s.#-]*No[\s.:]*([A-Z0-9\/-]+)/i); if (m) invoiceNo = m[1]; }
+    if (!date) { const d = l.match(/(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4})/); if (d) date = d[1]; }
+    if (!supplier && /medisales|pharma|distributor|health|medical|drugs|traders|agencies/i.test(l))
+      supplier = l.replace(/[|:]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
   }
 
-  return { supplier: supplier || "Distributor", invoiceNo: invoiceNo, date: date, items: items };
+  // Fallback 2: line-by-line numeric parser
+  var items = [];
+  for (var li = 0; li < lines.length; li++) {
+    var l = lines[li];
+    if (l.length < 10) continue;
+    if (/^(total|grand|taxable|cgst|sgst|igst|round|gst|bank|pan|dl|gstin|address|phone|email|invoice|page|schedule|checked|mobile|hunt|sales|order|case|mrp printed)/i.test(l)) continue;
+    // Look for lines with medicine name + numbers (MRP, PTR, qty)
+    var nums = l.match(/\d+\.?\d{0,2}/g);
+    if (!nums || nums.length < 2) continue;
+    var nameMatch = l.match(/^[A-Z][A-Z0-9\s&\-\(\)]+/);
+    if (!nameMatch || nameMatch[0].trim().length < 3) continue;
+    var name = nameMatch[0].trim();
+    // Skip if looks like a header
+    if (/^(RACK|DESC|QTY|PACK|BATCH|EXP|MRP|TRADE|DISC|HSN|NET|TAXABLE|GST|BILLED|FREE)/i.test(name)) continue;
+    var prices = nums.map(function(n) { return parseFloat(n); }).filter(function(n) { return n > 1; });
+    if (prices.length < 1) continue;
+    var mrp = prices.length >= 2 ? Math.max(prices[0], prices[1]) : prices[0];
+    var ptr = prices.length >= 2 ? Math.min(prices[0], prices[1]) : mrp * 0.85;
+    var qty = 1;
+    var qtyMatch = l.match(/\b(\d{1,3})\b/);
+    if (qtyMatch) qty = parseInt(qtyMatch[1]) || 1;
+    items.push({ name: name.slice(0, 80), manufacturer: "", hsn: "300490", batch: "", expiry: "", pack: "", mrp: Math.round(mrp * 100) / 100, qty: Math.max(1, qty), freeQty: 0, ptr: Math.round(ptr * 100) / 100, gstRate: 5, rack: "", packQty: 0, discPct: 0, schemePct: 0, amount: 0 });
+  }
+
+  if (items.length >= 1) return { supplier: supplier || "Image Bill", invoiceNo, date, items: items };
+  return { supplier: supplier || "Image Bill", invoiceNo, date, items: [] };
 }
+
+
 
 function csvToItems(rows) {
   if (rows.length < 2) return null; const h = rows[0].map((x) => x.toLowerCase().trim()); const ix = (n) => h.findIndex((x) => x.includes(n));
@@ -833,128 +1245,15 @@ function BillView({ bill, onClose, fromHistory }) {
     const html = "<html><head><title>Bill_" + bill.billNo + "</title><style>body{font-family:sans-serif;font-size:12px;padding:0;max-width:800px;margin:0 auto}table{width:100%;border-collapse:collapse}th,td{border:1px solid #333;padding:8px;font-size:12px}th{background:#f2f2f2;text-align:left}</style></head><body>" + el.innerHTML + "</body></html>";
     setDlLink(URL.createObjectURL(new Blob([html], { type: "text/html" })));
   };
-  const [pdfReady, setPdfReady] = useState(null);
-  const [waPhone, setWaPhone] = useState("");
-  const preparePdf = async function() {
-    var custPhone = (bill.patientContact || "").replace(/[^0-9]/g, "");
-    if (!custPhone || custPhone.length < 10) {
-      custPhone = prompt("Enter customer WhatsApp number (10 digits):", "");
-      if (!custPhone) return;
-      custPhone = custPhone.replace(/[^0-9]/g, "");
-    }
-    if (custPhone.length === 10) custPhone = "91" + custPhone;
-    setWaPhone(custPhone);
-
-    var el = document.getElementById("bill-print-area");
-    if (!el) { alert("Bill not ready"); return; }
-    try {
-      if (!window.html2canvas) {
-        var h2cUrls = ["https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js","https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js","https://unpkg.com/html2canvas@1.4.1/dist/html2canvas.min.js"];
-        for (var hi = 0; hi < h2cUrls.length; hi++) { try { await new Promise(function(res,rej){var s=document.createElement("script");s.src=h2cUrls[hi];s.onload=res;s.onerror=rej;document.head.appendChild(s);}); if(window.html2canvas)break; } catch(e){} }
-        if (!window.html2canvas) throw new Error("html2canvas failed");
-      }
-      if (!window.jspdf) {
-        var jpUrls = ["https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js","https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js","https://unpkg.com/jspdf@2.5.2/dist/jspdf.umd.min.js"];
-        for (var ji = 0; ji < jpUrls.length; ji++) { try { await new Promise(function(res,rej){var s=document.createElement("script");s.src=jpUrls[ji];s.onload=res;s.onerror=rej;document.head.appendChild(s);}); if(window.jspdf)break; } catch(e){} }
-        if (!window.jspdf) throw new Error("jsPDF failed");
-      }
-      var canvas = await html2canvas(el, { scale: 2, useCORS: true, backgroundColor: "#ffffff" });
-      var imgData = canvas.toDataURL("image/jpeg", 0.95);
-      var pdf = new jspdf.jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
-      var pW = pdf.internal.pageSize.getWidth(), pH = pdf.internal.pageSize.getHeight();
-      var iW = pW - 20, iH = (canvas.height / canvas.width) * iW;
-      if (iH > pH - 20) { iW = iW * (pH - 20) / iH; iH = pH - 20; }
-      pdf.addImage(imgData, "JPEG", 10, 10, iW, iH);
-      setPdfReady(pdf.output("blob"));
-    } catch(err) { alert("PDF failed: " + err.message); }
-  };
-  const sendWhatsApp = function() {
-    var phone = waPhone;
-    var thankMsg = "Thank you for visiting " + PH.name + "! Your bill " + bill.billNo + " for Rs." + f2(bill.netAmount) + " is attached. For any orders or enquiries, just call or WhatsApp us on +917619639377. We are happy to help! Get well soon!";
-    var shared = false;
-
-    if (pdfReady) {
-      var pdfFile = new File([pdfReady], "Bill_" + bill.billNo + ".pdf", { type: "application/pdf" });
-      try {
-        if (navigator.share && navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
-          navigator.share({ title: "Bill " + bill.billNo, text: thankMsg, files: [pdfFile] }).then(function() {
-            // After share completes, open WhatsApp chat with template message
-            if (phone) (function openWA(p, t) {
-              var encoded = encodeURIComponent(t);
-              var isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
-              if (isMobile) {
-                var intentUrl = "intent://send?phone=" + p + "&text=" + encoded + "#Intent;scheme=whatsapp;package=com.whatsapp;end;";
-                var waUrl = "https://api.whatsapp.com/send?phone=" + p + "&text=" + encoded;
-                // Try intent for Android
-                if (/Android/i.test(navigator.userAgent)) {
-                  location.href = intentUrl;
-                } else {
-                  // iOS - use api.whatsapp.com
-                  location.href = waUrl;
-                }
-              } else {
-                window.open("https://web.whatsapp.com/send?phone=" + p + "&text=" + encoded, "_blank");
-              }
-            })(phone, thankMsg);
-          }).catch(function() {
-            // User cancelled share or error - still open WhatsApp with text
-            if (phone) (function openWA(p, t) {
-              var encoded = encodeURIComponent(t);
-              var isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
-              if (isMobile) {
-                var intentUrl = "intent://send?phone=" + p + "&text=" + encoded + "#Intent;scheme=whatsapp;package=com.whatsapp;end;";
-                var waUrl = "https://api.whatsapp.com/send?phone=" + p + "&text=" + encoded;
-                // Try intent for Android
-                if (/Android/i.test(navigator.userAgent)) {
-                  location.href = intentUrl;
-                } else {
-                  // iOS - use api.whatsapp.com
-                  location.href = waUrl;
-                }
-              } else {
-                window.open("https://web.whatsapp.com/send?phone=" + p + "&text=" + encoded, "_blank");
-              }
-            })(phone, thankMsg);
-          });
-          shared = true;
-        }
-      } catch(e) {}
-      if (!shared) {
-        // Fallback: download PDF
-        var a = document.createElement("a"); a.href = URL.createObjectURL(pdfReady); a.download = "Bill_" + bill.billNo + ".pdf"; a.click();
-      }
-    }
-    // If share API not available, open WhatsApp with text
-    if (!shared && phone) (function openWA(p, t) {
-              var encoded = encodeURIComponent(t);
-              var isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
-              if (isMobile) {
-                var intentUrl = "intent://send?phone=" + p + "&text=" + encoded + "#Intent;scheme=whatsapp;package=com.whatsapp;end;";
-                var waUrl = "https://api.whatsapp.com/send?phone=" + p + "&text=" + encoded;
-                // Try intent for Android
-                if (/Android/i.test(navigator.userAgent)) {
-                  location.href = intentUrl;
-                } else {
-                  // iOS - use api.whatsapp.com
-                  location.href = waUrl;
-                }
-              } else {
-                window.open("https://web.whatsapp.com/send?phone=" + p + "&text=" + encoded, "_blank");
-              }
-            })(phone, thankMsg);
-  };
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center", padding: 10 }}>
       <div style={{ background: "#fff", borderRadius: 12, width: "100%", maxWidth: 800, maxHeight: "95vh", overflow: "auto", padding: 20 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 6 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
           <b style={{ fontSize: 16 }}>Bill {fromHistory ? "" : "Generated"}</b>
-          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-            {!pdfReady && <button onClick={preparePdf} style={{ border: "none", borderRadius: 7, padding: "8px 14px", fontWeight: 600, cursor: "pointer", fontSize: 12, background: "#25D366", color: "#fff", fontFamily: "inherit" }}>Prepare WhatsApp Bill</button>}
-            {pdfReady && <button onClick={sendWhatsApp} style={{ border: "none", borderRadius: 7, padding: "8px 14px", fontWeight: 600, cursor: "pointer", fontSize: 12, background: "#25D366", color: "#fff", fontFamily: "inherit", animation: "fadeIn 0.3s" }}>Send via WhatsApp</button>}
-            <button onClick={function() { var el = document.getElementById("bill-print-area"); if (el) { var w = window.open("","_blank"); w.document.write("<html><head><title>Bill_" + bill.billNo + "</title><style>body{font-family:sans-serif;font-size:12px;padding:0;max-width:800px;margin:0 auto}table{width:100%;border-collapse:collapse}th,td{border:1px solid #333;padding:8px;font-size:12px}th{background:#f2f2f2;text-align:left}</style></head><body>" + el.innerHTML + "</body></html>"); w.document.close(); w.print(); } }} style={{ ...bts(true), padding: "8px 14px", fontSize: 12 }}>Print</button>
-            {fromHistory && !dlLink && <button onClick={makePdf} style={{ ...bts(false), padding: "8px 14px", fontSize: 12 }}>Download</button>}
-            {fromHistory && dlLink && <a href={dlLink} download={"Bill_" + bill.billNo + ".html"} style={{ padding: "8px 14px", background: "#059669", color: "#fff", borderRadius: 7, fontSize: 12, fontWeight: 600, textDecoration: "none" }}>Save File</a>}
-            <button onClick={() => { setDlLink(null); onClose(); }} style={{ ...bts(false), padding: "8px 14px", fontSize: 12 }}>Close</button>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {fromHistory && !dlLink && <button onClick={makePdf} style={{ ...bts(true) }}>Prepare PDF</button>}
+            {fromHistory && dlLink && <a href={dlLink} download={"Bill_" + bill.billNo + ".html"} style={{ padding: "8px 16px", background: "#059669", color: "#fff", borderRadius: 7, fontSize: 13, fontWeight: 600, textDecoration: "none" }}>Download PDF</a>}
+            <button onClick={() => { setDlLink(null); onClose(); }} style={{ ...bts(false) }}>Close</button>
           </div></div>
         <div id="bill-print-area" style={{ fontFamily: "sans-serif", fontSize: 12, border: "1px solid #ccc" }}>
           {/* Dark header */}
@@ -1054,7 +1353,7 @@ function Login({ onLogin }) {
 // ══════════════════════════════════════════════
 function Sidebar({ page, setPage, user, onLogout, counts, mob, sideOpen, setSideOpen }) {
   const isO = user.role === "owner";
-  const nav = [{ id: "dash", i: "📊", l: "Dashboard" }, ...(isO ? [{ id: "purch", i: "📦", l: "Purchases" }, { id: "returns", i: "↩️", l: "Returns" }] : []), { id: "inv", i: "💊", l: "Inventory" }, { id: "rack", i: "🗄", l: "Racks" }, ...(isO ? [{ id: "audit", i: "📝", l: "Audit" }] : []), { id: "bill", i: "🧾", l: "New Bill" }, ...(isO ? [{ id: "profit", i: "💹", l: "Profit Margin" }] : []), { id: "stock", i: "📋", l: "Stock" }, { id: "hist", i: "🗂", l: "Bills" }, ...(isO ? [{ id: "reports", i: "📑", l: "Reports" }] : []), { id: "customers", i: "👤", l: "Customers" }, { id: "compare", i: "⚖️", l: "Price Compare" }, { id: "ency", i: "📚", l: "Encyclopedia" }, ...(isO ? [{ id: "users", i: "👥", l: "Users" }, { id: "backup", i: "💾", l: "Backup" }] : [])];
+  const nav = [{ id: "dash", i: "📊", l: "Dashboard" }, ...(isO ? [{ id: "purch", i: "📦", l: "Purchases" }, { id: "returns", i: "↩️", l: "Returns" }] : []), { id: "inv", i: "💊", l: "Inventory" }, { id: "rack", i: "🗄", l: "Racks" }, ...(isO ? [{ id: "audit", i: "📝", l: "Audit" }] : []), { id: "bill", i: "🧾", l: "New Bill" }, ...(isO ? [{ id: "profit", i: "💹", l: "Profit Margin" }] : []), { id: "stock", i: "📋", l: "Stock" }, { id: "expiry", i: "⏰", l: "Expiry" }, { id: "hist", i: "🗂", l: "Bills" }, ...(isO ? [{ id: "reports", i: "📑", l: "Reports" }] : []), { id: "customers", i: "👤", l: "Customers" }, { id: "compare", i: "⚖️", l: "Price Compare" }, { id: "ency", i: "📚", l: "Encyclopedia" }, ...(isO ? [{ id: "users", i: "👥", l: "Users" }, { id: "backup", i: "💾", l: "Backup" }] : [])];
   if (mob && !sideOpen) return null;
   return (
     <div>
@@ -1147,11 +1446,11 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm, inv, s
           alert("PDF parsed but no items detected. Try a cleaner PDF or CSV.");
         }
       } else {
-        setImgStatus("Reading invoice...");
+        setImgStatus("Running advanced OCR (9 passes, ~60s)...");
         const text = await extractImageBillText(file, (m) => {
           if (m && m.progress !== undefined) {
             const pct = Math.round(m.progress * 100);
-            setImgStatus("Reading invoice " + pct + "%...");
+            setImgStatus("Advanced OCR " + pct + "% - reading bill...");
           }
         });
         setImgStatus("Parsing table structure...");
@@ -1481,7 +1780,16 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
           {templateLink && <a href={templateLink} download="AtoZ_Inventory_Template.csv" style={{ padding: "8px 16px", background: "#059669", color: "#fff", borderRadius: 7, fontSize: 12, fontWeight: 600, textDecoration: "none" }}>Download Template</a>}
           <input ref={bulkRef} type="file" accept=".csv" onChange={handleBulkCSV} style={{ display: "none" }} />
           <button onClick={() => bulkRef.current && bulkRef.current.click()} style={{ ...bts(true), fontSize: 12 }}>Upload CSV</button></div></div>}
-      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, batch, UID, distributor..." style={{ ...inps, marginBottom: 14 }} />
+      <div style={{ position: "relative", marginBottom: 14 }}>
+      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, batch, UID, distributor... (tap mic)" style={{ ...inps, paddingRight: 40, width: "100%" }} />
+      <button onClick={function() {
+        var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SR) { alert("Voice not supported"); return; }
+        var r = new SR(); r.lang = "en-IN"; r.continuous = false; r.interimResults = false;
+        r.onresult = function(e) { if (e.results && e.results[0]) { var t = e.results[0][0].transcript || ""; setQ(t.trim()); } };
+        r.onerror = function() {}; r.start();
+      }} style={{ position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 20, padding: 4 }} title="Voice Search">🎤</button>
+      </div>
       {sf && <div style={{ ...cds, border: "2px solid #0D6B5B" }}><b style={{ color: "#0D6B5B" }}>{ed ? "Edit" : "Add"} Medicine</b>
         <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "1fr 1fr 1fr 1fr", gap: 10, marginTop: 12 }}>
           {[["name","Name*"],["manufacturer","Mfg"],["batch","Batch*"],["expiry","Expiry"],["pack","Pack"],["rack","Rack"],["distributor","Distributor"],["hsn","HSN"]].map(([k, l]) => <div key={k}><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>{l}</label><input value={fm[k] || ""} onChange={(e) => setFm((f) => ({ ...f, [k]: e.target.value }))} style={inps} /></div>)}
@@ -1849,7 +2157,16 @@ function BillPage({ inv, saveInv, addBill, mob, showBill }) {
       <div style={cds}><b style={{ color: "#0D6B5B", fontSize: 13 }}>Add Medicines</b>
         <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
           <div style={{ flex: 1, position: "relative", minWidth: 200 }}>
-            <input value={sq} onChange={(e) => { setSq(e.target.value); setSo(true); }} onFocus={() => setSo(true)} onBlur={() => setTimeout(() => setSo(false), 200)} placeholder="Name or UID..." style={{ ...inps, fontSize: 15, padding: "12px 14px", border: "2px solid #D4D0C8" }} />
+            <div style={{ position: "relative", flex: 1 }}>
+            <input value={sq} onChange={(e) => { setSq(e.target.value); setSo(true); }} onFocus={() => setSo(true)} onBlur={() => setTimeout(() => setSo(false), 200)} placeholder="Name or UID... (tap mic to speak)" style={{ ...inps, fontSize: 15, padding: "12px 14px", paddingRight: 40, border: "2px solid #D4D0C8", width: "100%" }} />
+            <button onClick={function() {
+              var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+              if (!SR) { alert("Voice not supported"); return; }
+              var r = new SR(); r.lang = "en-IN"; r.continuous = false; r.interimResults = false;
+              r.onresult = function(e) { if (e.results && e.results[0]) { var t = e.results[0][0].transcript || ""; setSq(t.trim()); setSo(true); } };
+              r.onerror = function() {}; r.start();
+            }} style={{ position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 20, padding: 4 }} title="Voice Search">🎤</button>
+            </div>
             {so && res.length > 0 && <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: "1px solid #ddd", borderRadius: 8, boxShadow: "0 8px 24px rgba(0,0,0,.12)", maxHeight: 220, overflowY: "auto", zIndex: 100 }}>
               {res.map((m) => (<button key={m.id} onClick={() => addIt(m)} style={{ display: "flex", justifyContent: "space-between", width: "100%", padding: "10px 14px", border: "none", borderBottom: "1px solid #f5f5f0", background: m.stock <= 0 ? "#FEF2F2" : "transparent", cursor: "pointer", textAlign: "left", fontSize: 13 }}><span><b>{m.name}</b> {m.uid && <span style={{ color: "#7C3AED", fontSize: 10 }}>({m.uid})</span>} - {m.batch}</span><span style={{ display: "flex", gap: 8, alignItems: "center", whiteSpace: "nowrap", marginLeft: 8 }}><span style={{ fontWeight: 700, fontSize: 12, color: m.stock <= 0 ? "#DC2626" : m.stock < 3 ? "#D97706" : "#059669", background: m.stock <= 0 ? "#FEE2E2" : m.stock < 3 ? "#FEF3C7" : "#D1FAE5", padding: "2px 6px", borderRadius: 4 }}>{fStock(m.stock, m.packQty)}</span><span style={{ color: "#0D6B5B", fontWeight: 600 }}>Rs.{f2(m.mrp)}</span></span></button>))}</div>}</div>
           <div>
@@ -4873,6 +5190,7 @@ function ReportsPage({ bills, inv, mob, showBill }) {
         <Stat icon="🏷" label="Discounts" value={"Rs." + f2(totalDisc)} color="#DC2626" />
         <Stat icon="📈" label={"Profit (" + f2(totalMargin) + "%)"} value={"Rs." + f2(totalProfit)} color={totalProfit >= 0 ? "#059669" : "#DC2626"} />
         <Stat icon="🚫" label="Out of Stock" value={inv.filter(function(m) { return !m.stock || m.stock <= 0; }).length} color="#DC2626" />
+        <Stat icon="⏰" label="Expiring (90d)" value={inv.filter(function(m) { if (!m.expiry || (m.stock||0) <= 0) return false; var parts = String(m.expiry).split(/[-\/]/); var yr = parts[0].length === 4 ? parseInt(parts[0]) : 2000 + parseInt(parts[0]); var ed = new Date(yr, (parseInt(parts[1])||1)-1, 28); return (ed - new Date()) / 86400000 <= 90; }).length} color="#D97706" />
       </div>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
@@ -5172,6 +5490,187 @@ function CustomersPage({ bills, mob, showBill }) {
   );
 }
 
+// ══════════════════════════════════════════════
+// EXPIRY MANAGEMENT PAGE
+// ══════════════════════════════════════════════
+function ExpiryPage({ inv, mob }) {
+  const [filter, setFilter] = useState("90");
+  const [q, setQ] = useState("");
+  const [sortBy, setSortBy] = useState("expiry");
+
+  var today = new Date();
+  var getExpiryDate = function(m) {
+    if (!m.expiry) return null;
+    var parts = String(m.expiry).split(/[-\/]/);
+    if (parts.length === 2) {
+      var yr = parts[0].length === 4 ? parseInt(parts[0]) : 2000 + parseInt(parts[0]);
+      var mo = parseInt(parts[1]) || 1;
+      return new Date(yr, mo - 1, 28);
+    }
+    if (parts.length === 3) {
+      var yr2 = parts[0].length === 4 ? parseInt(parts[0]) : 2000 + parseInt(parts[0]);
+      return new Date(yr2, (parseInt(parts[1]) || 1) - 1, parseInt(parts[2]) || 28);
+    }
+    return null;
+  };
+
+  var getDaysLeft = function(m) {
+    var ed = getExpiryDate(m);
+    if (!ed) return 9999;
+    return Math.floor((ed - today) / (1000 * 60 * 60 * 24));
+  };
+
+  var getStatus = function(days) {
+    if (days <= 0) return { label: "EXPIRED", color: "#DC2626", bg: "#FEF2F2" };
+    if (days <= 30) return { label: "< 1 Month", color: "#DC2626", bg: "#FEF2F2" };
+    if (days <= 60) return { label: "< 2 Months", color: "#EA580C", bg: "#FFF7ED" };
+    if (days <= 90) return { label: "< 3 Months", color: "#D97706", bg: "#FFFBEB" };
+    if (days <= 180) return { label: "< 6 Months", color: "#CA8A04", bg: "#FEFCE8" };
+    return { label: "OK", color: "#059669", bg: "#F0FDF4" };
+  };
+
+  var filtered = inv.filter(function(m) {
+    if (!m.expiry || (m.stock || 0) <= 0) return false;
+    var days = getDaysLeft(m);
+    if (filter === "expired") return days <= 0;
+    if (filter === "30") return days > 0 && days <= 30;
+    if (filter === "60") return days > 0 && days <= 60;
+    if (filter === "90") return days > 0 && days <= 90;
+    if (filter === "180") return days > 0 && days <= 180;
+    if (filter === "all") return true;
+    return days <= parseInt(filter) || 90;
+  }).filter(function(m) {
+    if (!q) return true;
+    var lq = q.toLowerCase();
+    return m.name.toLowerCase().indexOf(lq) >= 0 || (m.batch || "").toLowerCase().indexOf(lq) >= 0 || (m.manufacturer || "").toLowerCase().indexOf(lq) >= 0;
+  });
+
+  if (sortBy === "expiry") filtered.sort(function(a, b) { return getDaysLeft(a) - getDaysLeft(b); });
+  else if (sortBy === "name") filtered.sort(function(a, b) { return a.name.localeCompare(b.name); });
+  else if (sortBy === "stock") filtered.sort(function(a, b) { return (b.stock || 0) - (a.stock || 0); });
+  else if (sortBy === "value") filtered.sort(function(a, b) { return (b.mrp * (b.stock || 0)) - (a.mrp * (a.stock || 0)); });
+
+  // Summary counts
+  var expiredCount = inv.filter(function(m) { return m.expiry && (m.stock || 0) > 0 && getDaysLeft(m) <= 0; }).length;
+  var in30 = inv.filter(function(m) { return m.expiry && (m.stock || 0) > 0 && getDaysLeft(m) > 0 && getDaysLeft(m) <= 30; }).length;
+  var in60 = inv.filter(function(m) { return m.expiry && (m.stock || 0) > 0 && getDaysLeft(m) > 30 && getDaysLeft(m) <= 60; }).length;
+  var in90 = inv.filter(function(m) { return m.expiry && (m.stock || 0) > 0 && getDaysLeft(m) > 60 && getDaysLeft(m) <= 90; }).length;
+  var totalAtRisk = filtered.reduce(function(s, m) { return s + (m.mrp * (m.stock || 0)); }, 0);
+  var noExpiry = inv.filter(function(m) { return (m.stock || 0) > 0 && !m.expiry; }).length;
+
+  var printReport = function() {
+    var html = "<html><head><title>Expiry Report</title><style>body{font-family:sans-serif;font-size:11px;padding:20px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #999;padding:4px 6px;font-size:10px}th{background:#eee}.red{color:#DC2626;font-weight:700}.orange{color:#EA580C}.yellow{color:#D97706}</style></head><body>";
+    html += "<h2>A to Z Pharmacy - Expiry Report</h2><p>Generated: " + new Date().toLocaleDateString("en-IN") + " | Filter: " + filter + " days | Items: " + filtered.length + " | At-risk value: Rs." + f2(totalAtRisk) + "</p>";
+    html += "<table><tr><th>#</th><th>Medicine</th><th>Batch</th><th>Expiry</th><th>Days Left</th><th>Stock</th><th>MRP</th><th>Value</th><th>Status</th></tr>";
+    filtered.forEach(function(m, i) {
+      var days = getDaysLeft(m);
+      var st = getStatus(days);
+      html += "<tr><td>" + (i + 1) + "</td><td>" + m.name + "</td><td>" + (m.batch || "-") + "</td><td>" + (m.expiry || "-") + "</td><td class='" + (days <= 0 ? "red" : days <= 30 ? "red" : days <= 60 ? "orange" : "yellow") + "'>" + days + "</td><td>" + fStock(m.stock, m.packQty) + "</td><td>Rs." + f2(m.mrp) + "</td><td>Rs." + f2(m.mrp * (m.stock || 0)) + "</td><td>" + st.label + "</td></tr>";
+    });
+    html += "</table></body></html>";
+    var w = window.open("", "_blank"); if (w) { w.document.write(html); w.document.close(); w.print(); }
+  };
+
+  return (
+    <div><h2 style={hds}>Expiry Management</h2>
+
+      <div style={{ display: "grid", gridTemplateColumns: mob ? "repeat(2,1fr)" : "repeat(5,1fr)", gap: 10, marginBottom: 16 }}>
+        <div onClick={function() { setFilter("expired"); }} style={{ ...cds, cursor: "pointer", borderLeft: "4px solid #DC2626", background: filter === "expired" ? "#FEF2F2" : "#fff" }}>
+          <div style={{ fontSize: 24, fontWeight: 800, color: "#DC2626" }}>{expiredCount}</div><div style={{ fontSize: 10, color: "#888" }}>Expired</div></div>
+        <div onClick={function() { setFilter("30"); }} style={{ ...cds, cursor: "pointer", borderLeft: "4px solid #EA580C", background: filter === "30" ? "#FFF7ED" : "#fff" }}>
+          <div style={{ fontSize: 24, fontWeight: 800, color: "#EA580C" }}>{in30}</div><div style={{ fontSize: 10, color: "#888" }}>Within 30 days</div></div>
+        <div onClick={function() { setFilter("60"); }} style={{ ...cds, cursor: "pointer", borderLeft: "4px solid #D97706", background: filter === "60" ? "#FFFBEB" : "#fff" }}>
+          <div style={{ fontSize: 24, fontWeight: 800, color: "#D97706" }}>{in60}</div><div style={{ fontSize: 10, color: "#888" }}>30-60 days</div></div>
+        <div onClick={function() { setFilter("90"); }} style={{ ...cds, cursor: "pointer", borderLeft: "4px solid #CA8A04", background: filter === "90" ? "#FEFCE8" : "#fff" }}>
+          <div style={{ fontSize: 24, fontWeight: 800, color: "#CA8A04" }}>{in90}</div><div style={{ fontSize: 10, color: "#888" }}>60-90 days</div></div>
+        <div onClick={function() { setFilter("all"); }} style={{ ...cds, cursor: "pointer", borderLeft: "4px solid #059669", background: filter === "all" ? "#F0FDF4" : "#fff" }}>
+          <div style={{ fontSize: 24, fontWeight: 800, color: "#059669" }}>{inv.filter(function(m){return m.expiry && (m.stock||0)>0;}).length}</div><div style={{ fontSize: 10, color: "#888" }}>All with expiry</div></div>
+      </div>
+
+      {noExpiry > 0 && <div style={{ padding: "6px 12px", background: "#FEF3C7", borderRadius: 8, fontSize: 11, color: "#92400E", marginBottom: 12 }}>{noExpiry} medicines in stock have no expiry date set</div>}
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+        <input value={q} onChange={function(e) { setQ(e.target.value); }} placeholder="Search medicine, batch..." style={{ ...inps, flex: 1, minWidth: 180 }} />
+        <select value={sortBy} onChange={function(e) { setSortBy(e.target.value); }} style={{ ...inps, maxWidth: 150 }}>
+          <option value="expiry">Sort: Expiry (urgent first)</option>
+          <option value="name">Sort: Name A-Z</option>
+          <option value="stock">Sort: Stock (high first)</option>
+          <option value="value">Sort: Value (high first)</option>
+        </select>
+        <button onClick={printReport} style={{ ...bts(true), padding: "8px 16px", fontSize: 12 }}>Print Report</button>
+      </div>
+
+      <div style={{ ...cds, padding: "8px 14px", marginBottom: 12, display: "flex", justifyContent: "space-between", background: "#FEF2F2" }}>
+        <span style={{ fontWeight: 600 }}>{filtered.length} items | At-risk value: <b style={{ color: "#DC2626" }}>Rs.{f2(totalAtRisk)}</b></span>
+      </div>
+
+      {filtered.length === 0 ? <div style={{ ...cds, textAlign: "center", padding: 40, color: "#888" }}>
+        <div style={{ fontSize: 40, marginBottom: 12, opacity: 0.3 }}>✅</div>
+        <div style={{ fontSize: 14 }}>No medicines expiring in this period</div>
+      </div> :
+      <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
+        {["#","Medicine","Batch","Expiry","Days Left","Stock","MRP","Value","Status"].map(function(h) { return <th key={h} style={ths}>{h}</th>; })}</tr></thead><tbody>
+        {filtered.map(function(m, i) {
+          var days = getDaysLeft(m);
+          var st = getStatus(days);
+          return <tr key={m.id} style={{ background: st.bg }}>
+            <td style={{ ...tds, color: "#888" }}>{i + 1}</td>
+            <td style={{ ...tds, fontWeight: 600 }}>{m.name}</td>
+            <td style={{ ...tds, fontFamily: "monospace", fontSize: 11 }}>{m.batch || "-"}</td>
+            <td style={tds}>{m.expiry || "-"}</td>
+            <td style={{ ...tds, fontWeight: 800, color: st.color, fontSize: 14 }}>{days <= 0 ? "EXPIRED" : days + "d"}</td>
+            <td style={{ ...tds, fontWeight: 600 }}>{fStock(m.stock, m.packQty)}</td>
+            <td style={tds}>Rs.{f2(m.mrp)}</td>
+            <td style={{ ...tds, fontWeight: 600 }}>Rs.{f2(m.mrp * (m.stock || 0))}</td>
+            <td style={tds}><span style={{ padding: "2px 8px", borderRadius: 10, fontSize: 10, fontWeight: 600, background: st.bg, color: st.color, border: "1px solid " + st.color }}>{st.label}</span></td>
+          </tr>;
+        })}</tbody></table></div>}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════
+// VOICE SEARCH HOOK
+// ══════════════════════════════════════════════
+function useVoiceSearch(onResult) {
+  const [listening, setListening] = useState(false);
+  const recogRef = useRef(null);
+
+  const startListening = useCallback(function() {
+    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { alert("Voice search not supported on this browser"); return; }
+
+    if (recogRef.current) { recogRef.current.stop(); }
+    var recog = new SR();
+    recog.lang = "en-IN";
+    recog.continuous = false;
+    recog.interimResults = false;
+    recog.maxAlternatives = 3;
+
+    recog.onstart = function() { setListening(true); };
+    recog.onend = function() { setListening(false); };
+    recog.onerror = function(e) { setListening(false); };
+    recog.onresult = function(e) {
+      var text = "";
+      if (e.results && e.results.length > 0) {
+        text = e.results[0][0].transcript || "";
+      }
+      setListening(false);
+      if (text && onResult) onResult(text.trim());
+    };
+
+    recogRef.current = recog;
+    recog.start();
+  }, [onResult]);
+
+  var stopListening = function() {
+    if (recogRef.current) recogRef.current.stop();
+    setListening(false);
+  };
+
+  return { listening: listening, startListening: startListening, stopListening: stopListening };
+}
+
 // MAIN APP
 // ══════════════════════════════════════════════
 function App() {
@@ -5329,6 +5828,7 @@ function App() {
           {page === "bill" && <BillPage inv={inv} saveInv={saveInv} addBill={addBill} mob={mob} showBill={showBill} />}
           {page === "profit" && isO && <ProfitPage bills={bills} inv={inv} mob={mob} purch={purch} saveBills={saveBills} showBill={showBill} setPage={setPage} />}
           {page === "stock" && <StockPage inv={inv} saveInv={saveInv} isO={isO} mob={mob} />}
+          {page === "expiry" && <ExpiryPage inv={inv} mob={mob} />}
           {page === "hist" && <HistPage bills={bills} showBill={showBill} saveBills={saveBills} askConfirm={askConfirm} inv={inv} saveInv={saveInv} purch={purch} />}
           {page === "customers" && <CustomersPage bills={bills} mob={mob} showBill={showBill} />}
           {page === "reports" && isO && <ReportsPage bills={bills} inv={inv} mob={mob} showBill={showBill} />}
