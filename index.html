@@ -1686,7 +1686,7 @@ function purchCalcAmt(it) {
 // PURCHASES PAGE
 // ══════════════════════════════════════════════
 function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm, inv, saveInv, bills, saveBills }) {
-  const [tab, setTab] = useState("csv"); const [imgP, setImgP] = useState(false); const [imgStatus, setImgStatus] = useState(""); const [rev, setRev] = useState(null); const [distSite, setDistSite] = useState(null);
+  const [tab, setTab] = useState("csv"); const [imgP, setImgP] = useState(false); const [imgStatus, setImgStatus] = useState(""); const [rev, setRev] = useState(null);
   const csvR = useRef(null); const imgR = useRef(null);
   const empty = { name: "", manufacturer: "", hsn: "300490", batch: "", expiry: "", pack: "", mrp: 0, qty: 1, ptr: 0, gstRate: 5, rack: "", packQty: 0, discPct: 0, schemePct: 0, freeQty: 0, amount: 0 };
   const [mf, setMf] = useState({ inv: "", sup: "", date: "", items: [{ ...empty }] });
@@ -1856,7 +1856,7 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm, inv, s
           <b style={{ color: "#0D6B5B", fontSize: 14 }}>Total: Rs.{f2(rev.items.reduce((s, i) => s + (i.amount || purchCalcAmt(i)), 0))}</b></div>
       </div>) : (<div style={cds}>
         <div style={{ display: "flex", gap: 3, background: "#E8E4DD", borderRadius: 8, padding: 3, marginBottom: 16 }}>
-          {[["csv","CSV"],["image","Photo/PDF"],["manual","Manual"],["dist","Distributors"]].map(([id, l]) => <button key={id} onClick={() => setTab(id)} style={{ flex: 1, padding: 8, border: "none", borderRadius: 6, fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: tab === id ? "#fff" : "transparent", color: tab === id ? "#0D6B5B" : "#888", boxShadow: tab === id ? "0 1px 3px rgba(0,0,0,.1)" : "none" }}>{l}</button>)}</div>
+          {[["csv","CSV"],["image","Photo/PDF"],["manual","Manual"]].map(([id, l]) => <button key={id} onClick={() => setTab(id)} style={{ flex: 1, padding: 8, border: "none", borderRadius: 6, fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: tab === id ? "#fff" : "transparent", color: tab === id ? "#0D6B5B" : "#888", boxShadow: tab === id ? "0 1px 3px rgba(0,0,0,.1)" : "none" }}>{l}</button>)}</div>
         {tab === "csv" && <div style={{ border: "2px dashed #bbb", borderRadius: 10, padding: 36, textAlign: "center", cursor: "pointer", background: "#FAFAF7" }} onClick={() => csvR.current && csvR.current.click()}><input ref={csvR} type="file" accept=".csv" onChange={doCSV} style={{ display: "none" }} /><div style={{ fontSize: 36 }}>📄</div><div style={{ fontSize: 14, fontWeight: 600, color: "#555", marginTop: 8 }}>Upload CSV</div></div>}
         {tab === "image" && <div style={{ border: "2px dashed #bbb", borderRadius: 10, padding: 36, textAlign: "center", cursor: "pointer", background: "#FAFAF7" }} onClick={() => !imgP && imgR.current && imgR.current.click()}><input ref={imgR} type="file" accept="image/*,.pdf,application/pdf" onChange={doImg} style={{ display: "none" }} />{imgP ? <div><div style={{ fontSize: 36 }}>🔄</div><div style={{ fontSize: 14, fontWeight: 600, color: "#0D6B5B", marginTop: 8 }}>{imgStatus || "Processing..."}</div><div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>Advanced OCR — do not close this page</div></div> : <div><div style={{ fontSize: 36 }}>📸</div><div style={{ fontSize: 14, fontWeight: 600, color: "#555", marginTop: 8 }}>Upload Invoice (Photo or PDF)</div></div>}</div>}
         {tab === "manual" && <div>
@@ -1871,53 +1871,7 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm, inv, s
           <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
             <button onClick={() => setMf((p) => ({ ...p, items: [...p.items, { ...empty }] }))} style={bts(false)}>+ Row</button>
             <button onClick={() => { if (!mf.sup || (mf.items[0] && !mf.items[0].name)) { alert("Fill supplier and name"); return; } const items = mf.items.filter((i) => i.name).map((i) => ({ ...i, amount: purchCalcAmt(i) })); setRev({ supplier: mf.sup, invoiceNo: mf.inv, date: mf.date, items, srcType: "manual", srcFile: "" }); }} style={bts(true)}>Preview</button></div></div>}
-        {tab === "dist" && <div>
-          <div style={{ fontSize: 13, color: "#555", marginBottom: 14 }}>Login to distributor portals directly. Place orders, then download invoice CSV/PDF and upload to add to inventory.</div>
-          {!distSite ? <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 12 }}>
-            <div onClick={function(){setDistSite("focus");}} style={{ ...cds, border: "2px solid #D4D0C8", textAlign: "center", cursor: "pointer" }}>
-              <div style={{ fontSize: 32, marginBottom: 8 }}>🏪</div>
-              <b style={{ fontSize: 14 }}>Focus Online Order</b>
-              <div style={{ fontSize: 11, color: "#888", margin: "6px 0" }}>Whitefield Distributor</div>
-              <div style={{ padding: "8px 20px", background: "#0D6B5B", color: "#fff", borderRadius: 8, display: "inline-block", fontWeight: 600, fontSize: 13 }}>Open</div>
-            </div>
-            <div onClick={function(){setDistSite("fgt");}} style={{ ...cds, border: "2px solid #D4D0C8", textAlign: "center", cursor: "pointer" }}>
-              <div style={{ fontSize: 32, marginBottom: 8 }}>🏪</div>
-              <b style={{ fontSize: 14 }}>FGT Banas Order</b>
-              <div style={{ fontSize: 11, color: "#888", margin: "6px 0" }}>Banas Distributor</div>
-              <div style={{ padding: "8px 20px", background: "#0D6B5B", color: "#fff", borderRadius: 8, display: "inline-block", fontWeight: 600, fontSize: 13 }}>Open</div>
-            </div>
-            <div onClick={function(){setDistSite("udaan");}} style={{ ...cds, border: "2px solid #2563EB", textAlign: "center", cursor: "pointer" }}>
-              <div style={{ fontSize: 32, marginBottom: 8 }}>🛒</div>
-              <b style={{ fontSize: 14 }}>Udaan</b>
-              <div style={{ fontSize: 11, color: "#888", margin: "6px 0" }}>B2B Pharma Marketplace</div>
-              <div style={{ padding: "8px 20px", background: "#2563EB", color: "#fff", borderRadius: 8, display: "inline-block", fontWeight: 600, fontSize: 13 }}>Open</div>
-            </div>
-            <div style={{ ...cds, border: "2px dashed #bbb", textAlign: "center", cursor: "pointer" }} onClick={function() { setTab("csv"); }}>
-              <div style={{ fontSize: 32, marginBottom: 8 }}>📥</div>
-              <b style={{ fontSize: 14, color: "#0D6B5B" }}>Upload Invoice</b>
-              <div style={{ fontSize: 11, color: "#888", margin: "6px 0" }}>Upload downloaded CSV/PDF</div>
-            </div>
-          </div> : <div>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-              <b style={{ fontSize: 14 }}>{distSite === "focus" ? "Focus Online Order" : distSite === "fgt" ? "FGT Banas Order" : "Udaan"}</b>
-              <div style={{ display: "flex", gap: 6 }}>
-                <a href={distSite === "focus" ? "http://whitefield.float-zone.com:8080/FocusOnlineOrder/Default.aspx" : distSite === "fgt" ? "http://fgtbanas.fortiddns.com:8080/OnlineOrder/Default.aspx" : "https://udaan.com/main?selectedTabId=Pharma&navId=pharma"} target="_blank" rel="noopener noreferrer" style={{ ...bts(false), padding: "5px 12px", fontSize: 11, textDecoration: "none", display: "inline-block" }}>New Tab</a>
-                <button onClick={function(){setDistSite(null);}} style={bts(false)}>Back</button>
-              </div>
-            </div>
-            <div style={{ borderRadius: 12, overflow: "hidden", border: "2px solid #D4D0C8" }}>
-              <iframe
-                src={PROXY_URL + "/proxy?target=" + encodeURIComponent(distSite === "focus" ? "http://whitefield.float-zone.com:8080" : distSite === "fgt" ? "http://fgtbanas.fortiddns.com:8080" : "https://udaan.com") + "&path=" + encodeURIComponent(distSite === "focus" ? "/FocusOnlineOrder/Default.aspx" : distSite === "fgt" ? "/OnlineOrder/Default.aspx" : "/main?selectedTabId=Pharma&navId=pharma")}
-                style={{ width: "100%", height: mob ? 500 : 650, border: "none" }}
-                title="Distributor Portal"
-                sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-top-navigation"
-              />
-            </div>
-            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-              <button onClick={function() { setTab("csv"); setDistSite(null); }} style={bts(true)}>Upload Downloaded Invoice</button>
-            </div>
-          </div>}
-        </div>}
+
       </div>)}
       <div style={cds}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
