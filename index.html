@@ -179,7 +179,7 @@ async function saveOTP(email, otp) {
 }
 async function verifyOTP(email, enteredOtp) {
   const key = email.replace(/\./g, "_").replace(/@/g, "__");
-  const snap = await new Promise(res => db.ref(dbPath("otps/" + key)).once("value", res));
+  const snap = await new Promise(res => db.ref("otps/" + key).once("value", res));
   const data = snap.val();
   if (!data) return { ok: false, err: "No OTP found. Please request again." };
   if (Date.now() - data.ts > 10 * 60 * 1000) return { ok: false, err: "OTP expired. Please request again." };
@@ -191,7 +191,7 @@ async function verifyOTP(email, enteredOtp) {
 // Load user profile from Firebase
 async function loadUserProfile(email) {
   const key = email.replace(/\./g, "_").replace(/@/g, "__");
-  const snap = await new Promise(res => db.ref(dbPath("userProfiles/" + key)).once("value", res));
+  const snap = await new Promise(res => db.ref("userProfiles/" + key).once("value", res));
   return snap.val();
 }
 // Save user profile
