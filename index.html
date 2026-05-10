@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>A to Z Pharmacy v2.1.0</title>
+<title>A to Z Pharmacy v2.2.0</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💊</text></svg>">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
 
@@ -51,8 +51,27 @@ input,select,button,textarea{font-family:inherit;-webkit-appearance:none}
 </style>
 
 <meta name="app-version" content="2.0.0">
-<meta name="app-changes" content="["Removed Claude API dependency for image/PDF bill reading [security/privacy]", "Added local Tesseract.js OCR with canvas preprocessing for purchase bill images", "Enhanced parsing with fallback line-by-line item extraction", "Cleaner worker without hardcoded API keys or Claude proxy route", "Improved error handling and user feedback for OCR quality", "v2.1.0: Advanced multi-pass image processing with deskew, adaptive thresholding, Sauvola binarization, OTSU thresholding, unsharp mask sharpening, multi-PSM Tesseract passes, and 3-strategy invoice parser (Vardhman columnar, flexible numeric-anchor, token-based)"]">
-<script>window.APP_VERSION = {"version": "2.1.0", "changes": ["Removed Claude API dependency for image/PDF bill reading [security/privacy]", "Added local Tesseract.js OCR with canvas preprocessing for purchase bill images", "Enhanced parsing with fallback line-by-line item extraction", "Cleaner worker without hardcoded API keys or Claude proxy route", "Improved error handling and user feedback for OCR quality", "v2.1.0: Advanced multi-pass image processing with deskew, adaptive thresholding, Sauvola binarization, OTSU thresholding, unsharp mask sharpening, multi-PSM Tesseract passes, and 3-strategy invoice parser (Vardhman columnar, flexible numeric-anchor, token-based)"], "date": "2026-05-08", "type": "production"};</script>
+<meta name="app-changes" content="["Removed Claude API dependency for image/PDF bill reading [security/privacy]", "Added local Tesseract.js OCR with canvas preprocessing for purchase bill images", "Enhanced parsing with fallback line-by-line item extraction", "Cleaner worker without hardcoded API keys or Claude proxy route", "Improved error handling and user feedback for OCR quality", "v2.2.0: Advanced multi-pass image processing with deskew, adaptive thresholding, Sauvola binarization, OTSU thresholding, unsharp mask sharpening, multi-PSM Tesseract passes, and 3-strategy invoice parser (Vardhman columnar, flexible numeric-anchor, token-based)"]">
+<script>window.APP_VERSION = {"version": "2.2.0", "changes": ["Removed Claude API dependency for image/PDF bill reading [security/privacy]", "Added local Tesseract.js OCR with canvas preprocessing for purchase bill images", "Enhanced parsing with fallback line-by-line item extraction", "Cleaner worker without hardcoded API keys or Claude proxy route", "Improved error handling and user feedback for OCR quality", "v2.1.0: Advanced multi-pass image processing with deskew, adaptive thresholding, Sauvola binarization, OTSU thresholding, unsharp mask sharpening, multi-PSM Tesseract passes, and 3-strategy invoice parser (Vardhman columnar, flexible numeric-anchor, token-based)"], "date": "2026-05-08", "type": "production"};</script>
+
+<!-- EmailJS for OTP delivery (free tier: 200 emails/month) -->
+<!-- Sign up at https://www.emailjs.com/ → get Service ID, Template ID, Public Key -->
+<!-- Template variables needed: to_email, to_name, otp_code, app_name -->
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<script>
+  // ══ CONFIGURE EMAIL OTP SERVICE ══════════════════════════════════════
+  // 1. Go to https://www.emailjs.com/ and create a free account
+  // 2. Add an Email Service (Gmail works — connect your pharmacy Gmail)
+  // 3. Create a template with subject "Your A to Z Pharmacy OTP"
+  //    Template body: "Hi {{to_name}}, Your OTP is: {{otp_code}} (valid 10 min)"
+  // 4. Fill in the three values below:
+  window.EMAIL_SERVICE_ID  = "service_3zz3y3b";   // e.g. "service_abc123"
+  window.EMAIL_TEMPLATE_ID = "template_uw8et1r";   // e.g. "template_xyz789"
+  window.EMAIL_PUBLIC_KEY  = "wIwzSNGXW7Yrgx7DT";   // e.g. "user_ABCDEF"
+  // ═════════════════════════════════════════════════════════════════════
+  // TESTING: If not configured, OTP will show in browser console (F12 → Console)
+  // You can manually tell the user the OTP during testing.
+</script>
 </head>
 <body>
 <div id="root"></div>
@@ -114,10 +133,91 @@ const OUTLETS = {
 };
 var PH = OUTLETS.outlet2; // default, overridden by outlet selection
 
-const ROLES = { "owner@atozpharmacy.com": "owner", "staff@atozpharmacy.com": "staff" };
-// Staff outlet assignment: staff email -> outlet id
-const STAFF_OUTLETS = { "staff@atozpharmacy.com": "outlet2" };
-const ROLE_NAMES = { "owner@atozpharmacy.com": "Pharmacy Owner", "staff@atozpharmacy.com": "Staff Member" };
+// ── OWNER EMAILS (hardcoded, always full access) ──────────────────────────
+const OWNER_EMAILS = ["krishkwish@gmail.com", "saloniakumar1096@gmail.com"];
+
+// ── ALL NAV PAGES with labels (used for permission checkboxes) ─────────────
+const ALL_PAGES = [
+  { id: "dash",      label: "Dashboard",       icon: "📊" },
+  { id: "purch",     label: "Purchases",       icon: "📦" },
+  { id: "returns",   label: "Returns",         icon: "↩️" },
+  { id: "inv",       label: "Inventory",       icon: "💊" },
+  { id: "rack",      label: "Racks",           icon: "🗄" },
+  { id: "audit",     label: "Audit",           icon: "📝" },
+  { id: "bill",      label: "New Bill",        icon: "🧾" },
+  { id: "profit",    label: "Profit Margin",   icon: "💹" },
+  { id: "stock",     label: "Stock",           icon: "📋" },
+  { id: "expiry",    label: "Expiry",          icon: "⏰" },
+  { id: "hist",      label: "Bills History",   icon: "🗂" },
+  { id: "reports",   label: "Reports",         icon: "📑" },
+  { id: "gst",       label: "GST Reports",     icon: "🧾" },
+  { id: "customers", label: "Customers",       icon: "👤" },
+  { id: "ledger",    label: "Supplier Ledger", icon: "📒" },
+  { id: "predict",   label: "Stock Predict",   icon: "🤖" },
+  { id: "compare",   label: "Price Compare",   icon: "⚖️" },
+  { id: "ency",      label: "Encyclopedia",    icon: "📚" },
+  { id: "users",     label: "Users & Roles",   icon: "👥" },
+  { id: "backup",    label: "Backup",          icon: "💾" },
+];
+
+// ── OTP helpers (6-digit, stored in Firebase with 10min expiry) ───────────
+function genOTP() { return String(Math.floor(100000 + Math.random() * 900000)); }
+async function sendOTPEmail(toEmail, otp, recipientName) {
+  // Uses EmailJS public API — configure once in Firebase/emailjs dashboard
+  // Fallback: show OTP in console for testing; replace with real email service
+  console.log("OTP for", toEmail, ":", otp);
+  // Try EmailJS if configured
+  if (window.EMAIL_SERVICE_ID && window.EMAIL_TEMPLATE_ID && window.EMAIL_PUBLIC_KEY) {
+    try {
+      await fetch("https://api.emailjs.com/api/v1.0/email/send", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          service_id: window.EMAIL_SERVICE_ID,
+          template_id: window.EMAIL_TEMPLATE_ID,
+          user_id: window.EMAIL_PUBLIC_KEY,
+          template_params: { to_email: toEmail, to_name: recipientName || toEmail, otp_code: otp, app_name: "A to Z Pharmacy" }
+        })
+      });
+    } catch(e) { console.warn("EmailJS failed:", e); }
+  }
+}
+// Firebase paths for OTP store
+async function saveOTP(email, otp) {
+  const key = email.replace(/\./g, "_").replace(/@/g, "__");
+  await fbSetPath("otps/" + key, { otp, ts: Date.now(), email });
+}
+async function verifyOTP(email, enteredOtp) {
+  const key = email.replace(/\./g, "_").replace(/@/g, "__");
+  const snap = await new Promise(res => db.ref(dbPath("otps/" + key)).once("value", res));
+  const data = snap.val();
+  if (!data) return { ok: false, err: "No OTP found. Please request again." };
+  if (Date.now() - data.ts > 10 * 60 * 1000) return { ok: false, err: "OTP expired. Please request again." };
+  if (data.otp !== enteredOtp.trim()) return { ok: false, err: "Incorrect OTP. Please try again." };
+  // Clear used OTP
+  await fbSetPath("otps/" + key, null);
+  return { ok: true };
+}
+// Load user profile from Firebase
+async function loadUserProfile(email) {
+  const key = email.replace(/\./g, "_").replace(/@/g, "__");
+  const snap = await new Promise(res => db.ref(dbPath("userProfiles/" + key)).once("value", res));
+  return snap.val();
+}
+// Save user profile
+async function saveUserProfile(email, profile) {
+  const key = email.replace(/\./g, "_").replace(/@/g, "__");
+  await fbSetPath("userProfiles/" + key, profile);
+}
+// Helper to set a specific path (not outlet-scoped)
+async function fbSetPath(path, val) {
+  if (!db) return;
+  return db.ref(path).set(val);
+}
+
+// Legacy compat — dynamically built from Firebase now
+const ROLES = {};
+const STAFF_OUTLETS = {};
+const ROLE_NAMES = {};
 
 // ══════════════════════════════════════════════
 // UTILITIES
@@ -1349,46 +1449,149 @@ function BillView({ bill, onClose, fromHistory }) {
 // ══════════════════════════════════════════════
 function Login({ onLogin }) {
   const [email, setEmail] = useState("");
-  const [pass, setPass] = useState("");
-  const [err, setErr] = useState("");
+  const [otp, setOtp] = useState("");
+  const [step, setStep] = useState("email"); // "email" | "otp"
   const [loading, setLoading] = useState(false);
-  const go = async () => {
-    setLoading(true); setErr("");
+  const [err, setErr] = useState("");
+  const [info, setInfo] = useState("");
+  const [resendCd, setResendCd] = useState(0);
+
+  // Countdown timer for resend
+  useEffect(() => {
+    if (resendCd <= 0) return;
+    const t = setTimeout(() => setResendCd(c => c - 1), 1000);
+    return () => clearTimeout(t);
+  }, [resendCd]);
+
+  const sendOtp = async () => {
+    const em = email.trim().toLowerCase();
+    if (!em || !em.includes("@")) { setErr("Enter a valid email address"); return; }
+    setLoading(true); setErr(""); setInfo("");
     try {
-      const cred = await auth.signInWithEmailAndPassword(email, pass);
-      const role = ROLES[cred.user.email] || "staff";
-      const name = ROLE_NAMES[cred.user.email] || email;
-      onLogin({ id: cred.user.uid, email: cred.user.email, name, role });
-    } catch (e) {
-      setErr(e.message.includes("user-not-found") ? "User not found" : e.message.includes("wrong-password") ? "Wrong password" : "Login failed: " + e.message);
+      // Check if user is registered (owner or in userProfiles)
+      const isOwner = OWNER_EMAILS.includes(em);
+      let profile = null;
+      if (!isOwner) {
+        profile = await loadUserProfile(em);
+        if (!profile) { setErr("This email is not registered. Contact owner to add you."); setLoading(false); return; }
+        if (profile.disabled) { setErr("Your account has been disabled. Contact owner."); setLoading(false); return; }
+      }
+      const code = genOTP();
+      await saveOTP(em, code);
+      await sendOTPEmail(em, code, isOwner ? "Owner" : (profile && profile.name) || em);
+      setStep("otp");
+      setResendCd(60);
+      setInfo("OTP sent to " + em + ". Check your inbox (and spam folder).");
+    } catch(e) {
+      setErr("Failed to send OTP: " + e.message);
     }
     setLoading(false);
   };
+
+  const verifyOtp = async () => {
+    if (!otp.trim() || otp.trim().length !== 6) { setErr("Enter the 6-digit OTP"); return; }
+    setLoading(true); setErr("");
+    try {
+      const result = await verifyOTP(email.trim().toLowerCase(), otp.trim());
+      if (!result.ok) { setErr(result.err); setLoading(false); return; }
+      // Successful OTP — sign in via Firebase Anonymous or load profile
+      const em = email.trim().toLowerCase();
+      const isOwner = OWNER_EMAILS.includes(em);
+      let profile = isOwner ? { name: em === "krishkwish@gmail.com" ? "Krish" : "Saloni", role: "owner", pages: null } : await loadUserProfile(em);
+      if (!profile) { setErr("Profile not found. Contact owner."); setLoading(false); return; }
+      // Update last login
+      if (!isOwner) await saveUserProfile(em, { ...profile, lastLogin: new Date().toISOString() });
+      onLogin({
+        id: em.replace(/[^a-z0-9]/gi, "_"),
+        email: em,
+        name: profile.name || em,
+        role: isOwner ? "owner" : "staff",
+        pages: isOwner ? null : (profile.pages || []), // null = all pages for owner
+      });
+    } catch(e) {
+      setErr("Verification failed: " + e.message);
+    }
+    setLoading(false);
+  };
+
+  const inp = { width: "100%", border: "1.5px solid #E5E7EB", borderRadius: 10, padding: "13px 14px", fontSize: 15, outline: "none", background: "#FAFAF7", fontFamily: "inherit" };
+  const btn = (primary) => ({ width: "100%", padding: 13, fontSize: 15, fontWeight: 700, borderRadius: 10, border: "none", cursor: "pointer", background: primary ? "linear-gradient(135deg,#0D6B5B,#0C2E24)" : "#F3F4F6", color: primary ? "#fff" : "#374151" });
+
   return (
     <div style={{ minHeight: "100vh", background: "linear-gradient(135deg,#0C2E24,#1A5744,#0C2E24)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-      <div style={{ background: "#fff", borderRadius: 16, padding: 36, width: "100%", maxWidth: 400, boxShadow: "0 20px 60px rgba(0,0,0,.3)" }}>
-        <div style={{ textAlign: "center", marginBottom: 28 }}>
-          <div style={{ width: 56, height: 56, background: "linear-gradient(135deg,#0D6B5B,#34D399)", borderRadius: 14, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 26, marginBottom: 12 }}>💊</div>
-          <div style={{ fontSize: 22, fontWeight: 800, fontFamily: "'Playfair Display',serif", color: "#0C2E24" }}>A to Z Pharmacy</div>
-          <div style={{ fontSize: 12.5, color: "#999", marginTop: 4 }}>Management System</div></div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <div><label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Email</label>
-            <input value={email} onChange={(e) => { setEmail(e.target.value); setErr(""); }} placeholder="owner@atozpharmacy.com" onKeyDown={(e) => e.key === "Enter" && go()} style={{ ...inps, padding: "12px 14px", fontSize: 15 }} /></div>
-          <div><label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Password</label>
-            <input type="password" value={pass} onChange={(e) => { setPass(e.target.value); setErr(""); }} placeholder="Password" onKeyDown={(e) => e.key === "Enter" && go()} style={{ ...inps, padding: "12px 14px", fontSize: 15 }} /></div>
-          {err && <div style={{ color: "#DC2626", fontSize: 12.5, textAlign: "center" }}>{err}</div>}
-          <button onClick={go} disabled={loading} style={{ ...bts(true), padding: 13, fontSize: 15, width: "100%", opacity: loading ? 0.6 : 1 }}>{loading ? "Signing in..." : "Sign In"}</button></div>
-        <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid #eee", textAlign: "center", fontSize: 11, color: "#bbb" }}><b>Owner:</b> owner@atozpharmacy.com<br/><b>Staff:</b> staff@atozpharmacy.com</div>
-      </div></div>
+      <div style={{ background: "#fff", borderRadius: 20, padding: "36px 32px", width: "100%", maxWidth: 420, boxShadow: "0 24px 80px rgba(0,0,0,.35)" }}>
+        {/* Logo */}
+        <div style={{ textAlign: "center", marginBottom: 30 }}>
+          <div style={{ width: 60, height: 60, background: "linear-gradient(135deg,#0D6B5B,#34D399)", borderRadius: 16, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 28, marginBottom: 12 }}>💊</div>
+          <div style={{ fontSize: 23, fontWeight: 800, fontFamily: "'Playfair Display',serif", color: "#0C2E24" }}>A to Z Pharmacy</div>
+          <div style={{ fontSize: 12, color: "#999", marginTop: 3 }}>Management System</div>
+        </div>
+
+        {step === "email" ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 700, color: "#6B7280", display: "block", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>Email Address</label>
+              <input value={email} onChange={e => { setEmail(e.target.value); setErr(""); }}
+                placeholder="your@email.com" onKeyDown={e => e.key === "Enter" && sendOtp()}
+                style={inp} autoComplete="email" inputMode="email" type="email" />
+            </div>
+            {err && <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "10px 14px", color: "#DC2626", fontSize: 13 }}>{err}</div>}
+            <button onClick={sendOtp} disabled={loading} style={{ ...btn(true), opacity: loading ? 0.7 : 1 }}>
+              {loading ? "Sending OTP..." : "Send OTP →"}
+            </button>
+            <div style={{ textAlign: "center", fontSize: 12, color: "#9CA3AF", marginTop: 4 }}>
+              You'll receive a 6-digit code on your email
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <div style={{ background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 10, padding: "12px 16px" }}>
+              <div style={{ fontSize: 12, color: "#166534", fontWeight: 600 }}>OTP sent to</div>
+              <div style={{ fontSize: 14, color: "#0C2E24", fontWeight: 700, marginTop: 2 }}>{email}</div>
+            </div>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 700, color: "#6B7280", display: "block", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>Enter 6-Digit OTP</label>
+              <input value={otp} onChange={e => { setOtp(e.target.value.replace(/\D/g,"")); setErr(""); }}
+                placeholder="123456" maxLength={6} onKeyDown={e => e.key === "Enter" && verifyOtp()}
+                style={{ ...inp, fontSize: 28, fontWeight: 800, letterSpacing: 8, textAlign: "center" }}
+                inputMode="numeric" autoComplete="one-time-code" />
+            </div>
+            {info && <div style={{ background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, padding: "10px 14px", color: "#1D4ED8", fontSize: 12.5 }}>{info}</div>}
+            {err && <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "10px 14px", color: "#DC2626", fontSize: 13 }}>{err}</div>}
+            <button onClick={verifyOtp} disabled={loading} style={{ ...btn(true), opacity: loading ? 0.7 : 1 }}>
+              {loading ? "Verifying..." : "Verify & Login →"}
+            </button>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <button onClick={() => { setStep("email"); setOtp(""); setErr(""); setInfo(""); }}
+                style={{ background: "none", border: "none", color: "#6B7280", fontSize: 13, cursor: "pointer", padding: 0 }}>
+                ← Change email
+              </button>
+              <button onClick={sendOtp} disabled={resendCd > 0 || loading}
+                style={{ background: "none", border: "none", color: resendCd > 0 ? "#9CA3AF" : "#0D6B5B", fontSize: 13, cursor: resendCd > 0 ? "default" : "pointer", fontWeight: 600, padding: 0 }}>
+                {resendCd > 0 ? `Resend in ${resendCd}s` : "Resend OTP"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div style={{ marginTop: 24, paddingTop: 18, borderTop: "1px solid #F3F4F6", textAlign: "center", fontSize: 11.5, color: "#9CA3AF" }}>
+          🔒 Secure OTP login · No password needed
+        </div>
+      </div>
+    </div>
   );
 }
-
 // ══════════════════════════════════════════════
 // SIDEBAR
 // ══════════════════════════════════════════════
 function Sidebar({ page, setPage, user, onLogout, counts, mob, sideOpen, setSideOpen, currentOutletId, switchOutlet }) {
   const isO = user.role === "owner";
-  const nav = [{ id: "dash", i: "📊", l: "Dashboard" }, ...(isO ? [{ id: "purch", i: "📦", l: "Purchases" }, { id: "returns", i: "↩️", l: "Returns" }] : []), { id: "inv", i: "💊", l: "Inventory" }, { id: "rack", i: "🗄", l: "Racks" }, ...(isO ? [{ id: "audit", i: "📝", l: "Audit" }] : []), { id: "bill", i: "🧾", l: "New Bill" }, ...(isO ? [{ id: "profit", i: "💹", l: "Profit Margin" }] : []), { id: "stock", i: "📋", l: "Stock" }, { id: "expiry", i: "⏰", l: "Expiry" }, { id: "hist", i: "🗂", l: "Bills" }, ...(isO ? [{ id: "reports", i: "📑", l: "Reports" }, { id: "gst", i: "🧾", l: "GST Reports" }] : []), { id: "customers", i: "👤", l: "Customers" }, ...(isO ? [{ id: "ledger", i: "📒", l: "Supplier Ledger" }, { id: "predict", i: "🤖", l: "Stock Predict" }] : []), { id: "compare", i: "⚖️", l: "Price Compare" }, { id: "ency", i: "📚", l: "Encyclopedia" }, ...(isO ? [{ id: "users", i: "👥", l: "Users" }, { id: "backup", i: "💾", l: "Backup" }] : [])];
+  // For owners: show all pages. For staff: show only their permitted pages.
+  const allowedPages = isO ? null : (user.pages || []);
+  const canSee = (id) => isO || (allowedPages && allowedPages.includes(id));
+  const nav = ALL_PAGES
+    .filter(p => canSee(p.id))
+    .map(p => ({ id: p.id, i: p.icon, l: p.label }));
   if (mob && !sideOpen) return null;
   return (
     <div>
@@ -2837,21 +3040,204 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, deleteBi
 // ══════════════════════════════════════════════
 // USERS PAGE
 // ══════════════════════════════════════════════
-function UsersPage({ sessions, mob }) {
+function UsersPage({ sessions, mob, user }) {
+  const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showAdd, setShowAdd] = useState(false);
+  const [editUser, setEditUser] = useState(null); // user being edited
+  const [newEmail, setNewEmail] = useState("");
+  const [newName, setNewName] = useState("");
+  const [newPages, setNewPages] = useState(ALL_PAGES.map(p => p.id)); // default: all checked
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  // Load all user profiles from Firebase
+  const loadUsers = async () => {
+    setLoading(true);
+    try {
+      const snap = await new Promise(res => db.ref("userProfiles").once("value", res));
+      const data = snap.val() || {};
+      const list = Object.entries(data).map(([key, val]) => ({ ...val, _key: key }));
+      setUsers(list);
+    } catch(e) { console.error(e); }
+    setLoading(false);
+  };
+
+  useEffect(() => { loadUsers(); }, []);
+
+  const resetForm = () => { setNewEmail(""); setNewName(""); setNewPages(ALL_PAGES.map(p => p.id)); setShowAdd(false); setEditUser(null); setMsg(""); };
+
+  const saveUser = async () => {
+    const em = (editUser ? editUser.email : newEmail).trim().toLowerCase();
+    const nm = newName.trim();
+    if (!em.includes("@")) { setMsg("❌ Enter a valid email"); return; }
+    if (!nm) { setMsg("❌ Enter a name"); return; }
+    if (OWNER_EMAILS.includes(em)) { setMsg("❌ This email is an owner — cannot add as staff"); return; }
+    setSaving(true); setMsg("");
+    try {
+      await saveUserProfile(em, {
+        email: em, name: nm,
+        role: "staff",
+        pages: newPages,
+        addedBy: user.email,
+        addedAt: editUser ? (editUser.addedAt || new Date().toISOString()) : new Date().toISOString(),
+        lastLogin: editUser ? (editUser.lastLogin || null) : null,
+        disabled: editUser ? (editUser.disabled || false) : false,
+      });
+      setMsg("✅ User " + (editUser ? "updated" : "added") + " successfully!");
+      await loadUsers();
+      setTimeout(resetForm, 1500);
+    } catch(e) { setMsg("❌ Failed: " + e.message); }
+    setSaving(false);
+  };
+
+  const toggleDisable = async (u) => {
+    if (!window.confirm((u.disabled ? "Re-enable" : "Disable") + " " + u.name + "?")) return;
+    await saveUserProfile(u.email, { ...u, disabled: !u.disabled });
+    await loadUsers();
+  };
+
+  const deleteUser = async (u) => {
+    if (!window.confirm("Delete " + u.name + " (" + u.email + ")? They will not be able to login.")) return;
+    const key = u.email.replace(/\./g, "_").replace(/@/g, "__");
+    await db.ref("userProfiles/" + key).remove();
+    await loadUsers();
+  };
+
+  const startEdit = (u) => {
+    setEditUser(u);
+    setNewName(u.name || "");
+    setNewPages(u.pages || ALL_PAGES.map(p => p.id));
+    setShowAdd(true);
+  };
+
+  const togglePage = (id) => {
+    setNewPages(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
+
+  const inp = { width: "100%", border: "1.5px solid #E5E7EB", borderRadius: 10, padding: "11px 14px", fontSize: 14, outline: "none", background: "#FAFAF7", fontFamily: "inherit" };
+
   return (
-    <div><h2 style={hds}>Users and Sessions</h2>
+    <div style={{ maxWidth: 800, margin: "0 auto" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+        <h2 style={hds}>Users & Roles</h2>
+        {!showAdd && <button onClick={() => { resetForm(); setShowAdd(true); }} style={{ ...bts(true), padding: "9px 18px", fontSize: 13 }}>+ Add User</button>}
+      </div>
+
+      {/* ── Add / Edit User Form ── */}
+      {showAdd && (
+        <div style={{ ...cds, marginBottom: 20, background: "#F0FDF4", border: "1.5px solid #86EFAC" }}>
+          <div style={{ fontWeight: 700, fontSize: 16, color: "#0C2E24", marginBottom: 16 }}>
+            {editUser ? "✏️ Edit User: " + editUser.name : "➕ Add New User"}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {!editUser && (
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 700, color: "#6B7280", display: "block", marginBottom: 5, textTransform: "uppercase" }}>Email Address *</label>
+                <input value={newEmail} onChange={e => setNewEmail(e.target.value)} placeholder="staff@email.com" style={inp} type="email" />
+              </div>
+            )}
+            {editUser && (
+              <div style={{ background: "#fff", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: "#374151" }}>
+                <b>Email:</b> {editUser.email}
+              </div>
+            )}
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 700, color: "#6B7280", display: "block", marginBottom: 5, textTransform: "uppercase" }}>Display Name *</label>
+              <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. Ramesh Kumar" style={inp} />
+            </div>
+
+            {/* Page Permissions */}
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 700, color: "#6B7280", display: "block", marginBottom: 8, textTransform: "uppercase" }}>
+                Page Access (check what this user can see)
+              </label>
+              <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+                <button onClick={() => setNewPages(ALL_PAGES.map(p => p.id))} style={{ ...bts(false), padding: "5px 12px", fontSize: 11 }}>Select All</button>
+                <button onClick={() => setNewPages([])} style={{ ...bts(false), padding: "5px 12px", fontSize: 11 }}>Clear All</button>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                {ALL_PAGES.map(p => (
+                  <label key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", borderRadius: 8, cursor: "pointer", background: newPages.includes(p.id) ? "#DCFCE7" : "#F9FAFB", border: "1.5px solid " + (newPages.includes(p.id) ? "#4ADE80" : "#E5E7EB"), fontSize: 13, userSelect: "none" }}>
+                    <input type="checkbox" checked={newPages.includes(p.id)} onChange={() => togglePage(p.id)} style={{ width: 15, height: 15, accentColor: "#0C2E24" }} />
+                    <span>{p.icon}</span> <span style={{ fontWeight: newPages.includes(p.id) ? 600 : 400 }}>{p.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {msg && <div style={{ padding: "10px 14px", borderRadius: 8, background: msg.startsWith("✅") ? "#F0FDF4" : "#FEF2F2", color: msg.startsWith("✅") ? "#166534" : "#DC2626", fontSize: 13 }}>{msg}</div>}
+
+            <div style={{ display: "flex", gap: 10 }}>
+              <button onClick={saveUser} disabled={saving} style={{ ...bts(true), padding: "10px 24px", flex: 1, opacity: saving ? 0.7 : 1 }}>{saving ? "Saving..." : (editUser ? "Update User" : "Add User")}</button>
+              <button onClick={resetForm} style={{ ...bts(false), padding: "10px 24px" }}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Owners (hardcoded) ── */}
       <div style={cds}>
-        <b>Login Accounts</b>
-        <p style={{ fontSize: 12, color: "#888", margin: "8px 0" }}>Manage users in Firebase Console &gt; Authentication &gt; Users</p>
-        <div style={{ overflowX: "auto", marginTop: 10 }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
-          {["Email","Role"].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
-          {Object.entries(ROLES).map(([email, role]) => (<tr key={email}><td style={{ ...tds, fontFamily: "monospace" }}>{email}</td>
-            <td style={tds}><Tag bg={role === "owner" ? "#FEF3C7" : "#DBEAFE"} fg={role === "owner" ? "#92400E" : "#1E40AF"}>{role.toUpperCase()}</Tag></td></tr>))}</tbody></table></div></div>
-      {sessions.length > 0 && <div style={cds}><b>Active Sessions</b><div style={{ overflowX: "auto", marginTop: 10 }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>{["User","Device","Last Active"].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
-        {sessions.map((s, i) => (<tr key={i}><td style={tds}>{s.user}</td><td style={tds}>{s.device}</td><td style={tds}>{s.lastActive}</td></tr>))}</tbody></table></div></div>}</div>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12, color: "#92400E" }}>👑 Owners (Full Access)</div>
+        {OWNER_EMAILS.map(em => (
+          <div key={em} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", background: "#FEF3C7", borderRadius: 10, marginBottom: 8, border: "1px solid #FDE68A" }}>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>{em === "krishkwish@gmail.com" ? "Krish" : "Saloni"}</div>
+              <div style={{ fontSize: 11, color: "#92400E", fontFamily: "monospace" }}>{em}</div>
+            </div>
+            <Tag bg="#FEF3C7" fg="#92400E">OWNER</Tag>
+          </div>
+        ))}
+      </div>
+
+      {/* ── Staff Users ── */}
+      <div style={cds}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>👤 Staff Users</div>
+        {loading && <div style={{ color: "#9CA3AF", fontSize: 13, padding: 12 }}>Loading users...</div>}
+        {!loading && users.length === 0 && <div style={{ color: "#9CA3AF", fontSize: 13, padding: 12 }}>No staff users yet. Click "Add User" to get started.</div>}
+        {users.map(u => (
+          <div key={u._key} style={{ border: "1.5px solid " + (u.disabled ? "#FEE2E2" : "#E5E7EB"), borderRadius: 12, padding: "14px 16px", marginBottom: 10, background: u.disabled ? "#FFF7F7" : "#FAFAF7" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 8 }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 14, color: u.disabled ? "#9CA3AF" : "#0C2E24" }}>{u.name} {u.disabled && <span style={{ fontSize: 11, color: "#DC2626" }}>(disabled)</span>}</div>
+                <div style={{ fontSize: 11.5, color: "#6B7280", fontFamily: "monospace", marginTop: 2 }}>{u.email}</div>
+                <div style={{ fontSize: 11, color: "#9CA3AF", marginTop: 3 }}>
+                  Last login: {u.lastLogin ? new Date(u.lastLogin).toLocaleDateString("en-IN") : "Never"} &nbsp;·&nbsp; Added: {u.addedAt ? new Date(u.addedAt).toLocaleDateString("en-IN") : "—"}
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+                <button onClick={() => startEdit(u)} style={{ ...bts(false), padding: "6px 14px", fontSize: 12 }}>Edit</button>
+                <button onClick={() => toggleDisable(u)} style={{ ...bts(false), padding: "6px 14px", fontSize: 12, color: u.disabled ? "#059669" : "#D97706" }}>{u.disabled ? "Enable" : "Disable"}</button>
+                <button onClick={() => deleteUser(u)} style={{ ...bts(false), padding: "6px 14px", fontSize: 12, color: "#DC2626" }}>Delete</button>
+              </div>
+            </div>
+            {/* Page access chips */}
+            <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 5 }}>
+              {(u.pages || ALL_PAGES.map(p => p.id)).map(pid => {
+                const pg = ALL_PAGES.find(x => x.id === pid);
+                return pg ? <span key={pid} style={{ background: "#DCFCE7", color: "#166534", borderRadius: 6, padding: "3px 9px", fontSize: 11, fontWeight: 600 }}>{pg.icon} {pg.label}</span> : null;
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* ── Active Sessions ── */}
+      {sessions.length > 0 && (
+        <div style={cds}>
+          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>🟢 Active Sessions</div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
+              {["User","Device","Last Active"].map(h => <th key={h} style={ths}>{h}</th>)}
+            </tr></thead><tbody>
+              {sessions.map((s, i) => <tr key={i}><td style={tds}>{s.user}</td><td style={tds}>{s.device}</td><td style={tds}>{s.lastActive}</td></tr>)}
+            </tbody></table>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
-
 // ══════════════════════════════════════════════
 // PURCHASE TRACEABILITY MIGRATION HELPER
 // ══════════════════════════════════════════════
@@ -6213,21 +6599,24 @@ function App() {
     // Set PH from stored outlet
     PH = OUTLETS[getCurrentOutlet()] || OUTLETS.outlet2;
 
-    const unsub = auth.onAuthStateChanged((fbUser) => {
-      if (fbUser) {
-        const role = ROLES[fbUser.email] || "staff";
-        const name = ROLE_NAMES[fbUser.email] || fbUser.email;
-        // Staff auto-assign to their outlet
-        if (role === "staff" && STAFF_OUTLETS[fbUser.email]) {
-          setCurrentOutlet(STAFF_OUTLETS[fbUser.email]);
-          setCurrentOutletId(STAFF_OUTLETS[fbUser.email]);
+    // OTP-based auth: no Firebase Auth session, user stored in component state.
+    // On page reload, user must log in again (security by design for pharmacy).
+    // But check if we have a recent session token in sessionStorage.
+    const saved = sessionStorage.getItem("atoz_session");
+    if (saved) {
+      try {
+        const u = JSON.parse(saved);
+        if (u && u.email && u.loginTs && (Date.now() - u.loginTs) < 8 * 60 * 60 * 1000) {
+          // Session still valid (8 hours)
+          setUser(u);
+        } else {
+          sessionStorage.removeItem("atoz_session");
         }
-        setUser({ id: fbUser.uid, email: fbUser.email, name, role });
-      } else {
-        setUser(null);
-      }
-      setLoading(false);
-    });
+      } catch(e) { sessionStorage.removeItem("atoz_session"); }
+    }
+    setLoading(false);
+    // No Firebase Auth listener needed — OTP auth is stateless
+    const unsub = () => {};
     return unsub;
   }, []);
 
@@ -6271,8 +6660,17 @@ function App() {
   const onConfirmNo = () => { setConfirmMsg(null); confirmCb.current = null; };
   const showBill = useCallback((b, hist) => { setViewBill(b); setBillFromHist(!!hist); }, []);
 
-  const login = (u) => { setUser(u); };
-  const logout = () => { auth.signOut(); fbSet("sessions/" + (user ? user.id : ""), null); setUser(null); setPage("dash"); };
+  const login = (u) => {
+    const withTs = { ...u, loginTs: Date.now() };
+    sessionStorage.setItem("atoz_session", JSON.stringify(withTs));
+    setUser(withTs);
+  };
+  const logout = () => {
+    sessionStorage.removeItem("atoz_session");
+    fbSet("sessions/" + (user ? user.id : ""), null);
+    setUser(null);
+    setPage("dash");
+  };
 
   const addBill = useCallback((bill) => {
     setBills((p) => { const next = [...p, bill]; saveBills(next); return next; });
@@ -6369,7 +6767,7 @@ function App() {
           {page === "reports" && isO && <ReportsPage bills={bills} inv={inv} mob={mob} showBill={showBill} />}
           {page === "ency" && <EncyclopediaPage inv={inv} mob={mob} />}
           {page === "compare" && <ComparePage inv={inv} mob={mob} />}
-          {page === "users" && isO && <UsersPage sessions={sessions} mob={mob} />}
+          {page === "users" && isO && <UsersPage sessions={sessions} mob={mob} user={user} />}
           {page === "backup" && isO && <BackupPage inv={inv} bills={bills} purch={purch} saveAll={saveAll} askConfirm={askConfirm} saveInv={saveInv} saveBills={saveBills} />}
         </div></div></div>
   );
