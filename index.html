@@ -50,28 +50,13 @@ input,select,button,textarea{font-family:inherit;-webkit-appearance:none}
 }
 </style>
 
-<meta name="app-version" content="2.0.0">
+<meta name="app-version" content="2.3.0">
 <meta name="app-changes" content="["Removed Claude API dependency for image/PDF bill reading [security/privacy]", "Added local Tesseract.js OCR with canvas preprocessing for purchase bill images", "Enhanced parsing with fallback line-by-line item extraction", "Cleaner worker without hardcoded API keys or Claude proxy route", "Improved error handling and user feedback for OCR quality", "v2.2.0: Advanced multi-pass image processing with deskew, adaptive thresholding, Sauvola binarization, OTSU thresholding, unsharp mask sharpening, multi-PSM Tesseract passes, and 3-strategy invoice parser (Vardhman columnar, flexible numeric-anchor, token-based)"]">
-<script>window.APP_VERSION = {"version": "2.2.0", "changes": ["Removed Claude API dependency for image/PDF bill reading [security/privacy]", "Added local Tesseract.js OCR with canvas preprocessing for purchase bill images", "Enhanced parsing with fallback line-by-line item extraction", "Cleaner worker without hardcoded API keys or Claude proxy route", "Improved error handling and user feedback for OCR quality", "v2.1.0: Advanced multi-pass image processing with deskew, adaptive thresholding, Sauvola binarization, OTSU thresholding, unsharp mask sharpening, multi-PSM Tesseract passes, and 3-strategy invoice parser (Vardhman columnar, flexible numeric-anchor, token-based)"], "date": "2026-05-08", "type": "production"};</script>
+<script>window.APP_VERSION = {"version": "2.3.0", "changes": ["Replaced EmailJS with Cloudflare Worker + Resend for reliable OTP delivery (no Gmail scope issues)", "Added /send-otp-email route to Cloudflare Worker", "3000 free emails/month via Resend vs 200 via EmailJS", "Proper error handling — shows actual failure reason instead of silent swallow", "OTP always logged to console as fallback"], "date": "2026-05-10", "type": "production"};</script>
 
-<!-- EmailJS for OTP delivery (free tier: 200 emails/month) -->
-<!-- Sign up at https://www.emailjs.com/ → get Service ID, Template ID, Public Key -->
-<!-- Template variables needed: to_email, to_name, otp_code, app_name -->
-<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
-<script>
-  // ══ CONFIGURE EMAIL OTP SERVICE ══════════════════════════════════════
-  // 1. Go to https://www.emailjs.com/ and create a free account
-  // 2. Add an Email Service (Gmail works — connect your pharmacy Gmail)
-  // 3. Create a template with subject "Your A to Z Pharmacy OTP"
-  //    Template body: "Hi {{to_name}}, Your OTP is: {{otp_code}} (valid 10 min)"
-  // 4. Fill in the three values below:
-  window.EMAIL_SERVICE_ID  = "service_3zz3y3b";   // e.g. "service_abc123"
-  window.EMAIL_TEMPLATE_ID = "template_uw8et1r";   // e.g. "template_xyz789"
-  window.EMAIL_PUBLIC_KEY  = "wIwzSNGXW7Yrgx7DT";   // e.g. "user_ABCDEF"
-  // ═════════════════════════════════════════════════════════════════════
-  // TESTING: If not configured, OTP will show in browser console (F12 → Console)
-  // You can manually tell the user the OTP during testing.
-</script>
+<!-- OTP emails sent via Cloudflare Worker + Resend (3000 free/month, no Gmail scope issues) -->
+<!-- Setup: 1) Sign up at resend.com  2) Get API key  3) Add as RESEND_API_KEY secret in your Cloudflare Worker -->
+<!-- 4) Verify your sending domain OR use free onboarding@resend.dev for testing -->
 </head>
 <body>
 <div id="root"></div>
@@ -163,22 +148,28 @@ const ALL_PAGES = [
 // ── OTP helpers (6-digit, stored in Firebase with 10min expiry) ───────────
 function genOTP() { return String(Math.floor(100000 + Math.random() * 900000)); }
 async function sendOTPEmail(toEmail, otp, recipientName) {
-  // Uses EmailJS public API — configure once in Firebase/emailjs dashboard
-  // Fallback: show OTP in console for testing; replace with real email service
+  // Send OTP via Cloudflare Worker → Resend API (server-side, no Gmail scope issues)
   console.log("OTP for", toEmail, ":", otp);
-  // Try EmailJS if configured
-  if (window.EMAIL_SERVICE_ID && window.EMAIL_TEMPLATE_ID && window.EMAIL_PUBLIC_KEY) {
-    try {
-      await fetch("https://api.emailjs.com/api/v1.0/email/send", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          service_id: window.EMAIL_SERVICE_ID,
-          template_id: window.EMAIL_TEMPLATE_ID,
-          user_id: window.EMAIL_PUBLIC_KEY,
-          template_params: { to_email: toEmail, to_name: recipientName || toEmail, otp_code: otp, app_name: "A to Z Pharmacy" }
-        })
-      });
-    } catch(e) { console.warn("EmailJS failed:", e); }
+  try {
+    var resp = await fetch(PROXY_URL + "/send-otp-email", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        to_email: toEmail,
+        to_name: recipientName || toEmail,
+        otp_code: otp
+      })
+    });
+    var data = await resp.json();
+    if (!resp.ok || !data.ok) {
+      var errMsg = data.error || ("HTTP " + resp.status);
+      console.error("Worker /send-otp-email failed:", errMsg);
+      throw new Error(errMsg);
+    }
+    console.log("OTP email sent successfully to", toEmail);
+  } catch(e) {
+    console.error("OTP email failed:", e);
+    throw new Error("Email failed: " + e.message);
   }
 }
 // Firebase paths for OTP store
@@ -1478,10 +1469,23 @@ function Login({ onLogin }) {
       }
       const code = genOTP();
       await saveOTP(em, code);
-      await sendOTPEmail(em, code, isOwner ? "Owner" : (profile && profile.name) || em);
+      var emailOk = false;
+      var emailErr = "";
+      try {
+        await sendOTPEmail(em, code, isOwner ? "Owner" : (profile && profile.name) || em);
+        emailOk = true;
+      } catch(mailErr) {
+        emailErr = mailErr.message || "Unknown error";
+        console.warn("Email failed but OTP saved. Code:", code);
+      }
       setStep("otp");
       setResendCd(60);
-      setInfo("OTP sent to " + em + ". Check your inbox (and spam folder).");
+      if (emailOk) {
+        setInfo("OTP sent to " + em + ". Check inbox & spam.");
+      } else {
+        setErr("Email failed: " + emailErr + ". Check browser console (F12) for the OTP code.");
+        setInfo("OTP generated — enter it below. (Check console if email didn't arrive.)");
+      }
     } catch(e) {
       setErr("Failed to send OTP: " + e.message);
     }
@@ -1556,7 +1560,7 @@ function Login({ onLogin }) {
                 style={{ ...inp, fontSize: 28, fontWeight: 800, letterSpacing: 8, textAlign: "center" }}
                 inputMode="numeric" autoComplete="one-time-code" />
             </div>
-            {info && <div style={{ background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, padding: "10px 14px", color: "#1D4ED8", fontSize: 12.5 }}>{info}</div>}
+            {info && <div style={{ background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, padding: "10px 14px", color: "#1D4ED8", fontSize: 12.5, whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{info}</div>}
             {err && <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "10px 14px", color: "#DC2626", fontSize: 13 }}>{err}</div>}
             <button onClick={verifyOtp} disabled={loading} style={{ ...btn(true), opacity: loading ? 0.7 : 1 }}>
               {loading ? "Verifying..." : "Verify & Login →"}
