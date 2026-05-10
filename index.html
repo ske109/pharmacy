@@ -299,21 +299,18 @@ function normalizeInvoiceText(text) {
 // Sends image or PDF to Cloudflare Worker → OCR.space API → returns clean text.
 // Free tier: 500 requests/day. Engine 2 is best for numbers & special chars.
 async function extractImageBillText(file, onProgress) {
-  console.log("[OCR] Starting OCR.space Engine 3 for:", file.name, "size:", file.size, "type:", file.type);
   if (onProgress) onProgress({ status: "recognizing text", progress: 0.1 });
 
   // Convert file to base64
   const base64 = await new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
+    reader.onload = () => resolve(reader.result); // data:image/...;base64,...
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
-  console.log("[OCR] Base64 ready, length:", base64.length);
 
   if (onProgress) onProgress({ status: "recognizing text", progress: 0.3 });
 
-  console.log("[OCR] Sending to Cloudflare Worker:", PROXY_URL + "/ocr");
   const resp = await fetch(PROXY_URL + "/ocr", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -326,27 +323,17 @@ async function extractImageBillText(file, onProgress) {
 
   if (onProgress) onProgress({ status: "recognizing text", progress: 0.8 });
 
-  console.log("[OCR] Worker response status:", resp.status);
-
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({}));
-    console.error("[OCR] Worker error:", err);
     throw new Error(err.error || "OCR.space request failed (" + resp.status + ")");
   }
 
   const data = await resp.json();
-  console.log("[OCR] Worker response ok:", data.ok, "pages:", data.pages, "error:", data.error);
-
   if (!data.ok) throw new Error(data.error || "OCR failed");
-
-  const rawText = data.text || "";
-  console.log("[OCR] Raw text length:", rawText.length);
-  console.log("[OCR] Raw text (first 1000 chars):\n", rawText.substring(0, 1000));
-  console.log("[OCR] Raw text (full):\n", rawText);
 
   if (onProgress) onProgress({ status: "recognizing text", progress: 1.0 });
 
-  return normalizeInvoiceText(rawText);
+  return normalizeInvoiceText(data.text || "");
 }
 
 // ── Spatial table reconstruction from Tesseract word bboxes ─────────────────
@@ -534,145 +521,235 @@ function parseWithSpatialData(words, pageW, fallbackText) {
 // ── Vardhman text-based parser ───────────────────────────────────────────────
 // Parses OCR text looking for medicine rows with pattern:
 // [RackCode] MedicineName [Pack] BatchNo ExpDate MRP TradePrice Qty Disc%
-function parseVardhmanText(text) {
-  if (!text) return [];
-  var lines = text.split("\n").map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 5; });
-  console.log("[VARDHMAN] parseVardhmanText called, lines:", lines.length);
+// ══════════════════════════════════════════════════════════════════════
+// INVOICE PARSER — Generic, handles pipe-table, markdown, and plain text
+// OCR.space Engine 3 returns a clean markdown/pipe table — parse that first.
+// Fallback to line-by-line for older OCR output or other distributors.
+// ══════════════════════════════════════════════════════════════════════
 
-  // Log all lines to see what OCR returned
-  lines.forEach(function(l, i) { console.log("[VARDHMAN] Line " + i + ":", l); });
+function parseInvoiceTable(text) {
+  // ── Strategy 1: Pipe-delimited table (OCR.space Engine 3 output) ──────────
+  // Lines look like: | A0060 | INSUGEN N REFIL (BOX) | 1 | | 5X3ML | C25INH4001 | 03/28 | 0.00 | 1178.15 | | 942.52 | 4.00 | ...
+  // Or with "I" instead of "|": I A0060 I INSUGEN N REFIL (BOX) I 1 I ...
+  // normalizeInvoiceText() already converts | → I, so we handle both.
 
-  // Check for rack codes
-  var rackTest = lines.filter(function(l) { return /^[A-Z]\d{3,5}\s+/i.test(l); });
-  console.log("[VARDHMAN] Lines starting with rack code:", rackTest.length, rackTest);
+  var lines = text.split("\n").map(function(l) { return l.trim(); }).filter(Boolean);
 
-  var items = [];
+  // Find the header row — contains RACK/DESCRIPTION/QTY/MRP etc.
+  var headerIdx = -1;
+  var colMap = {};
 
-  // Find table start: look for header keywords
-  var tableStart = 0;
-  for (var i = 0; i < Math.min(lines.length, 40); i++) {
-    var lower = lines[i].toLowerCase();
-    if ((lower.indexOf("description") >= 0 || lower.indexOf("particulars") >= 0) && (lower.indexOf("qty") >= 0 || lower.indexOf("batch") >= 0 || lower.indexOf("mrp") >= 0)) {
-      tableStart = i + 1;
-      break;
+  for (var i = 0; i < lines.length; i++) {
+    var l = lines[i];
+    // Detect pipe row: starts/ends with | or I, has 5+ separators
+    var isTable = (l.match(/[|I]/g) || []).length >= 5;
+    if (!isTable) continue;
+    var lower = l.toLowerCase();
+    if (lower.includes("description") || lower.includes("rack")) {
+      // Parse column names from header
+      var cols = l.split(/\s*[|I]\s*/).map(function(c) { return c.trim().toLowerCase(); }).filter(Boolean);
+      cols.forEach(function(col, idx) {
+        if (/rack/.test(col))                              colMap.rack = idx;
+        if (/desc|particular|name/.test(col))             colMap.name = idx;
+        if (/^qty$|billed/.test(col))                     colMap.qty = idx;
+        if (/free/.test(col) && !/value/.test(col))       colMap.free = idx;
+        if (/pack/.test(col) && !/pack no/.test(col))     colMap.pack = idx;
+        if (/batch/.test(col))                            colMap.batch = idx;
+        if (/exp/.test(col))                              colMap.exp = idx;
+        if (/new\s*mrp/.test(col))                        colMap.newMrp = idx;
+        if (/old\s*mrp/.test(col))                        colMap.oldMrp = idx;
+        if (/^mrp$/.test(col))                            colMap.mrp = idx;
+        if (/trade/.test(col))                            colMap.trade = idx;
+        if (/disc\s*%/.test(col))                         colMap.disc = idx;
+        if (/^gst\s*%$|^gst$/.test(col))                 colMap.gst = idx;
+        if (/hsn/.test(col))                              colMap.hsn = idx;
+        if (/net\s*value/.test(col))                      colMap.net = idx;
+        if (/taxable/.test(col))                          colMap.taxable = idx;
+        if (/scm/.test(col) && /disc/.test(col))         colMap.scmDisc = idx;
+      });
+      if (Object.keys(colMap).length >= 3) {
+        headerIdx = i;
+        break;
+      }
     }
-    if (lower.indexOf("rack") >= 0 && lower.indexOf("batch") >= 0) { tableStart = i + 1; break; }
-    if (lower.indexOf("billed") >= 0 && lower.indexOf("trade") >= 0) { tableStart = i + 1; break; }
   }
 
-  // Skip patterns - NOT medicine rows
-  var SKIP = /^(total|sub\s*total|grand|taxable|cgst|sgst|igst|round|gst\s*summary|bank|ifsc|pan|dl\s*no|gstin|address|phone|mobile|email|invoice|page|schedule|checked|order|case|hunt|sales|mrp\s*printed|terms|authoris|scan|collectable|signature|do\s*not|cash\s*payment|sign\s*slip|valid|credit|east\s*zone|west\s*zone|relation|billed\s*to|buyer|seller|shipping|net\s*value|sale\s*value|sch\s*disc)/i;
+  // If we found a proper column map, parse data rows
+  if (headerIdx >= 0 && Object.keys(colMap).length >= 3) {
+    var items = [];
+    var g = function(cells, key) {
+      var idx = colMap[key];
+      if (idx === undefined || idx >= cells.length) return "";
+      return (cells[idx] || "").replace(/\*\*/g, "").trim(); // strip markdown bold
+    };
+    var gn = function(cells, key) { return parseFloat(g(cells, key)) || 0; };
+
+    for (var di = headerIdx + 1; di < lines.length; di++) {
+      var l = lines[di];
+      // Skip separator rows (--- lines)
+      if (/^[|\-\s I]+$/.test(l)) continue;
+      // Skip HTML/footer lines
+      if (/^<|^Out Stock|^Tot Items|taxable sale/i.test(l)) break;
+      // Must be a table row
+      var isRow = (l.match(/[|I]/g) || []).length >= 4;
+      if (!isRow) continue;
+
+      var cells = l.split(/\s*[|I]\s*/).map(function(c) { return c.trim(); }).filter(function(c, i, a) {
+        // Remove empty leading/trailing cells from split
+        return !(i === 0 && c === "") && !(i === a.length - 1 && c === "");
+      });
+      // Remove first empty cell if line starts with separator
+      if (cells[0] === "") cells.shift();
+
+      var name = g(cells, "name");
+      if (!name || name.length < 2 || /^-+$/.test(name)) continue;
+      // Clean OCR artifacts from name
+      name = name.replace(/[~`*]/g, "").replace(/\s+/g, " ").trim();
+      if (!name || !/[A-Za-z]{2,}/.test(name)) continue;
+
+      // MRP: prefer NEW MRP col, fallback to MRP col
+      var mrp = gn(cells, "newMrp") || gn(cells, "mrp") || gn(cells, "oldMrp");
+      // PTR: trade price
+      var ptr = gn(cells, "trade");
+      if (ptr <= 0) ptr = mrp * 0.85;
+      if (mrp <= 0) continue;
+
+      // Expiry: parse MM/YY or MM/YYYY
+      var expRaw = g(cells, "exp");
+      var expiry = "";
+      var expM = expRaw.match(/(\d{1,2})[\/-](\d{2,4})/);
+      if (expM) {
+        var yr = expM[2].length === 2 ? "20" + expM[2] : expM[2];
+        expiry = yr + "-" + expM[1].padStart(2, "0");
+      }
+
+      var qty  = parseInt(g(cells, "qty")) || 1;
+      var free = parseInt(g(cells, "free")) || 0;
+      var disc = gn(cells, "disc");
+      var gstRate = gn(cells, "gst") || 5;
+      var hsn  = g(cells, "hsn") || "300490";
+      var rack = g(cells, "rack");
+      var pack = g(cells, "pack");
+      var batch = g(cells, "batch");
+
+      // Batch sometimes has only digits (e.g. 15548) — keep as-is
+      // Clean trailing ~ or * from batch
+      batch = batch.replace(/[~*]/g, "").trim();
+
+      items.push({
+        name: name.slice(0, 80),
+        manufacturer: "",
+        hsn: hsn || "300490",
+        batch: batch,
+        expiry: expiry,
+        pack: pack,
+        mrp: Math.round(mrp * 100) / 100,
+        qty: Math.max(1, qty),
+        freeQty: free,
+        ptr: Math.round(ptr * 100) / 100,
+        gstRate: [5, 12, 18, 28].includes(gstRate) ? gstRate : 5,
+        rack: rack,
+        packQty: 0,
+        discPct: disc,
+        schemePct: 0,
+        amount: 0
+      });
+    }
+
+    if (items.length > 0) {
+      console.log("[PARSER] Pipe-table parser found", items.length, "items:", items.map(function(i){return i.name;}));
+      return items;
+    }
+  }
+
+  // ── Strategy 2: Line-by-line fallback (plain text OCR, other distributors) ─
+  console.log("[PARSER] Pipe-table failed, trying line-by-line fallback");
+  return parseVardhmanLineByLine(text);
+}
+
+// Kept as fallback for non-table OCR output
+function parseVardhmanLineByLine(text) {
+  if (!text) return [];
+  var lines = text.split("\n").map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 5; });
+  var items = [];
+
+  // Find table start
+  var tableStart = 0;
+  for (var i = 0; i < Math.min(lines.length, 50); i++) {
+    var lower = lines[i].toLowerCase();
+    if ((lower.includes("description") || lower.includes("particulars")) &&
+        (lower.includes("qty") || lower.includes("batch") || lower.includes("mrp"))) {
+      tableStart = i + 1; break;
+    }
+    if (lower.includes("rack") && lower.includes("batch")) { tableStart = i + 1; break; }
+  }
+
+  var SKIP = /^(total|sub.?total|grand|taxable|cgst|sgst|igst|round|gst.?summary|bank|ifsc|pan|dl.no|gstin|address|phone|mobile|email|invoice|page|schedule|checked|order|case|hunt|sales|mrp.printed|terms|authoris|scan|collectable|signature|do.not|cash.payment|sign|valid|credit|east.zone|west.zone|relation|billed.to|buyer|seller|shipping|net.value|sale.value|sch.disc|bengaluru|subayyan|banaswadi|no\.\d|2nd.main|3rd.cross|<)/i;
 
   for (var li = tableStart; li < lines.length; li++) {
     var l = lines[li];
     if (SKIP.test(l)) continue;
-    if (l.length < 10) continue;
+    if (l.length < 8) continue;
 
-    // Extract all numbers from the line
-    var allNums = [];
-    var numRe = /(\d+\.?\d*)/g;
-    var nm;
-    while ((nm = numRe.exec(l)) !== null) allNums.push({ val: parseFloat(nm[1]), pos: nm.index });
-    if (allNums.length < 2) continue;
-
-    // Extract medicine name: text between rack code and pack/batch info
-    // Medicine names can contain numbers (10MG, 125MCG, MGD3, etc.)
     var rackM = l.match(/^([A-Z]\d{3,5})\s+/);
     var nameStart = rackM ? rackM[0].length : 0;
 
-    // Find where name ends: look for pack pattern (10'S, 15S, 5X3ML, DEVICE, PCS)
-    // or batch pattern (letter+3digits like C25INH4001, V2600071)
+    var packM = l.match(/\b(\d{1,3}[x×X]\d+\s*ML|\d{1,3}['`]?\s*[SsTt]\b|DEVICE|PCS|BOX\b)/i);
     var nameEnd = l.length;
-    var packM = l.match(/\b(\d{1,3}['`]?\s*[SsTt]\b|\d+X\d+\s*ML|DEVICE|PCS|BOX\b)/i);
-    if (packM && packM.index > nameStart + 3) nameEnd = packM.index;
+    if (packM && packM.index > nameStart + 2) nameEnd = packM.index;
     else {
-      // Find batch: typically 5+ chars starting with letter(s) then digits
       var batchPos = l.search(/\b[A-Z]{1,5}\d{4,}/);
       if (batchPos > nameStart + 5) nameEnd = batchPos;
     }
 
-    // Also stop at a sequence of 2+ standalone numbers (qty, prices)
-    var numSeq = l.substring(nameStart).search(/\s+\d+\s+\d+['`]?\s*[SsTt]?\s/);
-    if (numSeq > 3 && nameStart + numSeq < nameEnd) nameEnd = nameStart + numSeq;
-
-    var name = l.substring(nameStart, nameEnd).replace(/[|\\]/g, "").replace(/\s+/g, " ").trim();
-    // Clean trailing standalone numbers that aren't part of dosage
+    var name = l.substring(nameStart, nameEnd).replace(/[|\\~*]/g, "").replace(/\s+/g, " ").trim();
     name = name.replace(/\s+\d+\s*$/, "").trim();
+    if (!name || name.length < 3 || !/[A-Za-z]{2,}/.test(name)) continue;
+    if (/^(NO\.|HUNT|MOBILE|EMAIL|GSTIN|STATE|DL|PAN|ACK|INVOICE|PAGE|CHECKED|BENGALURU|SUBAYYAN)/i.test(name)) continue;
 
-    if (!name || name.length < 3 || !/[A-Z]{2,}/i.test(name)) continue;
-    // Skip if name looks like header/address
-    if (/^(NO\.|HUNT|MOBILE|EMAIL|GSTIN|STATE|DL\s*NO|PAN|EWB|IRN|ACK|INVOICE|TAX\s*INV|PAGE|CHECKED)/i.test(name)) continue;
-
-    // Get prices - find numbers with decimals (XX.XX format = prices)
-    var decNums = [];
-    var decRe = /(\d+\.\d{2})/g;
-    var dm;
-    while ((dm = decRe.exec(l)) !== null) decNums.push(parseFloat(dm[1]));
-    var priceNums = decNums.filter(function(n) { return n >= 5; }).sort(function(a, b) { return b - a; });
-
-    // MRP is the largest price, PTR is the second largest
-    var mrp = priceNums.length >= 1 ? priceNums[0] : 0;
-    var ptr = priceNums.length >= 2 ? priceNums[1] : mrp * 0.85;
+    var decNums = [], decRe = /(\d+\.\d{2})/g, dm;
+    while ((dm = decRe.exec(l)) !== null) { var v = parseFloat(dm[1]); if (v > 0) decNums.push(v); }
+    var sorted = decNums.slice().sort(function(a,b){ return b-a; });
+    var mrp = sorted[0] || 0;
+    var ptr = sorted[1] || mrp * 0.85;
     if (mrp <= 0) continue;
 
-    // For Vardhman with OLD MRP and NEW MRP columns: 
-    // If there are 3+ prices, pattern is: OLD_MRP(0.00), NEW_MRP, TRADE_PRICE
-    // NEW_MRP > TRADE_PRICE, so mrp = 2nd highest, ptr = 3rd
-    if (priceNums.length >= 3 && priceNums[0] > 0) {
-      // If first price is much larger and there's a 0.00, adjust
-      // Usually: 0.00(old), MRP, PTR, taxable, net
-      var nonZero = priceNums.filter(function(n) { return n > 1; });
-      if (nonZero.length >= 2) { mrp = nonZero[0]; ptr = nonZero[1]; }
-    }
+    var allNums = [], numRe = /(\d+\.?\d*)/g, nm;
+    while ((nm = numRe.exec(l)) !== null) allNums.push(parseFloat(nm[1]));
+    var qty = (allNums.filter(function(n){ return n>=1&&n<=99&&n===Math.floor(n); })[0]) || 1;
 
-    // Qty: look for small numbers (1-99) that aren't prices
-    var qty = 1;
-    var smallNums = allNums.filter(function(n) { return n.val >= 1 && n.val <= 99 && n.val === Math.floor(n.val); });
-    if (smallNums.length > 0) qty = smallNums[0].val;
-
-    // Batch
-    var batchM = l.match(/\b([A-Z]{1,5}\d{3,}[A-Z0-9]*)\b/);
+    var batchM = l.match(/\b([A-Z]{1,5}\d{4,}[A-Z0-9]*)\b/);
     var batch = batchM ? batchM[1] : "";
-
-    // Expiry
     var expM = l.match(/\b(\d{1,2})[\/\-](\d{2,4})\b/);
     var expiry = "";
-    if (expM) {
-      var yr = expM[2].length === 2 ? "20" + expM[2] : expM[2];
-      expiry = yr + "-" + expM[1].padStart(2, "0");
-    }
-
-    // Disc%: look for 4.00 or similar near "disc" or at end
-    var discPct = 0;
-    var discM = l.match(/(\d+\.00)\s*$/);
-    if (!discM) discM = l.match(/\b(4\.00|5\.00|8\.00|10\.00|12\.00|15\.00|20\.00)\b/);
-    if (discM) discPct = parseFloat(discM[1]);
-
-    // GST
-    var gstM = l.match(/\b(5|12|18|28)\s*$/);
+    if (expM) { var yr = expM[2].length===2?"20"+expM[2]:expM[2]; expiry=yr+"-"+expM[1].padStart(2,"0"); }
+    var discM = l.match(/\b(\d{1,2}\.00)\b/g);
+    var discPct = discM ? Math.min.apply(null, discM.map(parseFloat).filter(function(n){return n>0&&n<=30;})) : 0;
+    var gstM = l.match(/\b(5|12|18|28)\b/);
     var gstRate = gstM ? parseInt(gstM[1]) : 5;
+    var pack = packM ? packM[1].trim() : "";
 
-    // Pack
-    var pack = "";
-    if (packM) pack = packM[1];
-
-    items.push({ name: name.slice(0, 80), manufacturer: "", hsn: "300490", batch: batch, expiry: expiry, pack: pack, mrp: Math.round(mrp * 100) / 100, qty: Math.max(1, qty), freeQty: 0, ptr: Math.round(ptr * 100) / 100, gstRate: gstRate, rack: "", packQty: 0, discPct: discPct, schemePct: 0, amount: 0 });
+    items.push({ name: name.slice(0,80), manufacturer:"", hsn:"300490", batch:batch, expiry:expiry, pack:pack,
+      mrp:Math.round(mrp*100)/100, qty:Math.max(1,qty), freeQty:0, ptr:Math.round(ptr*100)/100,
+      gstRate:gstRate, rack:rackM?rackM[1]:"", packQty:0, discPct:discPct||0, schemePct:0, amount:0 });
   }
   return items;
+}
+
+// Keep old name as alias for backward compat
+function parseVardhmanText(text) {
+  return parseInvoiceTable(text);
 }
 
 // ── Main entry point called by doImg ─────────────────────────────────────────
 function parseImageBillToItems(text) {
   const clean = normalizeInvoiceText(text);
-  console.log("[PARSER] parseImageBillToItems called, text length:", text.length);
-  console.log("[PARSER] Normalized text (first 500):", clean.substring(0, 500));
 
   // PRIORITY: use spatial bbox data if available from last OCR run
   if (window._ocrWords && window._ocrWords.length > 0) {
     const spatial = parseWithSpatialData(window._ocrWords, window._ocrPageW, clean);
     if (spatial && spatial.items && spatial.items.length >= 1) {
       window._ocrWords = null;
-      console.log("[PARSER] Used spatial parser, found items:", spatial.items.length);
       return spatial;
     }
   }
@@ -680,7 +757,6 @@ function parseImageBillToItems(text) {
 
   // Fallback 1: structured PDF-style parser
   const pdfParsed = parsePdfToItems(clean);
-  console.log("[PARSER] PDF parser found items:", pdfParsed?.items?.length || 0);
   if (pdfParsed && pdfParsed.items && pdfParsed.items.length >= 2) return pdfParsed;
 
   const lines = clean.split("\n").map(l => l.trim()).filter(Boolean);
@@ -694,14 +770,11 @@ function parseImageBillToItems(text) {
       supplier = l.replace(/[|:]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
   }
 
-  // Fallback 2: Vardhman rack-code parser
-  const vardhmanItems = parseVardhmanText(clean);
-  console.log("[PARSER] Vardhman parser found items:", vardhmanItems.length);
-  if (vardhmanItems.length >= 1) {
-    return { supplier: supplier || "Vardhman Medisales", invoiceNo, date, items: vardhmanItems };
-  }
+  // Fallback 2: line-by-line numeric parser
+  // Try generic table parser first
+  const tableItems = parseInvoiceTable(clean);
+  if (tableItems.length >= 1) return { supplier, invoiceNo, date, items: tableItems };
 
-  // Fallback 3: line-by-line numeric parser
   var items = [];
   for (var li = 0; li < lines.length; li++) {
     var l = lines[li];
