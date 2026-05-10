@@ -3303,6 +3303,75 @@ function BackupPage({ inv, bills, purch, saveAll, askConfirm, saveInv, saveBills
     </div>
   );
 }
+function BillExpandedRow({ b, bills, calcItemProfit, calcBillProfit, getStockForItem, showBill, setPage, saveBills }) {
+  var isMigrated = b.items.some(function(it) { return it.marginPct !== undefined; });
+  var [localItems, setLocalItems] = useState(b.items);
+  var [dirty, setDirty] = useState(false);
+  var calcLocal = function(items) {
+    var tSale = 0, tCost = 0, tDisc = 0;
+    items.forEach(function(it) { var iP = calcItemProfit(it); tSale += iP.netSale; tCost += iP.totalCost; tDisc += (it.unitPrice || it.mrp) * it.qty * (it.discount || 0) / 100; });
+    tDisc += (b.billDiscount || 0);
+    var net = tSale - (b.billDiscount || 0);
+    return { netSale: net, totalCost: tCost, totalDisc: tDisc, profit: net - tCost, margin: net > 0 ? ((net - tCost) / net * 100) : 0 };
+  };
+  var lp = calcLocal(localItems);
+  return <div style={{ padding: 14, background: "#fff", overflowX: "auto" }}>
+    {isMigrated && <div style={{ fontSize: 11, color: "#2563EB", marginBottom: 8, fontWeight: 600 }}>✏️ PTR is editable — change it to correct the profit margin for this migrated bill.</div>}
+    <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
+      {["Medicine","Type","Qty","Sale Price","Disc%","Sale Amt", isMigrated ? "PTR (edit)" : "PTR","GST%","Cost","Profit","Margin%","Stock"].map(function(h) { return <th key={h} style={{ ...ths, fontSize: 10, background: "#DCFCE7" }}>{h}</th>; })}</tr></thead><tbody>
+      {localItems.map(function(it, i) {
+        var iP = calcItemProfit(it);
+        var iM = iP.netSale > 0 ? (iP.profit / iP.netSale * 100) : 0;
+        var sl = getStockForItem(it);
+        var ptrVal = it.unitPtr || (it.loose && it.ptr ? it.ptr / (it.packQty || 10) : it.ptr) || 0;
+        return <tr key={i}>
+          <td style={{ ...tds, fontWeight: 500 }}>{it.name}</td>
+          <td style={tds}>{it.loose ? <Tag bg="#FEF3C7" fg="#92400E">Loose</Tag> : <Tag bg="#DBEAFE" fg="#1E40AF">Pack</Tag>}</td>
+          <td style={tds}>{it.qty}{it.loose ? " pcs" : ""}</td>
+          <td style={tds}>Rs.{f2(it.unitPrice || it.mrp)}</td>
+          <td style={tds}>{it.discount || 0}%</td>
+          <td style={{ ...tds, fontWeight: 600 }}>Rs.{f2(iP.netSale)}</td>
+          <td style={{ ...tds, padding: "2px 4px" }}>
+            {isMigrated
+              ? <input type="number" step="0.01" defaultValue={f2(ptrVal)} onBlur={function(e) {
+                  var newPtr = parseFloat(e.target.value) || 0;
+                  if (Math.abs(newPtr - ptrVal) < 0.001) return;
+                  setLocalItems(function(prev) { return prev.map(function(x, j) {
+                    if (j !== i) return x;
+                    var updPtr = x.loose ? newPtr * (x.packQty || 10) : newPtr;
+                    return Object.assign({}, x, { ptr: updPtr, unitPtr: newPtr, unitCost: 0, purchDiscPct: 0, purchSchemePct: 0, purchFreeRatio: 1 });
+                  }); });
+                  setDirty(true);
+                }} style={{ width: 60, border: "1px solid #93C5FD", borderRadius: 4, padding: "2px 4px", fontSize: 11, textAlign: "right", background: "#EFF6FF", fontFamily: "inherit" }} />
+              : <span style={{ color: "#2563EB", fontSize: 11 }}>Rs.{f2(ptrVal)}</span>}
+          </td>
+          <td style={{ ...tds, fontSize: 11 }}>{it.gstRate || 0}%</td>
+          <td style={{ ...tds, color: "#B45309" }}>Rs.{f2(iP.totalCost)}</td>
+          <td style={{ ...tds, fontWeight: 700, color: iP.profit >= 0 ? "#059669" : "#DC2626" }}>Rs.{f2(iP.profit)}</td>
+          <td style={{ ...tds, fontWeight: 600, color: iM >= 20 ? "#059669" : iM >= 10 ? "#D97706" : "#DC2626" }}>{f2(iM)}%</td>
+          <td style={tds}><span style={{ fontWeight: 600, color: sl === "0" ? "#DC2626" : "#059669" }}>{sl}</span></td>
+        </tr>;
+      })}</tbody></table>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8, paddingTop: 8, borderTop: "1px solid #eee", flexWrap: "wrap", gap: 8 }}>
+      <div style={{ display: "flex", gap: 6 }}>
+        <button onClick={function() { showBill(b, true); }} style={{ ...bts(true), padding: "6px 14px", fontSize: 11 }}>View Bill</button>
+        <button onClick={function() { setPage("hist"); setTimeout(function() { window.dispatchEvent(new CustomEvent("editBill", { detail: b.billNo })); }, 300); }} style={{ ...bts(false), padding: "6px 14px", fontSize: 11 }}>Edit Bill</button>
+        {isMigrated && dirty && <button onClick={function() {
+          var updatedBills = bills.map(function(x) { return x.billNo === b.billNo ? Object.assign({}, x, { items: localItems }) : x; });
+          saveBills(updatedBills);
+          setDirty(false);
+          alert("PTR saved for bill " + b.billNo + ". Margins updated.");
+        }} style={{ border: "none", borderRadius: 7, padding: "6px 14px", fontWeight: 700, cursor: "pointer", fontSize: 11, background: "#059669", color: "#fff", fontFamily: "inherit" }}>💾 Save PTR Changes</button>}
+      </div>
+      <div style={{ display: "flex", gap: 12, fontSize: 12 }}>
+        {lp.totalDisc > 0 && <span style={{ color: "#DC2626" }}>Discounts: -Rs.{f2(lp.totalDisc)}</span>}
+        <span style={{ color: "#B45309" }}>Total Cost: Rs.{f2(lp.totalCost)}</span>
+        <span style={{ fontWeight: 800, color: lp.profit >= 0 ? "#059669" : "#DC2626" }}>Net Profit: Rs.{f2(lp.profit)} ({f2(lp.margin)}%)</span>
+      </div>
+    </div>
+  </div>;
+}
+
 function ProfitPage({ bills, inv, mob, purch, saveBills, showBill, setPage }) {
   const [view, setView] = useState("bill");
   const [profitSearch, setProfitSearch] = useState("");
@@ -3533,77 +3602,7 @@ function ProfitPage({ bills, inv, mob, purch, saveBills, showBill, setPage }) {
                   <span style={{ color: "#888" }}>{isExp ? "\u25B2" : "\u25BC"}</span>
                 </div>
               </div>
-              {isExp && (function() {
-                var isMigrated = b.items.some(function(it) { return it.marginPct !== undefined; });
-                var [localItems, setLocalItems] = useState(b.items);
-                var [dirty, setDirty] = useState(false);
-                var calcLocal = function(items) {
-                  var tSale = 0, tCost = 0, tDisc = 0;
-                  items.forEach(function(it) { var iP = calcItemProfit(it); tSale += iP.netSale; tCost += iP.totalCost; tDisc += (it.unitPrice || it.mrp) * it.qty * (it.discount || 0) / 100; });
-                  tDisc += (b.billDiscount || 0);
-                  var net = tSale - (b.billDiscount || 0);
-                  return { netSale: net, totalCost: tCost, totalDisc: tDisc, profit: net - tCost, margin: net > 0 ? ((net - tCost) / net * 100) : 0 };
-                };
-                var lp = calcLocal(localItems);
-                return <div style={{ padding: 14, background: "#fff", overflowX: "auto" }}>
-                  <div style={{ fontSize: 11, color: "#2563EB", marginBottom: 8, fontWeight: 600 }}>{isMigrated ? "✏️ PTR is editable — change it to correct the profit margin for migrated bills." : ""}</div>
-                  <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
-                    {["Medicine","Type","Qty","Sale Price","Disc%","Sale Amt", isMigrated ? "PTR (edit)" : "PTR","GST%","Cost","Profit","Margin%","Stock"].map(function(h) { return <th key={h} style={{ ...ths, fontSize: 10, background: "#DCFCE7" }}>{h}</th>; })}</tr></thead><tbody>
-                    {localItems.map(function(it, i) {
-                      var iP = calcItemProfit(it);
-                      var iM = iP.netSale > 0 ? (iP.profit / iP.netSale * 100) : 0;
-                      var sl = getStockForItem(it);
-                      var ptrVal = it.unitPtr || (it.loose && it.ptr ? it.ptr / (it.packQty || 10) : it.ptr) || 0;
-                      return <tr key={i}>
-                        <td style={{ ...tds, fontWeight: 500 }}>{it.name}</td>
-                        <td style={tds}>{it.loose ? <Tag bg="#FEF3C7" fg="#92400E">Loose</Tag> : <Tag bg="#DBEAFE" fg="#1E40AF">Pack</Tag>}</td>
-                        <td style={tds}>{it.qty}{it.loose ? " pcs" : ""}</td>
-                        <td style={tds}>Rs.{f2(it.unitPrice || it.mrp)}</td>
-                        <td style={tds}>{it.discount || 0}%</td>
-                        <td style={{ ...tds, fontWeight: 600 }}>Rs.{f2(iP.netSale)}</td>
-                        <td style={{ ...tds, padding: "2px 4px" }}>
-                          {isMigrated ? <input type="number" step="0.01" defaultValue={f2(ptrVal)}
-                            onBlur={function(e) {
-                              var newPtr = parseFloat(e.target.value) || 0;
-                              if (Math.abs(newPtr - ptrVal) < 0.001) return;
-                              setLocalItems(function(prev) {
-                                return prev.map(function(x, j) {
-                                  if (j !== i) return x;
-                                  var updPtr = x.loose ? newPtr * (x.packQty || 10) : newPtr;
-                                  return Object.assign({}, x, { ptr: updPtr, unitPtr: newPtr, unitCost: 0, purchDiscPct: 0, purchSchemePct: 0, purchFreeRatio: 1 });
-                                });
-                              });
-                              setDirty(true);
-                            }}
-                            style={{ width: 60, border: "1px solid #93C5FD", borderRadius: 4, padding: "2px 4px", fontSize: 11, textAlign: "right", background: "#EFF6FF", fontFamily: "inherit" }} />
-                          : <span style={{ color: "#2563EB", fontSize: 11 }}>Rs.{f2(ptrVal)}</span>}
-                        </td>
-                        <td style={{ ...tds, fontSize: 11 }}>{it.gstRate || 0}%</td>
-                        <td style={{ ...tds, color: "#B45309" }}>Rs.{f2(iP.totalCost)}</td>
-                        <td style={{ ...tds, fontWeight: 700, color: iP.profit >= 0 ? "#059669" : "#DC2626" }}>Rs.{f2(iP.profit)}</td>
-                        <td style={{ ...tds, fontWeight: 600, color: iM >= 20 ? "#059669" : iM >= 10 ? "#D97706" : "#DC2626" }}>{f2(iM)}%</td>
-                        <td style={tds}><span style={{ fontWeight: 600, color: sl === "0" ? "#DC2626" : "#059669" }}>{sl}</span></td>
-                      </tr>;
-                    })}</tbody></table>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8, paddingTop: 8, borderTop: "1px solid #eee", flexWrap: "wrap", gap: 8 }}>
-                    <div style={{ display: "flex", gap: 6 }}>
-                      <button onClick={function() { showBill(b, true); }} style={{ ...bts(true), padding: "6px 14px", fontSize: 11 }}>View Bill</button>
-                      <button onClick={function() { setPage("hist"); setTimeout(function() { window.dispatchEvent(new CustomEvent("editBill", { detail: b.billNo })); }, 300); }} style={{ ...bts(false), padding: "6px 14px", fontSize: 11 }}>Edit Bill</button>
-                      {isMigrated && dirty && <button onClick={function() {
-                        var updatedBills = bills.map(function(x) { return x.billNo === b.billNo ? Object.assign({}, x, { items: localItems }) : x; });
-                        saveBills(updatedBills);
-                        setDirty(false);
-                        alert("PTR saved for bill " + b.billNo + ". Margins updated.");
-                      }} style={{ border: "none", borderRadius: 7, padding: "6px 14px", fontWeight: 700, cursor: "pointer", fontSize: 11, background: "#059669", color: "#fff", fontFamily: "inherit" }}>💾 Save PTR Changes</button>}
-                    </div>
-                    <div style={{ display: "flex", gap: 12, fontSize: 12 }}>
-                      {lp.totalDisc > 0 && <span style={{ color: "#DC2626" }}>Discounts: -Rs.{f2(lp.totalDisc)}</span>}
-                      <span style={{ color: "#B45309" }}>Total Cost: Rs.{f2(lp.totalCost)}</span>
-                      <span style={{ fontWeight: 800, color: lp.profit >= 0 ? "#059669" : "#DC2626" }}>Net Profit: Rs.{f2(lp.profit)} ({f2(lp.margin)}%)</span>
-                    </div>
-                  </div>
-                </div>;
-              })()}
+              {isExp && <BillExpandedRow b={b} bills={bills} calcItemProfit={calcItemProfit} calcBillProfit={calcBillProfit} getStockForItem={getStockForItem} showBill={showBill} setPage={setPage} saveBills={saveBills} />}
             </div>;
           })}
         </div>}
