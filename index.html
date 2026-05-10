@@ -1353,7 +1353,7 @@ function Login({ onLogin }) {
 // ══════════════════════════════════════════════
 function Sidebar({ page, setPage, user, onLogout, counts, mob, sideOpen, setSideOpen }) {
   const isO = user.role === "owner";
-  const nav = [{ id: "dash", i: "📊", l: "Dashboard" }, ...(isO ? [{ id: "purch", i: "📦", l: "Purchases" }, { id: "returns", i: "↩️", l: "Returns" }] : []), { id: "inv", i: "💊", l: "Inventory" }, { id: "rack", i: "🗄", l: "Racks" }, ...(isO ? [{ id: "audit", i: "📝", l: "Audit" }] : []), { id: "bill", i: "🧾", l: "New Bill" }, ...(isO ? [{ id: "profit", i: "💹", l: "Profit Margin" }] : []), { id: "stock", i: "📋", l: "Stock" }, { id: "expiry", i: "⏰", l: "Expiry" }, { id: "hist", i: "🗂", l: "Bills" }, ...(isO ? [{ id: "reports", i: "📑", l: "Reports" }] : []), { id: "customers", i: "👤", l: "Customers" }, { id: "compare", i: "⚖️", l: "Price Compare" }, { id: "ency", i: "📚", l: "Encyclopedia" }, ...(isO ? [{ id: "users", i: "👥", l: "Users" }, { id: "backup", i: "💾", l: "Backup" }] : [])];
+  const nav = [{ id: "dash", i: "📊", l: "Dashboard" }, ...(isO ? [{ id: "purch", i: "📦", l: "Purchases" }, { id: "returns", i: "↩️", l: "Returns" }] : []), { id: "inv", i: "💊", l: "Inventory" }, { id: "rack", i: "🗄", l: "Racks" }, ...(isO ? [{ id: "audit", i: "📝", l: "Audit" }] : []), { id: "bill", i: "🧾", l: "New Bill" }, ...(isO ? [{ id: "profit", i: "💹", l: "Profit Margin" }] : []), { id: "stock", i: "📋", l: "Stock" }, { id: "expiry", i: "⏰", l: "Expiry" }, { id: "hist", i: "🗂", l: "Bills" }, ...(isO ? [{ id: "reports", i: "📑", l: "Reports" }, { id: "gst", i: "🧾", l: "GST Reports" }] : []), { id: "customers", i: "👤", l: "Customers" }, ...(isO ? [{ id: "ledger", i: "📒", l: "Supplier Ledger" }, { id: "predict", i: "🤖", l: "Stock Predict" }] : []), { id: "compare", i: "⚖️", l: "Price Compare" }, { id: "ency", i: "📚", l: "Encyclopedia" }, ...(isO ? [{ id: "users", i: "👥", l: "Users" }, { id: "backup", i: "💾", l: "Backup" }] : [])];
   if (mob && !sideOpen) return null;
   return (
     <div>
@@ -5680,6 +5680,377 @@ function useVoiceSearch(onResult) {
   return { listening: listening, startListening: startListening, stopListening: stopListening };
 }
 
+// ══════════════════════════════════════════════
+// GST REPORTS PAGE
+// ══════════════════════════════════════════════
+function GSTPage({ bills, inv, purch, mob }) {
+  const [period, setPeriod] = useState("month");
+  const [fromD, setFromD] = useState(new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10));
+  const [toD, setToD] = useState(new Date().toISOString().slice(0, 10));
+
+  var filterBills = function() {
+    return bills.filter(function(b) {
+      var d = new Date(b.date);
+      if (period === "month") { var now = new Date(); return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear(); }
+      if (period === "lastmonth") { var lm = new Date(); lm.setMonth(lm.getMonth() - 1); return d.getMonth() === lm.getMonth() && d.getFullYear() === lm.getFullYear(); }
+      if (period === "quarter") { var now2 = new Date(); var qStart = new Date(now2.getFullYear(), Math.floor(now2.getMonth() / 3) * 3, 1); return d >= qStart && d <= now2; }
+      if (period === "year") { return d.getFullYear() === new Date().getFullYear(); }
+      if (period === "custom") { return d >= new Date(fromD) && d <= new Date(toD + "T23:59:59"); }
+      return true;
+    });
+  };
+
+  var fb = filterBills();
+
+  // GST breakdown by rate
+  var gstBreakdown = {};
+  fb.forEach(function(b) {
+    (b.items || []).forEach(function(it) {
+      var rate = it.gstRate || 0;
+      var key = rate + "%";
+      if (!gstBreakdown[key]) gstBreakdown[key] = { rate: rate, taxableValue: 0, cgst: 0, sgst: 0, igst: 0, totalTax: 0, count: 0 };
+      var saleAmt = (it.unitPrice || it.mrp) * it.qty * (1 - (it.discount || 0) / 100);
+      var taxable = saleAmt / (1 + rate / 100);
+      var tax = saleAmt - taxable;
+      gstBreakdown[key].taxableValue += taxable;
+      gstBreakdown[key].cgst += tax / 2;
+      gstBreakdown[key].sgst += tax / 2;
+      gstBreakdown[key].totalTax += tax;
+      gstBreakdown[key].count++;
+    });
+  });
+  var gstRows = Object.values(gstBreakdown).sort(function(a, b) { return a.rate - b.rate; });
+  var totTaxable = gstRows.reduce(function(s, r) { return s + r.taxableValue; }, 0);
+  var totCGST = gstRows.reduce(function(s, r) { return s + r.cgst; }, 0);
+  var totSGST = gstRows.reduce(function(s, r) { return s + r.sgst; }, 0);
+  var totTax = gstRows.reduce(function(s, r) { return s + r.totalTax; }, 0);
+  var totSales = fb.reduce(function(s, b) { return s + (b.netAmount || 0); }, 0);
+
+  // Purchase GST (input tax)
+  var purchGst = {};
+  (purch || []).forEach(function(p) {
+    var pd = new Date(p.date);
+    var inRange = false;
+    if (period === "month") { var now = new Date(); inRange = pd.getMonth() === now.getMonth() && pd.getFullYear() === now.getFullYear(); }
+    else if (period === "lastmonth") { var lm = new Date(); lm.setMonth(lm.getMonth() - 1); inRange = pd.getMonth() === lm.getMonth() && pd.getFullYear() === lm.getFullYear(); }
+    else if (period === "custom") { inRange = pd >= new Date(fromD) && pd <= new Date(toD + "T23:59:59"); }
+    else inRange = true;
+    if (!inRange) return;
+    (p.items || []).forEach(function(it) {
+      var rate = it.gstRate || 0;
+      var key = rate + "%";
+      if (!purchGst[key]) purchGst[key] = { rate: rate, taxableValue: 0, cgst: 0, sgst: 0, totalTax: 0 };
+      var taxable = (it.ptr || 0) * (it.qty || 0) * (1 - (it.discPct || 0) / 100) * (1 - (it.schemePct || 0) / 100);
+      var tax = taxable * rate / 100;
+      purchGst[key].taxableValue += taxable;
+      purchGst[key].cgst += tax / 2;
+      purchGst[key].sgst += tax / 2;
+      purchGst[key].totalTax += tax;
+    });
+  });
+  var purchRows = Object.values(purchGst).sort(function(a, b) { return a.rate - b.rate; });
+  var totInputTax = purchRows.reduce(function(s, r) { return s + r.totalTax; }, 0);
+
+  var downloadCSV = function(type) {
+    var csv = "";
+    if (type === "sales") {
+      csv = "GST Rate,Taxable Value,CGST,SGST,Total Tax,Items\n";
+      gstRows.forEach(function(r) { csv += r.rate + "%," + f2(r.taxableValue) + "," + f2(r.cgst) + "," + f2(r.sgst) + "," + f2(r.totalTax) + "," + r.count + "\n"; });
+      csv += "TOTAL," + f2(totTaxable) + "," + f2(totCGST) + "," + f2(totSGST) + "," + f2(totTax) + "," + gstRows.reduce(function(s,r){return s+r.count;},0) + "\n";
+    } else if (type === "gstr1") {
+      csv = "Bill No,Date,Patient,GSTIN,Taxable Value,CGST,SGST,Total,Invoice Value\n";
+      fb.forEach(function(b) {
+        var taxable = b.items.reduce(function(s, it) { var amt = (it.unitPrice||it.mrp)*it.qty*(1-(it.discount||0)/100); return s + amt/(1+(it.gstRate||0)/100); }, 0);
+        var tax = (b.netAmount || 0) - taxable;
+        csv += b.billNo + "," + fD(b.date) + "," + (b.patient || "").replace(/,/g, " ") + ",," + f2(taxable) + "," + f2(tax/2) + "," + f2(tax/2) + "," + f2(tax) + "," + f2(b.netAmount) + "\n";
+      });
+    } else if (type === "purchase") {
+      csv = "GST Rate,Taxable Value,CGST,SGST,Total Input Tax\n";
+      purchRows.forEach(function(r) { csv += r.rate + "%," + f2(r.taxableValue) + "," + f2(r.cgst) + "," + f2(r.sgst) + "," + f2(r.totalTax) + "\n"; });
+      csv += "TOTAL," + f2(purchRows.reduce(function(s,r){return s+r.taxableValue;},0)) + "," + f2(purchRows.reduce(function(s,r){return s+r.cgst;},0)) + "," + f2(purchRows.reduce(function(s,r){return s+r.sgst;},0)) + "," + f2(totInputTax) + "\n";
+    }
+    var blob = new Blob([csv], { type: "text/csv" });
+    var a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "GST_" + type + "_" + fromD + ".csv"; a.click();
+  };
+
+  return (
+    <div><h2 style={hds}>GST Reports</h2>
+      <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
+        {[["month","This Month"],["lastmonth","Last Month"],["quarter","This Quarter"],["year","This Year"],["custom","Custom"]].map(function(p) {
+          return <button key={p[0]} onClick={function(){setPeriod(p[0]);}} style={{ padding: "8px 14px", borderRadius: 8, border: period === p[0] ? "2px solid #0D6B5B" : "1px solid #ddd", background: period === p[0] ? "#D1FAE5" : "#fff", fontWeight: 600, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>{p[1]}</button>;
+        })}
+      </div>
+      {period === "custom" && <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+        <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>From</label><input type="date" value={fromD} onChange={function(e){setFromD(e.target.value);}} style={inps} /></div>
+        <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>To</label><input type="date" value={toD} onChange={function(e){setToD(e.target.value);}} style={inps} /></div>
+      </div>}
+
+      <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(4,1fr)", gap: 12, marginBottom: 16 }}>
+        <Stat icon="💰" label="Total Sales" value={"Rs." + f2(totSales)} color="#059669" />
+        <Stat icon="📋" label="Taxable Value" value={"Rs." + f2(totTaxable)} color="#2563EB" />
+        <Stat icon="🏛" label="Output Tax (CGST+SGST)" value={"Rs." + f2(totTax)} color="#D97706" />
+        <Stat icon="📦" label="Input Tax (Purchases)" value={"Rs." + f2(totInputTax)} color="#7C3AED" />
+      </div>
+
+      <div style={{ ...cds, marginBottom: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <b>Sales GST Summary ({fb.length} bills)</b>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={function(){downloadCSV("sales");}} style={{ ...bts(true), padding: "6px 12px", fontSize: 11 }}>Export CSV</button>
+            <button onClick={function(){downloadCSV("gstr1");}} style={{ ...bts(false), padding: "6px 12px", fontSize: 11 }}>GSTR-1 Format</button>
+          </div>
+        </div>
+        <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
+          {["GST Rate","Taxable Value","CGST","SGST","Total Tax","Items"].map(function(h){return <th key={h} style={ths}>{h}</th>;})}</tr></thead><tbody>
+          {gstRows.map(function(r) { return <tr key={r.rate}>
+            <td style={{ ...tds, fontWeight: 700 }}>{r.rate}%</td>
+            <td style={tds}>Rs.{f2(r.taxableValue)}</td>
+            <td style={tds}>Rs.{f2(r.cgst)}</td>
+            <td style={tds}>Rs.{f2(r.sgst)}</td>
+            <td style={{ ...tds, fontWeight: 600, color: "#D97706" }}>Rs.{f2(r.totalTax)}</td>
+            <td style={tds}>{r.count}</td>
+          </tr>; })}
+          <tr style={{ background: "#F0FDF4", fontWeight: 700 }}>
+            <td style={tds}>TOTAL</td><td style={tds}>Rs.{f2(totTaxable)}</td><td style={tds}>Rs.{f2(totCGST)}</td><td style={tds}>Rs.{f2(totSGST)}</td><td style={{ ...tds, color: "#DC2626" }}>Rs.{f2(totTax)}</td><td style={tds}>{gstRows.reduce(function(s,r){return s+r.count;},0)}</td>
+          </tr></tbody></table></div>
+      </div>
+
+      {purchRows.length > 0 && <div style={{ ...cds, marginBottom: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <b>Purchase Input Tax (ITC)</b>
+          <button onClick={function(){downloadCSV("purchase");}} style={{ ...bts(false), padding: "6px 12px", fontSize: 11 }}>Export CSV</button>
+        </div>
+        <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
+          {["GST Rate","Taxable Value","CGST","SGST","Total Input Tax"].map(function(h){return <th key={h} style={ths}>{h}</th>;})}</tr></thead><tbody>
+          {purchRows.map(function(r) { return <tr key={r.rate}>
+            <td style={{ ...tds, fontWeight: 700 }}>{r.rate}%</td><td style={tds}>Rs.{f2(r.taxableValue)}</td><td style={tds}>Rs.{f2(r.cgst)}</td><td style={tds}>Rs.{f2(r.sgst)}</td><td style={{ ...tds, fontWeight: 600, color: "#7C3AED" }}>Rs.{f2(r.totalTax)}</td>
+          </tr>; })}
+          </tbody></table></div>
+        <div style={{ marginTop: 8, padding: 8, background: "#F0FDF4", borderRadius: 8, fontSize: 13, fontWeight: 700 }}>
+          Net Tax Liability: <span style={{ color: totTax - totInputTax >= 0 ? "#DC2626" : "#059669" }}>Rs.{f2(totTax - totInputTax)}</span>
+          <span style={{ fontWeight: 400, color: "#888", marginLeft: 8 }}>(Output Tax Rs.{f2(totTax)} - Input Tax Rs.{f2(totInputTax)})</span>
+        </div>
+      </div>}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════
+// SUPPLIER LEDGER PAGE
+// ══════════════════════════════════════════════
+function SupplierLedgerPage({ purch, mob }) {
+  const [q, setQ] = useState("");
+  const [expanded, setExpanded] = useState(null);
+  const [payments, setPayments] = useState({});
+  const [addPay, setAddPay] = useState(null);
+  const [payAmt, setPayAmt] = useState("");
+  const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10));
+  const [payNote, setPayNote] = useState("");
+
+  useEffect(function() { fbListen("ledger", function(data) { setPayments(data || {}); }); }, []);
+
+  // Build supplier summary from purchases
+  var suppliers = {};
+  (purch || []).forEach(function(p) {
+    var name = (p.supplier || "Unknown").trim();
+    if (!suppliers[name]) suppliers[name] = { name: name, totalPurchased: 0, invoices: [], firstDate: p.date, lastDate: p.date };
+    suppliers[name].totalPurchased += p.netAmount || 0;
+    suppliers[name].invoices.push(p);
+    if (p.date < suppliers[name].firstDate) suppliers[name].firstDate = p.date;
+    if (p.date > suppliers[name].lastDate) suppliers[name].lastDate = p.date;
+  });
+
+  // Add payment data
+  Object.keys(suppliers).forEach(function(name) {
+    var key = name.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
+    var pays = payments[key] ? (Array.isArray(payments[key]) ? payments[key] : Object.values(payments[key])) : [];
+    suppliers[name].payments = pays;
+    suppliers[name].totalPaid = pays.reduce(function(s, p) { return s + (p.amount || 0); }, 0);
+    suppliers[name].outstanding = suppliers[name].totalPurchased - suppliers[name].totalPaid;
+    suppliers[name].key = key;
+  });
+
+  var supList = Object.values(suppliers).filter(function(s) {
+    if (!q) return true;
+    return s.name.toLowerCase().indexOf(q.toLowerCase()) >= 0;
+  }).sort(function(a, b) { return b.outstanding - a.outstanding; });
+
+  var totalOutstanding = supList.reduce(function(s, sup) { return s + Math.max(0, sup.outstanding); }, 0);
+  var totalPurchased = supList.reduce(function(s, sup) { return s + sup.totalPurchased; }, 0);
+  var totalPaid = supList.reduce(function(s, sup) { return s + sup.totalPaid; }, 0);
+
+  var savePayment = function() {
+    if (!addPay || !payAmt) return;
+    var key = addPay.key;
+    var pay = { id: mkId(), amount: parseFloat(payAmt) || 0, date: payDate, note: payNote, addedAt: new Date().toISOString() };
+    db.ref("ledger/" + key + "/" + pay.id).set(pay);
+    setAddPay(null); setPayAmt(""); setPayNote("");
+  };
+
+  return (
+    <div><h2 style={hds}>Supplier Ledger</h2>
+      <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(4,1fr)", gap: 12, marginBottom: 16 }}>
+        <Stat icon="📦" label="Total Purchased" value={"Rs." + f2(totalPurchased)} color="#2563EB" />
+        <Stat icon="💳" label="Total Paid" value={"Rs." + f2(totalPaid)} color="#059669" />
+        <Stat icon="⚠️" label="Outstanding" value={"Rs." + f2(totalOutstanding)} color="#DC2626" />
+        <Stat icon="🏢" label="Suppliers" value={supList.length} color="#7C3AED" />
+      </div>
+
+      <input value={q} onChange={function(e){setQ(e.target.value);}} placeholder="Search supplier..." style={{ ...inps, marginBottom: 14 }} />
+
+      {addPay && <div style={{ ...cds, border: "2px solid #0D6B5B", marginBottom: 14 }}>
+        <b style={{ color: "#0D6B5B" }}>Record Payment - {addPay.name}</b>
+        <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr 1fr", gap: 8, marginTop: 8 }}>
+          <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Amount*</label><input type="number" value={payAmt} onChange={function(e){setPayAmt(e.target.value);}} style={inps} /></div>
+          <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Date</label><input type="date" value={payDate} onChange={function(e){setPayDate(e.target.value);}} style={inps} /></div>
+          <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Note</label><input value={payNote} onChange={function(e){setPayNote(e.target.value);}} placeholder="Cheque/UPI/Cash" style={inps} /></div>
+        </div>
+        <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+          <button onClick={savePayment} style={{ ...bts(true), padding: "8px 16px", fontSize: 12 }}>Save Payment</button>
+          <button onClick={function(){setAddPay(null);}} style={{ ...bts(false), padding: "8px 16px", fontSize: 12 }}>Cancel</button>
+        </div>
+      </div>}
+
+      {supList.map(function(s) {
+        var isExp = expanded === s.name;
+        return <div key={s.name} style={{ marginBottom: 6, borderRadius: 10, border: "1px solid #eee", overflow: "hidden" }}>
+          <div onClick={function(){setExpanded(isExp ? null : s.name);}} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px", background: isExp ? "#F0FDF4" : "#FAFAF7", cursor: "pointer", borderLeft: "4px solid " + (s.outstanding > 0 ? "#DC2626" : "#059669") }}>
+            <div><b style={{ fontSize: 14 }}>{s.name}</b><span style={{ color: "#888", fontSize: 11, marginLeft: 8 }}>{s.invoices.length} invoices</span></div>
+            <div style={{ display: "flex", gap: 12, alignItems: "center", fontSize: 12 }}>
+              <span>Purchased: <b>Rs.{f2(s.totalPurchased)}</b></span>
+              <span style={{ color: "#059669" }}>Paid: Rs.{f2(s.totalPaid)}</span>
+              <span style={{ fontWeight: 800, color: s.outstanding > 0 ? "#DC2626" : "#059669" }}>{s.outstanding > 0 ? "Due: Rs." + f2(s.outstanding) : "Settled"}</span>
+              <span style={{ color: "#888" }}>{isExp ? "\u25B2" : "\u25BC"}</span>
+            </div>
+          </div>
+          {isExp && <div style={{ padding: 14, background: "#fff" }}>
+            <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+              <button onClick={function(){setAddPay(s);setPayAmt("");setPayNote("");}} style={{ ...bts(true), padding: "6px 14px", fontSize: 11 }}>Record Payment</button>
+            </div>
+            <b style={{ fontSize: 12, color: "#888" }}>Invoices:</b>
+            <div style={{ marginTop: 4 }}>{s.invoices.sort(function(a,b){return new Date(b.date)-new Date(a.date);}).slice(0, 20).map(function(p) {
+              return <div key={p.id} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px solid #eee", fontSize: 12 }}>
+                <span>{fD(p.date)} | {p.invoiceNo || "-"}</span>
+                <b>Rs.{f2(p.netAmount)}</b>
+              </div>;
+            })}</div>
+            {s.payments.length > 0 && <div style={{ marginTop: 10 }}>
+              <b style={{ fontSize: 12, color: "#059669" }}>Payments:</b>
+              {s.payments.sort(function(a,b){return new Date(b.date)-new Date(a.date);}).map(function(p) {
+                return <div key={p.id} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px solid #eee", fontSize: 12 }}>
+                  <span>{fD(p.date)} | {p.note || "-"}</span>
+                  <b style={{ color: "#059669" }}>Rs.{f2(p.amount)}</b>
+                </div>;
+              })}
+            </div>}
+          </div>}
+        </div>;
+      })}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════
+// AI STOCK PREDICT PAGE
+// ══════════════════════════════════════════════
+function StockPredictPage({ inv, bills, mob }) {
+  const [days, setDays] = useState(30);
+  const [q, setQ] = useState("");
+  const [sortBy, setSortBy] = useState("daysLeft");
+
+  // Calculate daily consumption from bill history
+  var predictions = inv.filter(function(m) { return (m.stock || 0) > 0; }).map(function(m) {
+    // Find all bill items for this medicine in last 90 days
+    var cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 90);
+    var sold = 0, billCount = 0;
+    bills.forEach(function(b) {
+      if (new Date(b.date) < cutoff) return;
+      (b.items || []).forEach(function(it) {
+        if (it.mid === m.id || it.name === m.name) {
+          sold += it.loose ? it.qty / (it.packQty || 10) : it.qty;
+          billCount++;
+        }
+      });
+    });
+
+    var dailyRate = sold / 90;
+    var daysLeft = dailyRate > 0 ? Math.floor((m.stock || 0) / dailyRate) : 9999;
+    var reorderQty = Math.ceil(dailyRate * days);
+    var needsReorder = daysLeft <= days;
+
+    return {
+      id: m.id, name: m.name, batch: m.batch, stock: m.stock, packQty: m.packQty,
+      mrp: m.mrp, sold90: Math.round(sold * 100) / 100, dailyRate: Math.round(dailyRate * 1000) / 1000,
+      daysLeft: daysLeft, reorderQty: reorderQty, needsReorder: needsReorder, billCount: billCount
+    };
+  });
+
+  var filtered = predictions.filter(function(p) {
+    if (!q) return true;
+    return p.name.toLowerCase().indexOf(q.toLowerCase()) >= 0;
+  });
+
+  if (sortBy === "daysLeft") filtered.sort(function(a, b) { return a.daysLeft - b.daysLeft; });
+  else if (sortBy === "sold") filtered.sort(function(a, b) { return b.sold90 - a.sold90; });
+  else if (sortBy === "name") filtered.sort(function(a, b) { return a.name.localeCompare(b.name); });
+  else if (sortBy === "reorder") filtered.sort(function(a, b) { return b.reorderQty - a.reorderQty; });
+
+  var urgentCount = predictions.filter(function(p) { return p.needsReorder && p.dailyRate > 0; }).length;
+  var noMovement = predictions.filter(function(p) { return p.dailyRate === 0; }).length;
+
+  var downloadReorder = function() {
+    var reorderItems = filtered.filter(function(p) { return p.needsReorder && p.dailyRate > 0; });
+    var csv = "Medicine,Current Stock,Daily Rate,Days Left,Suggested Reorder Qty (" + days + " days),MRP\n";
+    reorderItems.forEach(function(p) {
+      csv += p.name + "," + fStock(p.stock, p.packQty) + "," + p.dailyRate + "," + p.daysLeft + "," + p.reorderQty + "," + f2(p.mrp) + "\n";
+    });
+    var blob = new Blob([csv], { type: "text/csv" });
+    var a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "Reorder_List_" + days + "days.csv"; a.click();
+  };
+
+  return (
+    <div><h2 style={hds}>AI Stock Prediction</h2>
+      <p style={{ fontSize: 12, color: "#888", marginBottom: 14 }}>Based on last 90 days of sales data. Predicts when each medicine will run out and suggests reorder quantities.</p>
+
+      <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(4,1fr)", gap: 12, marginBottom: 16 }}>
+        <Stat icon="🚨" label="Need Reorder" value={urgentCount} color="#DC2626" />
+        <Stat icon="📊" label="Active Items" value={predictions.length - noMovement} color="#2563EB" />
+        <Stat icon="💤" label="No Movement (90d)" value={noMovement} color="#888" />
+        <Stat icon="📦" label="Total In Stock" value={predictions.length} color="#059669" />
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+        <input value={q} onChange={function(e){setQ(e.target.value);}} placeholder="Search medicine..." style={{ ...inps, flex: 1, minWidth: 180 }} />
+        <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Predict for</label><select value={days} onChange={function(e){setDays(parseInt(e.target.value));}} style={{ ...inps }}>
+          <option value="15">15 days</option><option value="30">30 days</option><option value="60">60 days</option><option value="90">90 days</option>
+        </select></div>
+        <select value={sortBy} onChange={function(e){setSortBy(e.target.value);}} style={{ ...inps, maxWidth: 160 }}>
+          <option value="daysLeft">Sort: Days Left (urgent)</option><option value="sold">Sort: Most Sold</option><option value="reorder">Sort: Reorder Qty</option><option value="name">Sort: Name</option>
+        </select>
+        <button onClick={downloadReorder} style={{ ...bts(true), padding: "8px 14px", fontSize: 12 }}>Download Reorder List</button>
+      </div>
+
+      <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
+        {["Medicine","Stock","Sold (90d)","Daily Rate","Days Left","Reorder Qty","Status"].map(function(h){return <th key={h} style={ths}>{h}</th>;})}</tr></thead><tbody>
+        {filtered.slice(0, 200).map(function(p) {
+          var statusColor = p.dailyRate === 0 ? "#888" : p.daysLeft <= 7 ? "#DC2626" : p.daysLeft <= days ? "#D97706" : "#059669";
+          var statusLabel = p.dailyRate === 0 ? "No movement" : p.daysLeft <= 7 ? "CRITICAL" : p.daysLeft <= days ? "Reorder" : "OK";
+          var bg = p.dailyRate === 0 ? "#F9FAFB" : p.daysLeft <= 7 ? "#FEF2F2" : p.daysLeft <= days ? "#FFFBEB" : "#fff";
+          return <tr key={p.id} style={{ background: bg }}>
+            <td style={{ ...tds, fontWeight: 600 }}>{p.name}</td>
+            <td style={{ ...tds, fontWeight: 600 }}>{fStock(p.stock, p.packQty)}</td>
+            <td style={tds}>{p.sold90} ({p.billCount} bills)</td>
+            <td style={tds}>{p.dailyRate}/day</td>
+            <td style={{ ...tds, fontWeight: 800, color: statusColor, fontSize: 14 }}>{p.daysLeft > 9000 ? "-" : p.daysLeft + "d"}</td>
+            <td style={{ ...tds, fontWeight: 600, color: p.needsReorder ? "#DC2626" : "#888" }}>{p.dailyRate > 0 ? p.reorderQty : "-"}</td>
+            <td style={tds}><span style={{ padding: "2px 8px", borderRadius: 10, fontSize: 10, fontWeight: 600, color: statusColor, border: "1px solid " + statusColor }}>{statusLabel}</span></td>
+          </tr>;
+        })}</tbody></table></div>
+        {filtered.length > 200 && <div style={{ color: "#888", fontSize: 12, padding: 8 }}>Showing 200 of {filtered.length} items</div>}
+    </div>
+  );
+}
+
 // MAIN APP
 // ══════════════════════════════════════════════
 function App() {
@@ -5838,6 +6209,9 @@ function App() {
           {page === "profit" && isO && <ProfitPage bills={bills} inv={inv} mob={mob} purch={purch} saveBills={saveBills} showBill={showBill} setPage={setPage} />}
           {page === "stock" && <StockPage inv={inv} saveInv={saveInv} isO={isO} mob={mob} />}
           {page === "expiry" && <ExpiryPage inv={inv} mob={mob} />}
+          {page === "gst" && isO && <GSTPage bills={bills} inv={inv} purch={purch} mob={mob} />}
+          {page === "ledger" && isO && <SupplierLedgerPage purch={purch} mob={mob} />}
+          {page === "predict" && isO && <StockPredictPage inv={inv} bills={bills} mob={mob} />}
           {page === "hist" && <HistPage bills={bills} showBill={showBill} saveBills={saveBills} askConfirm={askConfirm} inv={inv} saveInv={saveInv} purch={purch} />}
           {page === "customers" && <CustomersPage bills={bills} mob={mob} showBill={showBill} />}
           {page === "reports" && isO && <ReportsPage bills={bills} inv={inv} mob={mob} showBill={showBill} />}
