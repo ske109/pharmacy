@@ -6413,6 +6413,10 @@ function SupplierLedgerPage({ purch, mob }) {
   const [payAmt, setPayAmt] = useState("");
   const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10));
   const [payNote, setPayNote] = useState("");
+  const [billSettle, setBillSettle] = useState(null); // { supplier, key, invoice } for per-bill settle
+  const [billSettleAmt, setBillSettleAmt] = useState("");
+  const [billSettleDate, setBillSettleDate] = useState(new Date().toISOString().slice(0, 10));
+  const [billSettleNote, setBillSettleNote] = useState("");
 
   useEffect(function() { fbListen("ledger", function(data) { setPayments(data || {}); }); }, []);
 
@@ -6454,6 +6458,16 @@ function SupplierLedgerPage({ purch, mob }) {
     setAddPay(null); setPayAmt(""); setPayNote("");
   };
 
+  var saveBillSettle = function() {
+    if (!billSettle || !billSettleAmt) return;
+    var key = billSettle.key;
+    var inv = billSettle.invoice;
+    var note = billSettleNote || ("Invoice: " + (inv.invoiceNo || inv.id));
+    var pay = { id: mkId(), amount: parseFloat(billSettleAmt) || 0, date: billSettleDate, note: note, billRef: inv.invoiceNo || inv.id, addedAt: new Date().toISOString() };
+    db.ref(getOutletPath("ledger/" + key + "/" + pay.id)).set(pay);
+    setBillSettle(null); setBillSettleAmt(""); setBillSettleNote("");
+  };
+
   return (
     <div><h2 style={hds}>Supplier Ledger</h2>
       <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(4,1fr)", gap: 12, marginBottom: 16 }}>
@@ -6478,6 +6492,22 @@ function SupplierLedgerPage({ purch, mob }) {
         </div>
       </div>}
 
+      {billSettle && <div style={{ ...cds, border: "2px solid #D97706", marginBottom: 14 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <b style={{ color: "#D97706" }}>Settle Bill — {billSettle.supplier}</b>
+          <span style={{ fontSize: 11, color: "#888" }}>Invoice: {billSettle.invoice.invoiceNo || "-"} | Rs.{f2(billSettle.invoice.netAmount)}</span>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr 1fr", gap: 8, marginTop: 8 }}>
+          <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Amount*</label><input type="number" value={billSettleAmt} onChange={function(e){setBillSettleAmt(e.target.value);}} style={inps} /></div>
+          <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Date</label><input type="date" value={billSettleDate} onChange={function(e){setBillSettleDate(e.target.value);}} style={inps} /></div>
+          <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Note</label><input value={billSettleNote} onChange={function(e){setBillSettleNote(e.target.value);}} placeholder="Cheque/UPI/Cash" style={inps} /></div>
+        </div>
+        <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+          <button onClick={saveBillSettle} style={{ ...bts(true), padding: "8px 16px", fontSize: 12, background: "#D97706" }}>Save Settlement</button>
+          <button onClick={function(){setBillSettle(null);setBillSettleAmt("");setBillSettleNote("");}} style={{ ...bts(false), padding: "8px 16px", fontSize: 12 }}>Cancel</button>
+        </div>
+      </div>}
+
       {supList.map(function(s) {
         var isExp = expanded === s.name;
         return <div key={s.name} style={{ marginBottom: 6, borderRadius: 10, border: "1px solid #eee", overflow: "hidden" }}>
@@ -6496,9 +6526,18 @@ function SupplierLedgerPage({ purch, mob }) {
             </div>
             <b style={{ fontSize: 12, color: "#888" }}>Invoices:</b>
             <div style={{ marginTop: 4 }}>{s.invoices.sort(function(a,b){return new Date(b.date)-new Date(a.date);}).slice(0, 20).map(function(p) {
-              return <div key={p.id} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px solid #eee", fontSize: 12 }}>
-                <span>{fD(p.date)} | {p.invoiceNo || "-"}</span>
-                <b>Rs.{f2(p.netAmount)}</b>
+              var billPaid = s.payments.filter(function(pay){ return pay.billRef === (p.invoiceNo || p.id); }).reduce(function(sum,pay){ return sum + (pay.amount||0); }, 0);
+              var billDue = (p.netAmount||0) - billPaid;
+              var billSettled = billDue <= 0;
+              return <div key={p.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "1px solid #eee", fontSize: 12, gap: 8 }}>
+                <span style={{ flex: 1 }}>{fD(p.date)} | <b>{p.invoiceNo || "-"}</b></span>
+                <span style={{ color: "#2563EB", fontWeight: 600 }}>Rs.{f2(p.netAmount)}</span>
+                {billPaid > 0 && <span style={{ color: "#059669", fontSize: 11 }}>Paid: Rs.{f2(billPaid)}</span>}
+                {!billSettled && <span style={{ color: "#DC2626", fontSize: 11, fontWeight: 700 }}>Due: Rs.{f2(billDue)}</span>}
+                {billSettled
+                  ? <span style={{ color: "#059669", fontSize: 10, fontWeight: 700, padding: "2px 8px", border: "1px solid #059669", borderRadius: 8 }}>✓ Settled</span>
+                  : <button onClick={function(e){ e.stopPropagation(); setBillSettle({ supplier: s.name, key: s.key, invoice: p }); setBillSettleAmt(String(f2(billDue))); setBillSettleDate(new Date().toISOString().slice(0,10)); setBillSettleNote("Invoice: " + (p.invoiceNo || p.id)); setAddPay(null); }} style={{ fontSize: 10, padding: "2px 8px", borderRadius: 8, border: "1px solid #D97706", background: "#FFFBEB", color: "#D97706", cursor: "pointer", fontWeight: 700 }}>Settle</button>
+                }
               </div>;
             })}</div>
             {s.payments.length > 0 && <div style={{ marginTop: 10 }}>
