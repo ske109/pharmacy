@@ -89,15 +89,34 @@ const PROXY_READY = PROXY_URL.indexOf("YOUR-WORKER") === -1;
 // ══════════════════════════════════════════════
 // PHARMACY INFO
 // ══════════════════════════════════════════════
-const PH = {
-  name: "A to Z Pharma",
-  addr: "SY NO 11/14 SHOP NO 9 ,GR. FL. Vibez Gully, Kondasapura Whitefield main road, Bidarahalli hobli, BANGALORE 560067",
-  mob: "7619639377",
-  dl: "KA-B61-269146, KA-B61-269147",
-  gstin: "29ACFFA9109D1ZH",
-  upi: "atozpharmacyupi"
+// ── OUTLET CONFIGURATION ──────────────────────────────────────────────────────
+const OUTLETS = {
+  outlet1: {
+    id: "outlet1",
+    name: "A to Z Pharmacy - ORR, Mahadevpura",
+    shortName: "Doddanekundi",
+    addr: "SHOP NO 1, GROUND FLOOR DODDANEKKUNDI, NEAR HP PETROL BUNK OUTER RING ROAD BANGALORE 560037",
+    mob: "9663995818",
+    dl: "KA-B61-262772, KA-B61-262773",
+    gstin: "29ACFFA9109D1ZH",
+    upi: "atozpharmacyupi"
+  },
+  outlet2: {
+    id: "outlet2",
+    name: "A to Z Pharma - Vibez Gully, Whitefield",
+    shortName: "Whitefield",
+    addr: "SY NO 11/14 SHOP NO 9, GR. FL. Vibez Gully, Kondasapura Whitefield main road, Bidarahalli hobli, BANGALORE 560067",
+    mob: "7619639377",
+    dl: "KA-B61-269146, KA-B61-269147",
+    gstin: "29ACFFA9109D1ZH",
+    upi: "atozpharmacyupi"
+  }
 };
+var PH = OUTLETS.outlet2; // default, overridden by outlet selection
+
 const ROLES = { "owner@atozpharmacy.com": "owner", "staff@atozpharmacy.com": "staff" };
+// Staff outlet assignment: staff email -> outlet id
+const STAFF_OUTLETS = { "staff@atozpharmacy.com": "outlet2" };
 const ROLE_NAMES = { "owner@atozpharmacy.com": "Pharmacy Owner", "staff@atozpharmacy.com": "Staff Member" };
 
 // ══════════════════════════════════════════════
@@ -140,14 +159,30 @@ function parseStockInput(val, packQty) {
 // ══════════════════════════════════════════════
 // FIREBASE DATABASE HELPERS (real-time sync)
 // ══════════════════════════════════════════════
+// Current outlet prefix for Firebase paths
+var _currentOutlet = localStorage.getItem("currentOutlet") || "outlet2";
+function getOutletPath(path) {
+  // Paths that are outlet-specific
+  var outletPaths = ["inventory", "bills", "purchases", "returns", "billReturns", "racks", "audits", "customers", "ledger", "sessions"];
+  var root = path.split("/")[0];
+  if (outletPaths.indexOf(root) >= 0) return "outlets/" + _currentOutlet + "/" + path;
+  return path; // global paths (users, etc)
+}
+function setCurrentOutlet(outletId) {
+  _currentOutlet = outletId;
+  localStorage.setItem("currentOutlet", outletId);
+  PH = OUTLETS[outletId] || OUTLETS.outlet2;
+}
+function getCurrentOutlet() { return _currentOutlet; }
+
 function fbSet(path, data) {
-  return db.ref(path).set(data).catch((e) => console.error("DB write error:", path, e));
+  return db.ref(getOutletPath(path)).set(data).catch((e) => console.error("DB write error:", path, e));
 }
 function fbGet(path) {
-  return db.ref(path).once("value").then((snap) => snap.val()).catch(() => null);
+  return db.ref(getOutletPath(path)).once("value").then((snap) => snap.val()).catch(() => null);
 }
 function fbListen(path, callback) {
-  const ref = db.ref(path);
+  const ref = db.ref(getOutletPath(path));
   ref.on("value", (snap) => { callback(snap.val()); });
   return () => ref.off("value");
 }
@@ -1351,7 +1386,7 @@ function Login({ onLogin }) {
 // ══════════════════════════════════════════════
 // SIDEBAR
 // ══════════════════════════════════════════════
-function Sidebar({ page, setPage, user, onLogout, counts, mob, sideOpen, setSideOpen }) {
+function Sidebar({ page, setPage, user, onLogout, counts, mob, sideOpen, setSideOpen, currentOutletId, switchOutlet }) {
   const isO = user.role === "owner";
   const nav = [{ id: "dash", i: "📊", l: "Dashboard" }, ...(isO ? [{ id: "purch", i: "📦", l: "Purchases" }, { id: "returns", i: "↩️", l: "Returns" }] : []), { id: "inv", i: "💊", l: "Inventory" }, { id: "rack", i: "🗄", l: "Racks" }, ...(isO ? [{ id: "audit", i: "📝", l: "Audit" }] : []), { id: "bill", i: "🧾", l: "New Bill" }, ...(isO ? [{ id: "profit", i: "💹", l: "Profit Margin" }] : []), { id: "stock", i: "📋", l: "Stock" }, { id: "expiry", i: "⏰", l: "Expiry" }, { id: "hist", i: "🗂", l: "Bills" }, ...(isO ? [{ id: "reports", i: "📑", l: "Reports" }, { id: "gst", i: "🧾", l: "GST Reports" }] : []), { id: "customers", i: "👤", l: "Customers" }, ...(isO ? [{ id: "ledger", i: "📒", l: "Supplier Ledger" }, { id: "predict", i: "🤖", l: "Stock Predict" }] : []), { id: "compare", i: "⚖️", l: "Price Compare" }, { id: "ency", i: "📚", l: "Encyclopedia" }, ...(isO ? [{ id: "users", i: "👥", l: "Users" }, { id: "backup", i: "💾", l: "Backup" }] : [])];
   if (mob && !sideOpen) return null;
@@ -1359,9 +1394,16 @@ function Sidebar({ page, setPage, user, onLogout, counts, mob, sideOpen, setSide
     <div>
       {mob && <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.4)", zIndex: 998 }} onClick={() => setSideOpen(false)} />}
       <div style={{ width: mob ? 260 : 210, background: "linear-gradient(180deg,#0C2E24,#153D31)", color: "#fff", display: "flex", flexDirection: "column", height: "100%", flexShrink: 0, ...(mob ? { position: "fixed", left: 0, top: 0, bottom: 0, zIndex: 999 } : {}) }}>
-        <div style={{ padding: "18px 16px", borderBottom: "1px solid rgba(255,255,255,.08)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div><div style={{ fontSize: 9, letterSpacing: 3, opacity: .5, fontFamily: "monospace" }}>PHARMACY</div><div style={{ fontSize: 17, fontWeight: 800, fontFamily: "'Playfair Display',serif", marginTop: 2 }}>A to Z</div></div>
-          {mob && <button onClick={() => setSideOpen(false)} style={{ background: "none", border: "none", color: "#fff", fontSize: 20, cursor: "pointer" }}>X</button>}</div>
+        <div style={{ padding: "18px 16px", borderBottom: "1px solid rgba(255,255,255,.08)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div><div style={{ fontSize: 9, letterSpacing: 3, opacity: .5, fontFamily: "monospace" }}>PHARMACY</div><div style={{ fontSize: 17, fontWeight: 800, fontFamily: "'Playfair Display',serif", marginTop: 2 }}>A to Z</div></div>
+            {mob && <button onClick={() => setSideOpen(false)} style={{ background: "none", border: "none", color: "#fff", fontSize: 20, cursor: "pointer" }}>X</button>}
+          </div>
+          {isO && <select value={currentOutletId} onChange={function(e) { switchOutlet(e.target.value); }} style={{ width: "100%", marginTop: 8, fontSize: 11, padding: "6px 8px", borderRadius: 6, border: "1px solid rgba(255,255,255,.2)", background: "rgba(52,211,153,.15)", color: "#34D399", fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+            {Object.keys(OUTLETS).map(function(k) { return <option key={k} value={k} style={{ background: "#0C2E24", color: "#fff" }}>{OUTLETS[k].shortName}</option>; })}
+          </select>}
+          {!isO && <div style={{ marginTop: 6, fontSize: 10, color: "#34D399", fontWeight: 600 }}>{PH.shortName || PH.name}</div>}
+        </div>
         <div style={{ padding: "10px 14px", borderBottom: "1px solid rgba(255,255,255,.08)", display: "flex", gap: 10, alignItems: "center" }}>
           <div style={{ width: 30, height: 30, borderRadius: 8, background: "rgba(52,211,153,.2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13 }}>{isO ? "👑" : "👤"}</div>
           <div><div style={{ fontSize: 12, fontWeight: 600 }}>{user.name}</div><div style={{ fontSize: 10, opacity: .5, textTransform: "capitalize" }}>{user.role}</div></div></div>
@@ -2518,7 +2560,7 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
       }, 0);
       var ret = { id: mkId(), billNo: retBill.billNo, patient: retBill.patient, date: new Date().toISOString(), items: returnItems, refundAmount: Math.round(refundAmt * 100) / 100 };
       // Save to Firebase
-      db.ref("billReturns/" + ret.id).set(ret);
+      db.ref(getOutletPath("billReturns/" + ret.id)).set(ret);
 
       // Add stock back to inventory
       var updInv = inv.map(function(m) {
@@ -2892,8 +2934,8 @@ function BackupPage({ inv, bills, purch, saveAll, askConfirm, saveInv, saveBills
   useEffect(() => {
     fbListen("returns", (data) => { setReturns(data ? Object.values(data) : []); });
     fbListen("billReturns", (data) => { setBillReturns(data ? Object.values(data) : []); });
-    db.ref("racks").once("value").then(function(s) { setRacks(s.val()); });
-    db.ref("audits").once("value").then(function(s) { setAudits(s.val()); });
+    db.ref(getOutletPath("racks")).once("value").then(function(s) { setRacks(s.val()); });
+    db.ref(getOutletPath("audits")).once("value").then(function(s) { setAudits(s.val()); });
   }, []);
 
   const doBackup = () => {
@@ -3496,13 +3538,43 @@ function ProfitPage({ bills, inv, mob, purch, saveBills, showBill, setPage }) {
             </div>;
           })}
         </div>}
+
+        {/* Multi-Outlet Data Migration */}
+        <div style={{ ...cds, marginTop: 20, border: "2px solid #0D6B5B" }}>
+          <b style={{ color: "#0D6B5B", fontSize: 14 }}>Multi-Outlet Data Migration</b>
+          <p style={{ fontSize: 12, color: "#555", marginTop: 6, lineHeight: 1.6 }}>
+            Migrate existing flat data (at root level) into the current outlet's namespace.
+            This copies inventory, bills, purchases, returns, racks, audits, and customers from <b>/inventory</b> to <b>/outlets/{getCurrentOutlet()}/inventory</b> etc.
+          </p>
+          <p style={{ fontSize: 11, color: "#D97706", marginTop: 6 }}>Current outlet: <b>{getCurrentOutlet()}</b> ({PH.shortName}). Only run this ONCE per outlet.</p>
+          <button onClick={function() {
+            askConfirm("Migrate ALL root data to outlet '" + getCurrentOutlet() + "' (" + PH.shortName + ")? This copies data - original root data stays intact.", function() {
+              var outletId = getCurrentOutlet();
+              var paths = ["inventory", "bills", "purchases", "returns", "billReturns", "racks", "audits", "customers", "ledger"];
+              var done = 0;
+              paths.forEach(function(p) {
+                db.ref(p).once("value").then(function(snap) {
+                  var val = snap.val();
+                  if (val) {
+                    db.ref("outlets/" + outletId + "/" + p).set(val).then(function() {
+                      done++;
+                      if (done === paths.length) {
+                        alert("Migration complete! " + done + " data paths copied to outlets/" + outletId + "/. Reload the page.");
+                        window.location.reload();
+                      }
+                    });
+                  } else { done++; if (done === paths.length) { alert("Migration complete! Reload the page."); window.location.reload(); } }
+                });
+              });
+            });
+          }} style={{ ...bts(true), marginTop: 10, padding: "10px 20px", background: "#0D6B5B" }}>
+            Migrate Root Data to {getCurrentOutlet()}
+          </button>
+        </div>
       </div>
     </div>
   );
 }
-
-// ══════════════════════════════════════════════
-// RACK MANAGEMENT PAGE
 // ══════════════════════════════════════════════
 function RackPage({ inv, saveInv, mob }) {
   const [selected, setSelected] = useState([]);
@@ -3717,7 +3789,7 @@ function AuditPage({ inv, mob }) {
     };
 
     // Save to Firebase
-    db.ref("audits/" + report.id).set(report);
+    db.ref(getOutletPath("audits/" + report.id)).set(report);
     setAuditReport(report);
     setAuditStarted(false);
   };
@@ -3910,7 +3982,7 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm, bills, s
         if (idx >= 0) nextInv[idx] = Object.assign({}, nextInv[idx], { stock: (Number(nextInv[idx].stock) || 0) + qty });
       });
       saveInv(nextInv);
-      db.ref("returns/" + r.id).remove();
+      db.ref(getOutletPath("returns/" + r.id)).remove();
       alert("Purchase return cancelled.");
     });
   };
@@ -3925,7 +3997,7 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm, bills, s
         if (idx >= 0) nextInv[idx] = Object.assign({}, nextInv[idx], { stock: Math.max(0, (Number(nextInv[idx].stock) || 0) - qty) });
       });
       saveInv(nextInv);
-      db.ref("billReturns/" + r.id).remove();
+      db.ref(getOutletPath("billReturns/" + r.id)).remove();
       alert("Bill return cancelled.");
     });
   };
@@ -5404,13 +5476,13 @@ function CustomersPage({ bills, mob, showBill }) {
   var addCustomer = function() {
     if (!newCust.name.trim()) { alert("Name required"); return; }
     var c = { id: mkId(), name: newCust.name.trim(), contact: newCust.contact.trim(), address: newCust.address.trim(), source: "manual", addedDate: new Date().toISOString() };
-    db.ref("customers/" + c.id).set(c);
+    db.ref(getOutletPath("customers/" + c.id)).set(c);
     setNewCust({ name: "", contact: "", address: "" });
     setAddMode(false);
   };
 
   var deleteCustomer = function(id) {
-    db.ref("customers/" + id).remove();
+    db.ref(getOutletPath("customers/" + id)).remove();
   };
 
   // Get bills for a customer
@@ -5883,7 +5955,7 @@ function SupplierLedgerPage({ purch, mob }) {
     if (!addPay || !payAmt) return;
     var key = addPay.key;
     var pay = { id: mkId(), amount: parseFloat(payAmt) || 0, date: payDate, note: payNote, addedAt: new Date().toISOString() };
-    db.ref("ledger/" + key + "/" + pay.id).set(pay);
+    db.ref(getOutletPath("ledger/" + key + "/" + pay.id)).set(pay);
     setAddPay(null); setPayAmt(""); setPayNote("");
   };
 
@@ -6066,15 +6138,35 @@ function App() {
   const confirmCb = useRef(null);
   const [viewBill, setViewBill] = useState(null);
   const [billFromHist, setBillFromHist] = useState(false);
+  const [currentOutletId, setCurrentOutletId] = useState(getCurrentOutlet());
   const mob = useM();
   const isO = user ? user.role === "owner" : false;
 
+  const switchOutlet = useCallback(function(outletId) {
+    setCurrentOutlet(outletId);
+    setCurrentOutletId(outletId);
+    // Clear current data - will reload from new outlet
+    setInv([]); setBills([]); setPurch([]);
+    // Force re-subscribe by changing a key
+    setPage("dash");
+    // Reload page to re-attach listeners
+    window.location.reload();
+  }, []);
+
   // Check auth state on load
   useEffect(() => {
+    // Set PH from stored outlet
+    PH = OUTLETS[getCurrentOutlet()] || OUTLETS.outlet2;
+
     const unsub = auth.onAuthStateChanged((fbUser) => {
       if (fbUser) {
         const role = ROLES[fbUser.email] || "staff";
         const name = ROLE_NAMES[fbUser.email] || fbUser.email;
+        // Staff auto-assign to their outlet
+        if (role === "staff" && STAFF_OUTLETS[fbUser.email]) {
+          setCurrentOutlet(STAFF_OUTLETS[fbUser.email]);
+          setCurrentOutletId(STAFF_OUTLETS[fbUser.email]);
+        }
         setUser({ id: fbUser.uid, email: fbUser.email, name, role });
       } else {
         setUser(null);
@@ -6192,11 +6284,16 @@ function App() {
     <div style={{ display: "flex", height: "100vh", fontFamily: "'DM Sans',sans-serif", background: "#EFECE5", overflow: "hidden" }}>
       <ConfirmModal msg={confirmMsg} onYes={onConfirmYes} onNo={onConfirmNo} />
       <BillView bill={viewBill} onClose={() => setViewBill(null)} fromHistory={billFromHist} />
-      <Sidebar page={page} setPage={setPage} user={user} onLogout={logout} counts={counts} mob={mob} sideOpen={sideOpen} setSideOpen={setSideOpen} />
+      <Sidebar page={page} setPage={setPage} user={user} onLogout={logout} counts={counts} mob={mob} sideOpen={sideOpen} setSideOpen={setSideOpen} currentOutletId={currentOutletId} switchOutlet={switchOutlet} />
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
         {mob && <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", background: "#fff", borderBottom: "1px solid #E5E2DB", flexShrink: 0 }}>
           <button onClick={() => setSideOpen(true)} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer" }}>☰</button>
-          <div style={{ fontWeight: 700, fontFamily: "'Playfair Display',serif", fontSize: 15, color: "#0C2E24" }}>A to Z Pharmacy</div>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontWeight: 700, fontFamily: "'Playfair Display',serif", fontSize: 15, color: "#0C2E24" }}>{PH.shortName || PH.name}</div>
+            {isO && <select value={currentOutletId} onChange={function(e) { switchOutlet(e.target.value); }} style={{ fontSize: 9, border: "1px solid #ddd", borderRadius: 4, padding: "1px 4px", background: "#F0FDF4", color: "#0D6B5B", fontWeight: 600, cursor: "pointer", marginTop: 2 }}>
+              {Object.keys(OUTLETS).map(function(k) { return <option key={k} value={k}>{OUTLETS[k].shortName}</option>; })}
+            </select>}
+          </div>
           <div style={{ width: 30, height: 30, borderRadius: 7, background: "#E8E4DD", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13 }}>{isO ? "👑" : "👤"}</div></div>}
         <div style={{ flex: 1, padding: mob ? 14 : 24, overflow: "auto" }}>
           {page === "dash" && <DashPage inv={inv} bills={bills} purch={purch} isO={isO} mob={mob} />}
