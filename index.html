@@ -2048,7 +2048,7 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
         var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SR) { alert("Voice not supported"); return; }
         var r = new SR(); r.lang = "en-IN"; r.continuous = false; r.interimResults = false;
-        r.onresult = function(e) { if (e.results && e.results[0]) { var t = e.results[0][0].transcript || ""; setQ(t.trim()); } };
+        r.onresult = function(e) { if (e.results && e.results[0]) { var t = e.results[0][0].transcript || ""; setQ(t.trim().replace(/[.,!?]+$/, "")); } };
         r.onerror = function() {}; r.start();
       }} style={{ position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 20, padding: 4 }} title="Voice Search">🎤</button>
       </div>
@@ -2427,7 +2427,7 @@ function BillPage({ inv, saveInv, addBill, mob, showBill, user }) {
               if (!SR) { alert("Voice not supported"); return; }
               var r = new SR(); r.lang = "en-IN"; r.continuous = false; r.interimResults = false;
               voiceActive.current = true;
-              r.onresult = function(e) { if (e.results && e.results[0]) { var t = e.results[0][0].transcript || ""; setSq(t.trim()); setSo(true); } };
+              r.onresult = function(e) { if (e.results && e.results[0]) { var t = e.results[0][0].transcript || ""; setSq(t.trim().replace(/[.,!?]+$/, "")); setSo(true); } };
               r.onerror = function() { voiceActive.current = false; };
               r.onend = function() { voiceActive.current = false; setSo(true); };
               r.start();
@@ -6247,7 +6247,7 @@ function useVoiceSearch(onResult) {
         text = e.results[0][0].transcript || "";
       }
       setListening(false);
-      if (text && onResult) onResult(text.trim());
+      if (text && onResult) onResult(text.trim().replace(/[.,!?]+$/, ""));
     };
 
     recogRef.current = recog;
