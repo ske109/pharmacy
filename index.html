@@ -139,7 +139,6 @@ const ALL_PAGES = [
   { id: "ledger",    label: "Supplier Ledger", icon: "📒" },
   { id: "predict",   label: "Stock Predict",   icon: "🤖" },
   { id: "compare",   label: "Price Compare",   icon: "⚖️" },
-  { id: "ency",      label: "Encyclopedia",    icon: "📚" },
   { id: "users",     label: "Users & Roles",   icon: "👥" },
   { id: "backup",    label: "Backup",          icon: "💾" },
 ];
@@ -1686,7 +1685,7 @@ function purchCalcAmt(it) {
 // PURCHASES PAGE
 // ══════════════════════════════════════════════
 function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm, inv, saveInv, bills, saveBills }) {
-  const [tab, setTab] = useState("csv"); const [imgP, setImgP] = useState(false); const [imgStatus, setImgStatus] = useState(""); const [rev, setRev] = useState(null);
+  const [tab, setTab] = useState("csv"); const [imgP, setImgP] = useState(false); const [imgStatus, setImgStatus] = useState(""); const [rev, setRev] = useState(null); const [distSite, setDistSite] = useState(null);
   const csvR = useRef(null); const imgR = useRef(null);
   const empty = { name: "", manufacturer: "", hsn: "300490", batch: "", expiry: "", pack: "", mrp: 0, qty: 1, ptr: 0, gstRate: 5, rack: "", packQty: 0, discPct: 0, schemePct: 0, freeQty: 0, amount: 0 };
   const [mf, setMf] = useState({ inv: "", sup: "", date: "", items: [{ ...empty }] });
@@ -1856,7 +1855,7 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm, inv, s
           <b style={{ color: "#0D6B5B", fontSize: 14 }}>Total: Rs.{f2(rev.items.reduce((s, i) => s + (i.amount || purchCalcAmt(i)), 0))}</b></div>
       </div>) : (<div style={cds}>
         <div style={{ display: "flex", gap: 3, background: "#E8E4DD", borderRadius: 8, padding: 3, marginBottom: 16 }}>
-          {[["csv","CSV"],["image","Photo/PDF"],["manual","Manual"]].map(([id, l]) => <button key={id} onClick={() => setTab(id)} style={{ flex: 1, padding: 8, border: "none", borderRadius: 6, fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: tab === id ? "#fff" : "transparent", color: tab === id ? "#0D6B5B" : "#888", boxShadow: tab === id ? "0 1px 3px rgba(0,0,0,.1)" : "none" }}>{l}</button>)}</div>
+          {[["csv","CSV"],["image","Photo/PDF"],["manual","Manual"],["dist","Distributors"]].map(([id, l]) => <button key={id} onClick={() => setTab(id)} style={{ flex: 1, padding: 8, border: "none", borderRadius: 6, fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: tab === id ? "#fff" : "transparent", color: tab === id ? "#0D6B5B" : "#888", boxShadow: tab === id ? "0 1px 3px rgba(0,0,0,.1)" : "none" }}>{l}</button>)}</div>
         {tab === "csv" && <div style={{ border: "2px dashed #bbb", borderRadius: 10, padding: 36, textAlign: "center", cursor: "pointer", background: "#FAFAF7" }} onClick={() => csvR.current && csvR.current.click()}><input ref={csvR} type="file" accept=".csv" onChange={doCSV} style={{ display: "none" }} /><div style={{ fontSize: 36 }}>📄</div><div style={{ fontSize: 14, fontWeight: 600, color: "#555", marginTop: 8 }}>Upload CSV</div></div>}
         {tab === "image" && <div style={{ border: "2px dashed #bbb", borderRadius: 10, padding: 36, textAlign: "center", cursor: "pointer", background: "#FAFAF7" }} onClick={() => !imgP && imgR.current && imgR.current.click()}><input ref={imgR} type="file" accept="image/*,.pdf,application/pdf" onChange={doImg} style={{ display: "none" }} />{imgP ? <div><div style={{ fontSize: 36 }}>🔄</div><div style={{ fontSize: 14, fontWeight: 600, color: "#0D6B5B", marginTop: 8 }}>{imgStatus || "Processing..."}</div><div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>Advanced OCR — do not close this page</div></div> : <div><div style={{ fontSize: 36 }}>📸</div><div style={{ fontSize: 14, fontWeight: 600, color: "#555", marginTop: 8 }}>Upload Invoice (Photo or PDF)</div></div>}</div>}
         {tab === "manual" && <div>
@@ -1871,7 +1870,53 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm, inv, s
           <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
             <button onClick={() => setMf((p) => ({ ...p, items: [...p.items, { ...empty }] }))} style={bts(false)}>+ Row</button>
             <button onClick={() => { if (!mf.sup || (mf.items[0] && !mf.items[0].name)) { alert("Fill supplier and name"); return; } const items = mf.items.filter((i) => i.name).map((i) => ({ ...i, amount: purchCalcAmt(i) })); setRev({ supplier: mf.sup, invoiceNo: mf.inv, date: mf.date, items, srcType: "manual", srcFile: "" }); }} style={bts(true)}>Preview</button></div></div>}
-
+        {tab === "dist" && <div>
+          <div style={{ fontSize: 13, color: "#555", marginBottom: 14 }}>Login to distributor portals directly. Place orders, then download invoice CSV/PDF and upload to add to inventory.</div>
+          {!distSite ? <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 12 }}>
+            <div onClick={function(){setDistSite("focus");}} style={{ ...cds, border: "2px solid #D4D0C8", textAlign: "center", cursor: "pointer" }}>
+              <div style={{ fontSize: 32, marginBottom: 8 }}>🏪</div>
+              <b style={{ fontSize: 14 }}>Focus Online Order</b>
+              <div style={{ fontSize: 11, color: "#888", margin: "6px 0" }}>Whitefield Distributor</div>
+              <div style={{ padding: "8px 20px", background: "#0D6B5B", color: "#fff", borderRadius: 8, display: "inline-block", fontWeight: 600, fontSize: 13 }}>Open</div>
+            </div>
+            <div onClick={function(){setDistSite("fgt");}} style={{ ...cds, border: "2px solid #D4D0C8", textAlign: "center", cursor: "pointer" }}>
+              <div style={{ fontSize: 32, marginBottom: 8 }}>🏪</div>
+              <b style={{ fontSize: 14 }}>FGT Banas Order</b>
+              <div style={{ fontSize: 11, color: "#888", margin: "6px 0" }}>Banas Distributor</div>
+              <div style={{ padding: "8px 20px", background: "#0D6B5B", color: "#fff", borderRadius: 8, display: "inline-block", fontWeight: 600, fontSize: 13 }}>Open</div>
+            </div>
+            <div onClick={function(){setDistSite("udaan");}} style={{ ...cds, border: "2px solid #2563EB", textAlign: "center", cursor: "pointer" }}>
+              <div style={{ fontSize: 32, marginBottom: 8 }}>🛒</div>
+              <b style={{ fontSize: 14 }}>Udaan</b>
+              <div style={{ fontSize: 11, color: "#888", margin: "6px 0" }}>B2B Pharma Marketplace</div>
+              <div style={{ padding: "8px 20px", background: "#2563EB", color: "#fff", borderRadius: 8, display: "inline-block", fontWeight: 600, fontSize: 13 }}>Open</div>
+            </div>
+            <div style={{ ...cds, border: "2px dashed #bbb", textAlign: "center", cursor: "pointer" }} onClick={function() { setTab("csv"); }}>
+              <div style={{ fontSize: 32, marginBottom: 8 }}>📥</div>
+              <b style={{ fontSize: 14, color: "#0D6B5B" }}>Upload Invoice</b>
+              <div style={{ fontSize: 11, color: "#888", margin: "6px 0" }}>Upload downloaded CSV/PDF</div>
+            </div>
+          </div> : <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <b style={{ fontSize: 14 }}>{distSite === "focus" ? "Focus Online Order" : distSite === "fgt" ? "FGT Banas Order" : "Udaan"}</b>
+              <div style={{ display: "flex", gap: 6 }}>
+                <a href={distSite === "focus" ? "http://whitefield.float-zone.com:8080/FocusOnlineOrder/Default.aspx" : distSite === "fgt" ? "http://fgtbanas.fortiddns.com:8080/OnlineOrder/Default.aspx" : "https://udaan.com/main?selectedTabId=Pharma&navId=pharma"} target="_blank" rel="noopener noreferrer" style={{ ...bts(false), padding: "5px 12px", fontSize: 11, textDecoration: "none", display: "inline-block" }}>New Tab</a>
+                <button onClick={function(){setDistSite(null);}} style={bts(false)}>Back</button>
+              </div>
+            </div>
+            <div style={{ borderRadius: 12, overflow: "hidden", border: "2px solid #D4D0C8" }}>
+              <iframe
+                src={PROXY_URL + "/proxy?target=" + encodeURIComponent(distSite === "focus" ? "http://whitefield.float-zone.com:8080" : distSite === "fgt" ? "http://fgtbanas.fortiddns.com:8080" : "https://udaan.com") + "&path=" + encodeURIComponent(distSite === "focus" ? "/FocusOnlineOrder/Default.aspx" : distSite === "fgt" ? "/OnlineOrder/Default.aspx" : "/main?selectedTabId=Pharma&navId=pharma")}
+                style={{ width: "100%", height: mob ? 500 : 650, border: "none" }}
+                title="Distributor Portal"
+                sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-top-navigation"
+              />
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+              <button onClick={function() { setTab("csv"); setDistSite(null); }} style={bts(true)}>Upload Downloaded Invoice</button>
+            </div>
+          </div>}
+        </div>}
       </div>)}
       <div style={cds}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
@@ -4537,9 +4582,6 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm, bills, s
 }
 
 // ══════════════════════════════════════════════
-// ENCYCLOPEDIA (MedGuide India Live)
-// ══════════════════════════════════════════════
-// ══════════════════════════════════════════════
 // PRICE COMPARE DASHBOARD  -  mirrors dashboard UI
 // ══════════════════════════════════════════════
 function ComparePage({ inv, mob }) {
@@ -5401,140 +5443,6 @@ function ComparePage({ inv, mob }) {
   );
 }
 
-function EncyclopediaPage({ inv, mob }) {
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState(null);
-  const [alts, setAlts] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [altsLoading, setAltsLoading] = useState(false);
-  const [error, setError] = useState("");
-
-  var searchBrand = function(q) {
-    if (!q.trim()) return;
-    setLoading(true); setResults(null); setAlts(null); setError("");
-    var url = "https://www.medguideindia.info/show_brand.php?search_type=brand&brandname=" + encodeURIComponent(q.trim()) + "&submit=FIND";
-    fetch(PROXY_URL + "/medguide?url=" + encodeURIComponent(url))
-    .then(function(r) { if (!r.ok) throw new Error("Status " + r.status); return r.text(); })
-    .then(function(html) {
-      var parsed = parseMedGuideHTML(html);
-      setResults(parsed);
-      setLoading(false);
-      if (parsed.length > 0 && parsed[0].constituents) searchAlts(parsed[0].constituents);
-    })
-    .catch(function(err) { setError("Could not reach MedGuide India. Please update Cloudflare Worker with /medguide route."); setLoading(false); });
-  };
-
-  var searchAlts = function(constituents) {
-    var parts = constituents.split(/[,;+&]/).map(function(p) { return p.trim(); });
-    var main = "";
-    for (var i = 0; i < parts.length; i++) {
-      var c = parts[i].replace(/[-]\s*[\d.]+\s*(%|mg|ml|gm|mcg|iu|g|w\/v|w\/w)/gi, "").trim();
-      if (c.length > 2 && c.match(/[a-zA-Z]/)) { main = c; break; }
-    }
-    if (!main) return;
-    setAltsLoading(true);
-    var url = "https://www.medguideindia.info/show_brand.php?search_type=generic&genericname=" + encodeURIComponent(main) + "&submit=FIND";
-    fetch(PROXY_URL + "/medguide?url=" + encodeURIComponent(url))
-    .then(function(r) { return r.text(); })
-    .then(function(html) { setAlts({ generic: main, items: parseMedGuideHTML(html) }); setAltsLoading(false); })
-    .catch(function() { setAltsLoading(false); });
-  };
-
-  var doSearch = function() { searchBrand(query); };
-
-  return (
-    <div><h2 style={hds}>Medicine Encyclopedia</h2>
-      <div style={{ fontSize: 12, color: "#888", marginBottom: 14 }}>Search 50,000+ Indian medicine brands  -  powered by MedGuide India</div>
-
-      <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
-        <input value={query} onChange={function(e){setQuery(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter")doSearch();}} placeholder="Type brand or medicine name..." style={{ ...inps, flex: 1, fontSize: 16, padding: "14px 18px" }} />
-        <button onClick={doSearch} disabled={loading} style={{ ...bts(true), padding: "14px 28px", fontSize: 14, opacity: loading ? 0.6 : 1 }}>{loading ? "Searching..." : "Search"}</button>
-      </div>
-
-      {error && <div style={{ padding: "12px 16px", background: "#FEF3C7", border: "1px solid #D97706", borderRadius: 10, fontSize: 13, color: "#92400E", marginBottom: 16 }}>{error}</div>}
-
-      {loading && <div style={{ ...cds, textAlign: "center", padding: 40 }}><div style={{ fontSize: 32, marginBottom: 8 }}>🔍</div><div style={{ color: "#888", fontSize: 14 }}>Searching MedGuide India...</div></div>}
-
-      {/* Results as cards */}
-      {results && results.length > 0 && results.map(function(r, i) {
-        var isInv = inv.some(function(im) { return im.name.toLowerCase().indexOf(r.name.split("(")[0].trim().toLowerCase()) >= 0; });
-        var invItems = inv.filter(function(im) { return im.name.toLowerCase().indexOf(r.name.split("(")[0].trim().toLowerCase()) >= 0; });
-        return <div key={i} style={{ ...cds, borderLeft: "4px solid #0D6B5B", marginBottom: 12 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-            <div>
-              <div style={{ fontSize: 20, fontWeight: 800, color: "#0C2E24" }}>{r.name}</div>
-              <div style={{ fontSize: 13, color: "#888", marginTop: 2 }}>{r.manufacturer}</div>
-            </div>
-            <div style={{ display: "flex", gap: 5 }}>
-              {r.type && <Tag bg="#F3E8FF" fg="#6B21A8">{r.type}</Tag>}
-              {isInv && <Tag bg="#D1FAE5" fg="#065F46">IN STOCK</Tag>}
-            </div>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr 1fr", gap: 12, marginTop: 14 }}>
-            <div style={{ padding: "10px 14px", background: "#F5F3EE", borderRadius: 10 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: "#888", marginBottom: 4 }}>CONSTITUENTS</div>
-              <div style={{ fontSize: 13, fontWeight: 600, color: "#0D6B5B" }}>{r.constituents || "-"}</div>
-            </div>
-            <div style={{ padding: "10px 14px", background: "#F5F3EE", borderRadius: 10 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: "#888", marginBottom: 4 }}>UNIT / PACKAGE</div>
-              <div style={{ fontSize: 13 }}>{r.unit || "-"} / {r.packageUnit || "-"}</div>
-            </div>
-            <div style={{ padding: "10px 14px", background: "#F0FDF4", borderRadius: 10, border: "1px solid #D1FAE5" }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: "#888", marginBottom: 4 }}>PRICE</div>
-              <div style={{ fontSize: 18, fontWeight: 800, color: "#0D6B5B" }}>Rs. {r.price || "-"}</div>
-              {r.pricePerUnit && <div style={{ fontSize: 11, color: "#888" }}>{r.pricePerUnit}/unit</div>}
-            </div>
-          </div>
-          {isInv && invItems.length > 0 && <div style={{ marginTop: 10, padding: "8px 12px", background: "#F0FDF4", borderRadius: 8, border: "1px solid #059669" }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: "#059669", marginBottom: 4 }}>Your Inventory</div>
-            {invItems.map(function(im) { return <div key={im.id} style={{ fontSize: 12 }}>{im.name} | Batch: {im.batch || "-"} | Stock: {fStock(im.stock, im.packQty)} | MRP: Rs.{f2(im.mrp)}</div>; })}
-          </div>}
-          {r.constituents && i === 0 && !alts && !altsLoading && <button onClick={function() { searchAlts(r.constituents); }} style={{ marginTop: 10, border: "none", borderRadius: 8, padding: "8px 18px", fontWeight: 600, cursor: "pointer", fontSize: 12, background: "#7C3AED", color: "#fff" }}>Find Alternatives</button>}
-        </div>;
-      })}
-
-      {results && results.length === 0 && !loading && <div style={{ ...cds, textAlign: "center", padding: 30, color: "#888" }}>No brands found for "<b>{query}</b>"</div>}
-
-      {/* Alternatives */}
-      {altsLoading && <div style={{ ...cds, textAlign: "center", padding: 24, borderLeft: "4px solid #7C3AED" }}><div style={{ color: "#888", fontSize: 13 }}>Finding alternative brands...</div></div>}
-      {alts && alts.items && alts.items.length > 0 && <div style={{ ...cds, borderLeft: "4px solid #7C3AED" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-          <div><b style={{ fontSize: 15, color: "#7C3AED" }}>Alternatives for "{alts.generic}"</b><div style={{ fontSize: 11, color: "#888" }}>{alts.items.length} brand(s) found with same salt</div></div>
-        </div>
-        <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
-          {["#","Brand","Type","Constituents","Price","Manufacturer","Stock"].map(function(h) { return <th key={h} style={ths}>{h}</th>; })}</tr></thead><tbody>
-          {alts.items.map(function(r, i) {
-            var isInv = inv.some(function(im) { return im.name.toLowerCase().indexOf(r.name.split("(")[0].trim().toLowerCase()) >= 0; });
-            return <tr key={i} style={{ background: isInv ? "#F0FDF4" : i % 2 === 0 ? "transparent" : "#FAFAF7" }}>
-              <td style={{ ...tds, color: "#888" }}>{i + 1}</td>
-              <td style={{ ...tds, fontWeight: 600 }}>{r.name}</td>
-              <td style={tds}>{r.type || "-"}</td>
-              <td style={{ ...tds, fontSize: 11 }}>{r.constituents || "-"}</td>
-              <td style={{ ...tds, fontWeight: 600, color: "#0D6B5B" }}>Rs.{r.price || "-"}</td>
-              <td style={{ ...tds, fontSize: 11, color: "#888" }}>{r.manufacturer || "-"}</td>
-              <td style={tds}>{isInv ? <Tag bg="#D1FAE5" fg="#065F46">Yes</Tag> : ""}</td>
-            </tr>;
-          })}</tbody></table></div>
-      </div>}
-
-      {/* Empty state */}
-      {!results && !loading && <div style={{ textAlign: "center", padding: 50, color: "#888" }}>
-        <div style={{ fontSize: 56, marginBottom: 16, opacity: 0.3 }}>📚</div>
-        <div style={{ fontSize: 18, fontWeight: 700, color: "#555", marginBottom: 8 }}>Medicine Encyclopedia</div>
-        <div style={{ fontSize: 13, marginBottom: 20, color: "#888" }}>Search across 50,000+ Indian medicine brands with live data from MedGuide India</div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center", maxWidth: 550, margin: "0 auto" }}>
-          {["Dolo 650","Crocin","Azithromycin","Pan 40","Augmentin","Metformin","Combiflam","Cetirizine","Betadine","Montair LC","Diclofenac","Omeprazole","Losartan","Amoxicillin","Atorvastatin","Clopidogrel","Shelcal","Becosules"].map(function(s) {
-            return <button key={s} onClick={function() { setQuery(s); searchBrand(s); }} style={{ padding: "7px 16px", background: "#F5F3EE", border: "1px solid #E8E4DD", borderRadius: 20, fontSize: 12, cursor: "pointer", color: "#555" }}>{s}</button>;
-          })}
-        </div>
-      </div>}
-    </div>
-  );
-}
-
-// ══════════════════════════════════════════════
-// REPORTS PAGE (with Profit Margin)
-// ══════════════════════════════════════════════
 function ReportsPage({ bills, inv, mob, showBill }) {
   const [period, setPeriod] = useState("today");
   const [from, setFrom] = useState("");
@@ -6815,7 +6723,6 @@ function App() {
           {page === "hist" && <HistPage bills={bills} showBill={showBill} saveBills={saveBills} askConfirm={askConfirm} inv={inv} saveInv={saveInv} purch={purch} />}
           {page === "customers" && <CustomersPage bills={bills} mob={mob} showBill={showBill} />}
           {page === "reports" && isO && <ReportsPage bills={bills} inv={inv} mob={mob} showBill={showBill} />}
-          {page === "ency" && <EncyclopediaPage inv={inv} mob={mob} />}
           {page === "compare" && <ComparePage inv={inv} mob={mob} />}
           {page === "users" && isO && <UsersPage sessions={sessions} mob={mob} user={user} />}
           {page === "backup" && isO && <BackupPage inv={inv} bills={bills} purch={purch} saveAll={saveAll} askConfirm={askConfirm} saveInv={saveInv} saveBills={saveBills} />}
