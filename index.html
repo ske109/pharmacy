@@ -1882,6 +1882,7 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm, inv, s
 function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
   const [q, setQ] = useState(""); const [sf, setSf] = useState(false); const [ed, setEd] = useState(null);
   const [showBulk, setShowBulk] = useState(false); const [templateLink, setTemplateLink] = useState(null);
+  const [rackFilter, setRackFilter] = useState("");
   const bulkRef = useRef(null);
   const blank = { name: "", manufacturer: "", hsn: "300490", batch: "", expiry: "", pack: "", mrp: 0, ptr: 0, stock: 0, gstRate: 5, rack: "", distributor: "", packQty: 0 };
   const [fm, setFm] = useState(blank);
@@ -1895,7 +1896,8 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
   ];
   const [colVis, setColVis] = useState({ uid: true, name: true, batch: true, exp: true, mrp: true, ptr: true, stock: true, rack: true, purchaseBill: true, distributor: true, purchaseDate: true, src: true });
   const sh = (k) => colVis[k] !== false;
-  const list = inv.filter((m) => { const s = q.toLowerCase(); return m.name.toLowerCase().includes(s) || m.batch.toLowerCase().includes(s) || (m.distributor || "").toLowerCase().includes(s) || (m.uid || "").toLowerCase().includes(s); });
+  const usedRacksInv = [...new Set(inv.map(m => m.rack).filter(Boolean))].sort();
+  const list = inv.filter((m) => { const s = q.toLowerCase(); const matchText = m.name.toLowerCase().includes(s) || m.batch.toLowerCase().includes(s) || (m.distributor || "").toLowerCase().includes(s) || (m.uid || "").toLowerCase().includes(s); const matchRack = !rackFilter || (rackFilter === "__none__" ? !m.rack : m.rack === rackFilter); return matchText && matchRack; });
 
   const prepareTemplate = () => {
     const csv = "Name,Manufacturer,HSN,Batch,Expiry,Pack,MRP,PTR,Stock,GST%,Rack,Distributor,PackQty\nParacetamol 500mg,Cipla,300490,PC2401,2027-06,10 Tab,18.50,14.20,100,12,A1,ABC Dist,10\n";
@@ -1965,6 +1967,15 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
         r.onresult = function(e) { if (e.results && e.results[0]) { var t = e.results[0][0].transcript || ""; setQ(t.trim().replace(/[.,!?]+$/, "")); } };
         r.onerror = function() {}; r.start();
       }} style={{ position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 20, padding: 4 }} title="Voice Search">🎤</button>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, alignItems: "center", flexWrap: "wrap" }}>
+        <select value={rackFilter} onChange={(e) => setRackFilter(e.target.value)} style={{ ...inps, width: "auto", minWidth: 140, fontSize: 12, fontWeight: 600, color: rackFilter ? "#0D6B5B" : "#888" }}>
+          <option value="">All Racks</option>
+          <option value="__none__">No Rack (Unassigned)</option>
+          {usedRacksInv.map(r => <option key={r} value={r}>🗄 {r}</option>)}
+        </select>
+        {rackFilter && <button onClick={() => setRackFilter("")} style={{ ...bts(false), padding: "4px 10px", fontSize: 11 }}>Clear Filter</button>}
+        {rackFilter && rackFilter !== "__none__" && <span style={{ fontSize: 11, color: "#0D6B5B", fontWeight: 600 }}>Showing {list.length} item(s) in rack {rackFilter}</span>}
       </div>
       {sf && <div style={{ ...cds, border: "2px solid #0D6B5B" }}><b style={{ color: "#0D6B5B" }}>{ed ? "Edit" : "Add"} Medicine</b>
         <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "1fr 1fr 1fr 1fr", gap: 10, marginTop: 12 }}>
@@ -3972,6 +3983,10 @@ function RackPage({ inv, saveInv, mob }) {
   const [dragMed, setDragMed] = useState(null);
   const [filterRack, setFilterRack] = useState("");
   const [showAll, setShowAll] = useState(false);
+  const [rackMedSearch, setRackMedSearch] = useState("");
+  const [editingMed, setEditingMed] = useState(null);
+  const [editRackVal, setEditRackVal] = useState("");
+  const [editStockVal, setEditStockVal] = useState("");
 
   // Generate all rack names
   var ALL_RACKS = [];
@@ -3985,8 +4000,18 @@ function RackPage({ inv, saveInv, mob }) {
   inv.forEach(function(m) { if (m.rack) usedRacks[m.rack] = true; });
   var usedList = Object.keys(usedRacks).sort();
 
-  // Filter racks for display
+  // Filter racks for display - also filter by medicine search within racks
   var displayRacks = showAll ? ALL_RACKS.filter(function(r) { return !filterRack || r.toLowerCase().indexOf(filterRack.toLowerCase()) >= 0; }).slice(0, 50) : usedList;
+
+  // If searching within racks, only show racks that contain matching meds
+  if (rackMedSearch) {
+    var searchLower = rackMedSearch.toLowerCase();
+    displayRacks = displayRacks.filter(function(r) {
+      return inv.some(function(m) {
+        return m.rack === r && (m.name.toLowerCase().indexOf(searchLower) >= 0 || (m.batch || "").toLowerCase().indexOf(searchLower) >= 0 || (m.manufacturer || "").toLowerCase().indexOf(searchLower) >= 0);
+      });
+    });
+  }
 
   var assignToRack = function(rackName, medIds) {
     var next = inv.map(function(m) { return medIds.indexOf(m.id) >= 0 ? Object.assign({}, m, { rack: rackName }) : m; });
@@ -3999,12 +4024,47 @@ function RackPage({ inv, saveInv, mob }) {
     saveInv(next);
   };
 
+  var startEditMed = function(m) {
+    setEditingMed(m.id);
+    setEditRackVal(m.rack || "");
+    setEditStockVal(fStock(m.stock, m.packQty));
+  };
+
+  var saveEditMed = function() {
+    if (!editingMed) return;
+    var med = inv.find(function(m) { return m.id === editingMed; });
+    var newStock = parseStockInput(editStockVal, med ? med.packQty : 0);
+    var next = inv.map(function(m) {
+      if (m.id !== editingMed) return m;
+      return Object.assign({}, m, { rack: editRackVal, stock: newStock });
+    });
+    saveInv(next);
+    setEditingMed(null);
+    setEditRackVal("");
+    setEditStockVal("");
+  };
+
+  var cancelEditMed = function() {
+    setEditingMed(null);
+    setEditRackVal("");
+    setEditStockVal("");
+  };
+
   var toggleSelect = function(id) {
     setSelected(function(p) { return p.indexOf(id) >= 0 ? p.filter(function(x) { return x !== id; }) : p.concat([id]); });
   };
 
   var unassigned = inv.filter(function(m) { return !m.rack; });
-  var getRackMeds = function(r) { return inv.filter(function(m) { return m.rack === r; }); };
+  var getRackMeds = function(r) {
+    var meds = inv.filter(function(m) { return m.rack === r; });
+    if (rackMedSearch) {
+      var s = rackMedSearch.toLowerCase();
+      meds = meds.filter(function(m) {
+        return m.name.toLowerCase().indexOf(s) >= 0 || (m.batch || "").toLowerCase().indexOf(s) >= 0 || (m.manufacturer || "").toLowerCase().indexOf(s) >= 0;
+      });
+    }
+    return meds;
+  };
   const [medSearch, setMedSearch] = useState("");
   var filteredMeds = inv.filter(function(m) {
     if (m.rack) return false;
@@ -4018,12 +4078,27 @@ function RackPage({ inv, saveInv, mob }) {
     else { setSelected(filteredMeds.map(function(m) { return m.id; })); }
   };
 
+  // Count total assigned medicines
+  var assignedCount = inv.filter(function(m) { return !!m.rack; }).length;
+
   return (
     <div><h2 style={hds}>Rack Management</h2>
-      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
         <button onClick={function() { setShowAll(!showAll); }} style={bts(!showAll)}>{showAll ? "Show Used Racks Only" : "Show All Racks"}</button>
         {showAll && <input value={filterRack} onChange={function(e) { setFilterRack(e.target.value); }} placeholder="Filter racks (e.g. A1, BH-5)" style={{ ...inps, maxWidth: 200 }} />}
         {showAll && <span style={{ fontSize: 11, color: "#888" }}>Showing max 50. Type to filter.</span>}
+      </div>
+
+      {/* Search within assigned racks */}
+      <div style={{ ...cds, background: "#F0FDF4", border: "1px solid #BBF7D0", padding: "10px 14px", marginBottom: 14 }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: "#065F46" }}>🔍 Search in Racks ({assignedCount} assigned)</span>
+          <input value={rackMedSearch} onChange={function(e) { setRackMedSearch(e.target.value); }} placeholder="Search medicine in racks by name, batch, manufacturer..." style={{ ...inps, flex: 1, minWidth: 200, fontSize: 12, background: "#fff" }} />
+          {rackMedSearch && <button onClick={function() { setRackMedSearch(""); }} style={{ ...bts(false), padding: "4px 10px", fontSize: 11 }}>Clear</button>}
+        </div>
+        {rackMedSearch && <div style={{ fontSize: 11, color: "#059669", marginTop: 6, fontWeight: 500 }}>
+          Found in {displayRacks.length} rack(s) — click ✏️ on any medicine to edit its rack or stock
+        </div>}
       </div>
 
       {selected.length > 0 && <div style={{ ...cds, background: "#D1FAE5", border: "2px solid #059669", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -4063,9 +4138,10 @@ function RackPage({ inv, saveInv, mob }) {
         </div>
 
         <div>
-          {displayRacks.length === 0 && <div style={{ ...cds, textAlign: "center", color: "#aaa", fontSize: 13, padding: 30 }}>{showAll ? "No racks match filter" : "No racks in use yet. Select medicines and assign, or click 'Show All Racks'"}</div>}
+          {displayRacks.length === 0 && <div style={{ ...cds, textAlign: "center", color: "#aaa", fontSize: 13, padding: 30 }}>{rackMedSearch ? "No medicines match \"" + rackMedSearch + "\" in any rack" : showAll ? "No racks match filter" : "No racks in use yet. Select medicines and assign, or click 'Show All Racks'"}</div>}
           {displayRacks.map(function(r) {
             var meds = getRackMeds(r);
+            var allRackMeds = inv.filter(function(m) { return m.rack === r; });
             return (
               <div key={r}
                 onDragOver={function(e) { e.preventDefault(); }}
@@ -4074,13 +4150,36 @@ function RackPage({ inv, saveInv, mob }) {
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: meds.length > 0 ? 8 : 0 }}>
                   <b style={{ fontSize: 15, color: "#0D6B5B" }}>{r}</b>
                   <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                    {meds.length > 0 && <Tag bg="#D1FAE5" fg="#065F46">{meds.length} items | {Math.floor(meds.reduce(function(s,m){return s + (m.stock||0);},0))} units</Tag>}
+                    {allRackMeds.length > 0 && <Tag bg="#D1FAE5" fg="#065F46">{allRackMeds.length} items | {Math.floor(allRackMeds.reduce(function(s,m){return s + (m.stock||0);},0))} units</Tag>}
                     {selected.length > 0 && <button onClick={function() { assignToRack(r, selected); }} style={{ ...bts(true), padding: "4px 10px", fontSize: 11 }}>Assign {selected.length}</button>}
                   </div>
                 </div>
                 {meds.length > 0 && <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                   {meds.map(function(m) {
                     var stockColor = m.stock <= 0 ? "#DC2626" : m.stock < 3 ? "#D97706" : "#059669";
+                    var isEditing = editingMed === m.id;
+                    if (isEditing) {
+                      return (
+                        <div key={m.id} style={{ padding: "8px 10px", background: "#FFFBEB", borderRadius: 6, fontSize: 11, border: "2px solid #F59E0B" }}>
+                          <div style={{ marginBottom: 6 }}><b>{m.name}</b> <span style={{ color: "#888", fontSize: 10 }}>{m.batch}</span></div>
+                          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                              <label style={{ fontSize: 10, fontWeight: 600, color: "#92400E" }}>Rack:</label>
+                              <select value={editRackVal} onChange={function(e) { setEditRackVal(e.target.value); }} style={{ ...inps, width: 100, fontSize: 11, padding: "3px 6px" }}>
+                                <option value="">None</option>
+                                {ALL_RACKS.map(function(rk) { return <option key={rk} value={rk}>{rk}</option>; })}
+                              </select>
+                            </div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                              <label style={{ fontSize: 10, fontWeight: 600, color: "#92400E" }}>Stock:</label>
+                              <input value={editStockVal} onChange={function(e) { setEditStockVal(e.target.value); }} style={{ ...inps, width: 70, fontSize: 11, padding: "3px 6px", textAlign: "right" }} />
+                            </div>
+                            <button onClick={saveEditMed} style={{ ...bts(true), padding: "3px 10px", fontSize: 11 }}>Save</button>
+                            <button onClick={cancelEditMed} style={{ ...bts(false), padding: "3px 10px", fontSize: 11 }}>Cancel</button>
+                          </div>
+                        </div>
+                      );
+                    }
                     return (
                       <div key={m.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 10px", background: m.stock <= 0 ? "#FEF2F2" : "#EFF6FF", borderRadius: 6, fontSize: 11, border: m.stock <= 0 ? "1px solid #FCA5A5" : "1px solid #DBEAFE" }}>
                         <div style={{ flex: 1 }}>
@@ -4090,6 +4189,7 @@ function RackPage({ inv, saveInv, mob }) {
                         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                           <span style={{ color: stockColor, fontWeight: 700, fontSize: 12 }}>{fStock(m.stock, m.packQty)}</span>
                           <span style={{ color: "#888", fontSize: 10 }}>MRP:{f2(m.mrp)}</span>
+                          <button onClick={function() { startEditMed(m); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#2563EB", fontSize: 12, padding: 0 }} title="Edit rack & stock">✏️</button>
                           <button onClick={function() { removeFromRack(m.id); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#DC2626", fontSize: 12, padding: 0 }}>x</button>
                         </div>
                       </div>
