@@ -5,7 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>A to Z Pharmacy v2.2.0</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💊</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://cdnjs.cloudflare.com">
+<link rel="preconnect" href="https://www.gstatic.com">
 
 <!-- Firebase SDKs -->
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
@@ -143,6 +147,19 @@ const ALL_PAGES = [
   { id: "backup",    label: "Backup",          icon: "💾" },
 ];
 
+// ── Pre-computed rack names (module-level, never re-generated) ────────────
+const ALL_RACKS = (function() {
+  var racks = [];
+  var letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+  letters.forEach(function(l) { for (var i = 1; i <= 100; i++) racks.push(l + i); });
+  for (var i = 1; i <= 100; i++) racks.push("BH-" + i);
+  racks.push("Refrigerator(Fridge)");
+  return racks;
+})();
+
+// ── Pre-computed rack <option> elements (never re-rendered) ───────────────
+const RACK_OPTIONS = ALL_RACKS.map(function(r) { return React.createElement("option", { key: r, value: r }, r); });
+
 // ── OTP helpers (6-digit, stored in Firebase with 10min expiry) ───────────
 function genOTP() { return String(Math.floor(100000 + Math.random() * 900000)); }
 async function sendOTPEmail(toEmail, otp, recipientName) {
@@ -217,7 +234,7 @@ const ROLE_NAMES = {};
 // ══════════════════════════════════════════════
 // UTILITIES
 // ══════════════════════════════════════════════
-const { useState, useEffect, useCallback, useRef } = React;
+const { useState, useEffect, useCallback, useRef, useMemo } = React;
 const f2 = (n) => Number(n || 0).toFixed(2);
 const fD = (d) => { try { return d ? new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "-"; } catch(e) { return "-"; } };
 const fDT = (d) => { try { return d ? new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "Asia/Kolkata" }) : "-"; } catch(e) { return "-"; } };
@@ -1554,22 +1571,27 @@ function Sidebar({ page, setPage, user, onLogout, counts, mob, sideOpen, setSide
 // DASHBOARD
 // ══════════════════════════════════════════════
 function DashPage({ inv, bills, purch, isO, mob }) {
-  const ts = Math.floor(inv.reduce((s, m) => s + (m.stock || 0), 0)), low = inv.filter((m) => m.stock > 0 && m.stock < 3).length;
-  const today = new Date().toDateString(), tb = bills.filter((b) => new Date(b.date).toDateString() === today);
-  const tr = tb.reduce((s, b) => s + b.netAmount, 0);
-  const tc = tb.reduce((s, b) => s + b.items.reduce((ss, i) => {
-    var p = i.unitPtr || 0;
-    if (!p && i.ptr) p = i.loose ? i.ptr / (i.packQty || 10) : i.ptr;
-    var cost = p * (1 - (i.purchDiscPct || 0) / 100) * (1 - (i.purchSchemePct || 0) / 100) * (1 + (i.gstRate || 0) / 100) * (i.purchFreeRatio || 1);
-    return ss + cost * i.qty;
-  }, 0), 0);
+  const dashData = useMemo(() => {
+    const ts = Math.floor(inv.reduce((s, m) => s + (m.stock || 0), 0)), low = inv.filter((m) => m.stock > 0 && m.stock < 3).length;
+    const today = new Date().toDateString(), tb = bills.filter((b) => new Date(b.date).toDateString() === today);
+    const tr = tb.reduce((s, b) => s + b.netAmount, 0);
+    const tc = tb.reduce((s, b) => s + b.items.reduce((ss, i) => {
+      var p = i.unitPtr || 0;
+      if (!p && i.ptr) p = i.loose ? i.ptr / (i.packQty || 10) : i.ptr;
+      var cost = p * (1 - (i.purchDiscPct || 0) / 100) * (1 - (i.purchSchemePct || 0) / 100) * (1 + (i.gstRate || 0) / 100) * (i.purchFreeRatio || 1);
+      return ss + cost * i.qty;
+    }, 0), 0);
+    const sv = inv.reduce((s, m) => s + (m.ptr || 0) * (m.stock || 0), 0);
+    return { ts, low, tb, tr, tc, sv };
+  }, [inv, bills]);
+  const { ts, low, tb, tr, tc, sv } = dashData;
   return (
     <div><h2 style={hds}>Dashboard</h2>
       <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(auto-fit,minmax(155px,1fr))", gap: 12, marginBottom: 20 }}>
         <Stat icon="💊" label="Medicines" value={inv.length} sub={ts + " units"} color="#0D6B5B" />
         <Stat icon="🧾" label="Today Sales" value={tb.length} sub={"Rs." + f2(tr)} color="#2563EB" />
         <Stat icon="⚠️" label="Low Stock" value={low} color="#DC2626" />
-        {isO && <Stat icon="💰" label="Stock Value" value={"Rs." + Math.round(inv.reduce((s, m) => s + (m.ptr || 0) * (m.stock || 0), 0)).toLocaleString()} color="#B45309" />}
+        {isO && <Stat icon="💰" label="Stock Value" value={"Rs." + Math.round(sv).toLocaleString()} color="#B45309" />}
         {isO && <Stat icon="📈" label="Today Profit" value={"Rs." + f2(tr - tc)} color="#059669" />}
       </div>
       <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 14 }}>
@@ -1888,6 +1910,8 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
   const [q, setQ] = useState(""); const [sf, setSf] = useState(false); const [ed, setEd] = useState(null);
   const [showBulk, setShowBulk] = useState(false); const [templateLink, setTemplateLink] = useState(null);
   const [rackFilter, setRackFilter] = useState("");
+  const [invPageNum, setInvPageNum] = useState(1);
+  const INV_PER_PAGE = 50;
   const bulkRef = useRef(null);
   const blank = { name: "", manufacturer: "", hsn: "300490", batch: "", expiry: "", pack: "", mrp: 0, ptr: 0, stock: 0, gstRate: 5, rack: "", distributor: "", packQty: 0 };
   const [fm, setFm] = useState(blank);
@@ -1901,8 +1925,15 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
   ];
   const [colVis, setColVis] = useState({ uid: true, name: true, batch: true, exp: true, mrp: true, ptr: true, stock: true, rack: true, purchaseBill: true, distributor: true, purchaseDate: true, src: true });
   const sh = (k) => colVis[k] !== false;
-  const usedRacksInv = [...new Set(inv.map(m => m.rack).filter(Boolean))].sort();
-  const list = inv.filter((m) => { const s = q.toLowerCase(); const matchText = m.name.toLowerCase().includes(s) || m.batch.toLowerCase().includes(s) || (m.distributor || "").toLowerCase().includes(s) || (m.uid || "").toLowerCase().includes(s); const matchRack = !rackFilter || (rackFilter === "__none__" ? !m.rack : m.rack === rackFilter); return matchText && matchRack; });
+  const usedRacksInv = useMemo(() => [...new Set(inv.map(m => m.rack).filter(Boolean))].sort(), [inv]);
+  const list = useMemo(() => inv.filter((m) => { const s = q.toLowerCase(); const matchText = m.name.toLowerCase().includes(s) || m.batch.toLowerCase().includes(s) || (m.distributor || "").toLowerCase().includes(s) || (m.uid || "").toLowerCase().includes(s); const matchRack = !rackFilter || (rackFilter === "__none__" ? !m.rack : m.rack === rackFilter); return matchText && matchRack; }), [inv, q, rackFilter]);
+
+  // Pagination for performance
+  const totalInvPages = Math.max(1, Math.ceil(list.length / INV_PER_PAGE));
+  const safeInvPage = Math.min(invPageNum, totalInvPages);
+  const paginatedList = useMemo(() => list.slice((safeInvPage - 1) * INV_PER_PAGE, safeInvPage * INV_PER_PAGE), [list, safeInvPage]);
+  // Reset page on search/filter change
+  useEffect(() => { setInvPageNum(1); }, [q, rackFilter]);
 
   const prepareTemplate = () => {
     const csv = "Name,Manufacturer,HSN,Batch,Expiry,Pack,MRP,PTR,Stock,GST%,Rack,Distributor,PackQty\nParacetamol 500mg,Cipla,300490,PC2401,2027-06,10 Tab,18.50,14.20,100,12,A1,ABC Dist,10\n";
@@ -1988,9 +2019,18 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
           {[["mrp","MRP"],["ptr","PTR"],["gstRate","GST%"],["packQty","Pack Qty"]].map(([k, l]) => <div key={k}><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>{l}</label><input type="number" value={fm[k] || 0} onChange={(e) => setFm((f) => ({ ...f, [k]: Number(e.target.value) }))} style={inps} /></div>)}
           <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Stock <span style={{ fontWeight: 400, color: "#aaa" }}>(packs.tablets)</span></label><input type="text" value={fm._stockStr !== undefined ? fm._stockStr : fStock(fm.stock, fm.packQty)} onChange={(e) => setFm((f) => ({ ...f, _stockStr: e.target.value }))} onBlur={(e) => { var parsed = parseStockInput(e.target.value, fm.packQty); setFm((f) => ({ ...f, stock: parsed, _stockStr: fStock(parsed, f.packQty) })); }} style={inps} /></div>
         </div><div style={{ display: "flex", gap: 8, marginTop: 12 }}><button onClick={doSave} style={bts(true)}>Save</button><button onClick={() => setSf(false)} style={bts(false)}>Cancel</button></div></div>}
+      {/* Pagination info */}
+      {list.length > INV_PER_PAGE && <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", marginBottom: 8 }}>
+        <span style={{ fontSize: 12, color: "#888" }}>Showing {((safeInvPage-1)*INV_PER_PAGE)+1}–{Math.min(safeInvPage*INV_PER_PAGE, list.length)} of {list.length}</span>
+        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+          <button onClick={function(){setInvPageNum(Math.max(1,safeInvPage-1));}} disabled={safeInvPage<=1} style={{...bts(false),padding:"5px 10px",fontSize:12,opacity:safeInvPage<=1?0.4:1}}>← Prev</button>
+          <span style={{ fontSize: 12, fontWeight: 600, padding: "0 8px" }}>Page {safeInvPage}/{totalInvPages}</span>
+          <button onClick={function(){setInvPageNum(Math.min(totalInvPages,safeInvPage+1));}} disabled={safeInvPage>=totalInvPages} style={{...bts(false),padding:"5px 10px",fontSize:12,opacity:safeInvPage>=totalInvPages?0.4:1}}>Next →</button>
+        </div>
+      </div>}
       {/* Mobile card view */}
       {mob ? <div>
-        {list.map(function(m) {
+        {paginatedList.map(function(m) {
           var sales = invExpand === m.id ? getSalesHistory(m.id) : [];
           return <div key={m.id} style={{ ...cds, padding: 12, marginBottom: 8, borderLeft: "3px solid #0D6B5B" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
@@ -2044,7 +2084,7 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
         <th style={ths}>Sales</th>
         <th style={ths}></th>
       </tr></thead><tbody>
-        {list.map(function(m) {
+        {paginatedList.map(function(m) {
           var isExp = invExpand === m.id;
           var sales = isExp ? getSalesHistory(m.id) : [];
           return <React.Fragment key={m.id}><tr>
@@ -2082,7 +2122,19 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
           </td></tr>}
           </React.Fragment>;
         })}</tbody></table></div>
-      {list.length === 0 && <div style={{ padding: 20, textAlign: "center", color: "#aaa", fontSize: 12 }}>No items</div>}</div>}</div>
+      {list.length === 0 && <div style={{ padding: 20, textAlign: "center", color: "#aaa", fontSize: 12 }}>No items</div>}</div>}
+      {/* Bottom pagination */}
+      {list.length > INV_PER_PAGE && <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", marginTop: 8 }}>
+        <span style={{ fontSize: 12, color: "#888" }}>Showing {((safeInvPage-1)*INV_PER_PAGE)+1}–{Math.min(safeInvPage*INV_PER_PAGE, list.length)} of {list.length}</span>
+        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+          <button onClick={function(){setInvPageNum(1);}} disabled={safeInvPage<=1} style={{...bts(false),padding:"5px 10px",fontSize:11,opacity:safeInvPage<=1?0.4:1}}>First</button>
+          <button onClick={function(){setInvPageNum(Math.max(1,safeInvPage-1));}} disabled={safeInvPage<=1} style={{...bts(false),padding:"5px 10px",fontSize:12,opacity:safeInvPage<=1?0.4:1}}>← Prev</button>
+          <span style={{ fontSize: 12, fontWeight: 600, padding: "0 8px" }}>{safeInvPage}/{totalInvPages}</span>
+          <button onClick={function(){setInvPageNum(Math.min(totalInvPages,safeInvPage+1));}} disabled={safeInvPage>=totalInvPages} style={{...bts(false),padding:"5px 10px",fontSize:12,opacity:safeInvPage>=totalInvPages?0.4:1}}>Next →</button>
+          <button onClick={function(){setInvPageNum(totalInvPages);}} disabled={safeInvPage>=totalInvPages} style={{...bts(false),padding:"5px 10px",fontSize:11,opacity:safeInvPage>=totalInvPages?0.4:1}}>Last</button>
+        </div>
+      </div>}
+    </div>
   );
 }
 
@@ -2097,7 +2149,7 @@ function BillPage({ inv, saveInv, addBill, mob, showBill, user }) {
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState(null);
   const camRef = useRef(null);
-  const res = sq.length >= 1 ? inv.filter((m) => { const s = sq.toLowerCase(); return (m.name.toLowerCase().includes(s) || m.batch.toLowerCase().includes(s) || (m.uid || "") === sq.toUpperCase() || (m.uid || "").toLowerCase().includes(s)) && m.stock > 0; }).slice(0, 8) : [];
+  const res = useMemo(() => sq.length >= 1 ? inv.filter((m) => { const s = sq.toLowerCase(); return (m.name.toLowerCase().includes(s) || m.batch.toLowerCase().includes(s) || (m.uid || "") === sq.toUpperCase() || (m.uid || "").toLowerCase().includes(s)) && m.stock > 0; }).slice(0, 8) : [], [sq, inv]);
   const addIt = (med) => { const ex = items.findIndex((i) => i.mid === med.id && !i.loose); if (ex >= 0) setItems((p) => p.map((i, idx) => idx === ex ? { ...i, qty: i.qty + 1 } : i)); else setItems((p) => [...p, { mid: med.id, name: med.name, manufacturer: med.manufacturer || "", pack: med.pack || "", batch: med.batch, expiry: med.expiry, mrp: med.mrp, ptr: med.ptr || 0, gstRate: med.gstRate || 5, qty: 1, discount: 0, loose: false, packQty: med.packQty || 0, unitPrice: med.mrp, unitPtr: med.ptr || 0, uid: med.uid || "", rack: med.rack || "", purchaseBillNo: med.purchaseBillNo || "", purchaseDistributor: med.purchaseDistributor || med.distributor || "", purchaseDate: med.purchaseDate || "", unitCost: med.unitCost || 0, purchDiscPct: med.purchDiscPct || 0, purchSchemePct: med.purchSchemePct || 0, purchFreeRatio: med.purchFreeRatio || 1 }]); setSq(""); setSo(false); };
 
   // Camera scan - reads medicine strip/box image using local Tesseract.js v5 OCR (no API needed)
@@ -2436,11 +2488,15 @@ function BillPage({ inv, saveInv, addBill, mob, showBill, user }) {
 function StockPage({ inv, saveInv, isO, mob }) {
   const [v, setV] = useState("all"); const [q, setQ] = useState("");
   const safeExp = (m) => { if (!m || !m.expiry) return 9999; try { return (new Date(m.expiry + "-01") - new Date()) / 864e5; } catch(e) { return 9999; } };
-  const low = inv.filter((m) => m.stock > 0 && m.stock < 3), out = inv.filter((m) => m.stock <= 0);
-  const expS = inv.filter((m) => { const d = safeExp(m); return d < 90 && d > 0; });
-  const expD = inv.filter((m) => safeExp(m) <= 0 && m.expiry);
-  let list = v === "low" ? low : v === "out" ? out : v === "exp" ? expS : v === "expd" ? expD : inv;
-  if (q) list = list.filter((m) => m.name.toLowerCase().includes(q.toLowerCase()));
+  const low = useMemo(() => inv.filter((m) => m.stock > 0 && m.stock < 3), [inv]);
+  const out = useMemo(() => inv.filter((m) => m.stock <= 0), [inv]);
+  const expS = useMemo(() => inv.filter((m) => { const d = safeExp(m); return d < 90 && d > 0; }), [inv]);
+  const expD = useMemo(() => inv.filter((m) => safeExp(m) <= 0 && m.expiry), [inv]);
+  const list = useMemo(() => {
+    let l = v === "low" ? low : v === "out" ? out : v === "exp" ? expS : v === "expd" ? expD : inv;
+    if (q) l = l.filter((m) => m.name.toLowerCase().includes(q.toLowerCase()));
+    return l;
+  }, [v, q, inv, low, out, expS, expD]);
 
   const STOCK_COLS = [
     { key: "name", label: "Medicine" }, { key: "batch", label: "Batch" }, { key: "exp", label: "Expiry" },
@@ -2521,8 +2577,9 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
   const [hTo, setHTo] = useState("");
   const mob = useM();
 
-  var now = new Date();
-  var filteredBills = bills.filter(function(b) {
+  var filteredBills = useMemo(function() {
+    var now = new Date();
+    return bills.filter(function(b) {
     if (hFilter === "all") return true;
     var d = new Date(b.date);
     if (hFilter === "today") return d.toDateString() === now.toDateString();
@@ -2530,7 +2587,8 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
     if (hFilter === "month") return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
     if (hFilter === "custom" && hFrom && hTo) return d >= new Date(hFrom) && d <= new Date(hTo + "T23:59:59");
     return true;
-  });
+    });
+  }, [bills, hFilter, hFrom, hTo]);
 
   const editAddItem = function(med) {
     if (!editBill) return;
@@ -2873,9 +2931,9 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, deleteBi
     ) : null;
   };
 
-  let filtered = q ? bills.filter((b) => b.billNo.toLowerCase().includes(q.toLowerCase()) || b.patient.toLowerCase().includes(q.toLowerCase()) || (b.paymentMode || "").toLowerCase().includes(q.toLowerCase())) : bills;
+  let filtered = useMemo(() => q ? bills.filter((b) => b.billNo.toLowerCase().includes(q.toLowerCase()) || b.patient.toLowerCase().includes(q.toLowerCase()) || (b.paymentMode || "").toLowerCase().includes(q.toLowerCase())) : bills, [q, bills]);
 
-  const sorted = [...filtered].sort((a, b) => {
+  const sorted = useMemo(() => [...filtered].sort((a, b) => {
     let va, vb;
     if (sortCol === "date") { va = new Date(a.date).getTime(); vb = new Date(b.date).getTime(); }
     else if (sortCol === "bill") { va = a.billNo; vb = b.billNo; }
@@ -2887,7 +2945,15 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, deleteBi
     if (va < vb) return sortDir === "asc" ? -1 : 1;
     if (va > vb) return sortDir === "asc" ? 1 : -1;
     return 0;
-  });
+  }), [filtered, sortCol, sortDir]);
+
+  // Pagination for bill history
+  const HIST_PER_PAGE = 50;
+  const [histPageNum, setHistPageNum] = useState(1);
+  const totalHistPages = Math.max(1, Math.ceil(sorted.length / HIST_PER_PAGE));
+  const safeHistPage = Math.min(histPageNum, totalHistPages);
+  const paginatedBills = useMemo(() => sorted.slice((safeHistPage - 1) * HIST_PER_PAGE, safeHistPage * HIST_PER_PAGE), [sorted, safeHistPage]);
+  useEffect(() => { setHistPageNum(1); }, [q, sortCol, sortDir]);
 
   const visibleColCount = BILL_COLS.filter((c) => sh(c.key)).length + 2; // +2 for items-expand + actions
 
@@ -2898,9 +2964,19 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, deleteBi
         {!mob && <ColToggle cols={BILL_COLS} visible={colVis} setVisible={setColVis} />}
       </div>
 
+      {/* Pagination controls */}
+      {sorted.length > HIST_PER_PAGE && <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", marginBottom: 8 }}>
+        <span style={{ fontSize: 12, color: "#888" }}>Showing {((safeHistPage-1)*HIST_PER_PAGE)+1}–{Math.min(safeHistPage*HIST_PER_PAGE, sorted.length)} of {sorted.length} bills</span>
+        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+          <button onClick={function(){setHistPageNum(Math.max(1,safeHistPage-1));}} disabled={safeHistPage<=1} style={{...bts(false),padding:"5px 10px",fontSize:12,opacity:safeHistPage<=1?0.4:1}}>← Prev</button>
+          <span style={{ fontSize: 12, fontWeight: 600, padding: "0 8px" }}>{safeHistPage}/{totalHistPages}</span>
+          <button onClick={function(){setHistPageNum(Math.min(totalHistPages,safeHistPage+1));}} disabled={safeHistPage>=totalHistPages} style={{...bts(false),padding:"5px 10px",fontSize:12,opacity:safeHistPage>=totalHistPages?0.4:1}}>Next →</button>
+        </div>
+      </div>}
+
       {/* Mobile card view */}
       {mob && <div>
-        {sorted.map(function(b) {
+        {paginatedBills.map(function(b) {
           return <div key={b.billNo} style={{ ...cds, padding: 12, marginBottom: 8, borderLeft: "3px solid #0D6B5B" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div><div style={{ fontFamily: "monospace", fontWeight: 700, color: "#0D6B5B", fontSize: 14 }}>{b.billNo}</div>
@@ -2938,7 +3014,7 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, deleteBi
               <th style={ths}></th>
             </tr></thead>
             <tbody>
-              {sorted.map((b) => {
+              {paginatedBills.map((b) => {
                 const isOpen = expanded === b.billNo;
                 return (
                   <React.Fragment key={b.billNo}>
@@ -4001,6 +4077,7 @@ function RackPage({ inv, saveInv, mob }) {
   const rackBlank = { name: "", manufacturer: "", hsn: "300490", batch: "", expiry: "", pack: "", mrp: 0, ptr: 0, stock: 0, gstRate: 5, rack: "", distributor: "", packQty: 0 };
   const [addFm, setAddFm] = useState(rackBlank);
 
+  // Get racks that have medicines (memoized)
   var doAddNewMedicine = function() {
     if (!addFm.name || !addFm.batch) { setAddMsg("❌ Name and Batch are required"); return; }
     var stockVal = addFm._stockStr !== undefined ? parseStockInput(addFm._stockStr, addFm.packQty) : addFm.stock;
@@ -4012,17 +4089,12 @@ function RackPage({ inv, saveInv, mob }) {
     setTimeout(function() { setAddMsg(""); }, 3000);
   };
 
-  // Generate all rack names
-  var ALL_RACKS = [];
-  var letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
-  letters.forEach(function(l) { for (var i = 1; i <= 100; i++) ALL_RACKS.push(l + i); });
-  for (var i = 1; i <= 100; i++) ALL_RACKS.push("BH-" + i);
-  ALL_RACKS.push("Refrigerator(Fridge)");
-
-  // Get racks that have medicines
-  var usedRacks = {};
-  inv.forEach(function(m) { if (m.rack) usedRacks[m.rack] = true; });
-  var usedList = Object.keys(usedRacks).sort();
+  var usedRacks = useMemo(function() {
+    var map = {};
+    inv.forEach(function(m) { if (m.rack) map[m.rack] = true; });
+    return map;
+  }, [inv]);
+  var usedList = useMemo(function() { return Object.keys(usedRacks).sort(); }, [usedRacks]);
 
   // Filter racks for display - also filter by medicine search within racks
   var displayRacks = showAll ? ALL_RACKS.filter(function(r) { return !filterRack || r.toLowerCase().indexOf(filterRack.toLowerCase()) >= 0; }).slice(0, 50) : usedList;
@@ -4078,7 +4150,7 @@ function RackPage({ inv, saveInv, mob }) {
     setSelected(function(p) { return p.indexOf(id) >= 0 ? p.filter(function(x) { return x !== id; }) : p.concat([id]); });
   };
 
-  var unassigned = inv.filter(function(m) { return !m.rack; });
+  var unassigned = useMemo(function() { return inv.filter(function(m) { return !m.rack; }); }, [inv]);
   var getRackMeds = function(r) {
     var meds = inv.filter(function(m) { return m.rack === r; });
     if (rackMedSearch) {
@@ -4090,12 +4162,14 @@ function RackPage({ inv, saveInv, mob }) {
     return meds;
   };
   const [medSearch, setMedSearch] = useState("");
-  var filteredMeds = inv.filter(function(m) {
+  var filteredMeds = useMemo(function() {
+    return inv.filter(function(m) {
     if (m.rack) return false;
     if (!medSearch) return true;
     var s = medSearch.toLowerCase();
     return m.name.toLowerCase().indexOf(s) >= 0 || (m.batch || "").toLowerCase().indexOf(s) >= 0 || (m.manufacturer || "").toLowerCase().indexOf(s) >= 0;
-  });
+    });
+  }, [inv, medSearch]);
 
   var selectAll = function() {
     if (selected.length === filteredMeds.length) { setSelected([]); }
@@ -4103,7 +4177,7 @@ function RackPage({ inv, saveInv, mob }) {
   };
 
   // Count total assigned medicines
-  var assignedCount = inv.filter(function(m) { return !!m.rack; }).length;
+  var assignedCount = useMemo(function() { return inv.filter(function(m) { return !!m.rack; }).length; }, [inv]);
 
   return (
     <div><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
@@ -4130,7 +4204,7 @@ function RackPage({ inv, saveInv, mob }) {
               <label style={{ fontSize: 10, fontWeight: 600, color: "#888", textTransform: "uppercase" }}>Rack</label>
               <select value={addFm.rack || ""} onChange={function(e) { setAddFm(function(f) { return Object.assign({}, f, { rack: e.target.value }); }); }} style={inps}>
                 <option value="">No rack</option>
-                {ALL_RACKS.map(function(r) { return <option key={r} value={r}>{r}</option>; })}
+                {RACK_OPTIONS}
               </select>
             </div>
           </div>
@@ -4177,7 +4251,7 @@ function RackPage({ inv, saveInv, mob }) {
         <b style={{ color: "#065F46", fontSize: 13 }}>{selected.length} medicine(s) selected. Assign to rack:</b>
         <select onChange={function(e) { if (e.target.value) { assignToRack(e.target.value, selected); e.target.value = ""; } }} style={{ ...inps, width: 120 }}>
           <option value="">Select rack</option>
-          {ALL_RACKS.map(function(r) { return <option key={r} value={r}>{r}</option>; })}
+          {RACK_OPTIONS}
         </select>
         <button onClick={function() { setSelected([]); }} style={bts(false)}>Clear</button>
       </div>}
@@ -4239,7 +4313,7 @@ function RackPage({ inv, saveInv, mob }) {
                               <label style={{ fontSize: 10, fontWeight: 600, color: "#92400E" }}>Rack:</label>
                               <select value={editRackVal} onChange={function(e) { setEditRackVal(e.target.value); }} style={{ ...inps, width: 100, fontSize: 11, padding: "3px 6px" }}>
                                 <option value="">None</option>
-                                {ALL_RACKS.map(function(rk) { return <option key={rk} value={rk}>{rk}</option>; })}
+                                {RACK_OPTIONS}
                               </select>
                             </div>
                             <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -6678,18 +6752,29 @@ function App() {
   }, [user]);
 
   // Data save helpers - write to Firebase, listeners auto-update state
+  // Debounced save to prevent rapid full Firebase writes
+  const saveTimers = useRef({});
+  const debouncedFbSet = useCallback(function(path, obj, delay) {
+    delay = delay || 300;
+    if (saveTimers.current[path]) clearTimeout(saveTimers.current[path]);
+    saveTimers.current[path] = setTimeout(function() {
+      fbSet(path, obj);
+      delete saveTimers.current[path];
+    }, delay);
+  }, []);
+
   const saveInv = useCallback((data) => {
     const obj = {}; data.forEach((m) => { obj[m.id] = m; });
-    fbSet("inventory", obj);
-  }, []);
+    debouncedFbSet("inventory", obj, 400);
+  }, [debouncedFbSet]);
   const saveBills = useCallback((data) => {
     const obj = {}; data.forEach((b) => { obj[b.billNo] = b; });
-    fbSet("bills", obj);
-  }, []);
+    debouncedFbSet("bills", obj, 400);
+  }, [debouncedFbSet]);
   const savePurch = useCallback((data) => {
     const obj = {}; data.forEach((p) => { obj[p.id] = p; });
-    fbSet("purchases", obj);
-  }, []);
+    debouncedFbSet("purchases", obj, 400);
+  }, [debouncedFbSet]);
   const saveAll = useCallback((i, b, p) => {
     const io = {}; i.forEach((m) => { io[m.id] = m; });
     const bo = {}; b.forEach((x) => { bo[x.billNo] = x; });
@@ -6773,7 +6858,11 @@ function App() {
   if (loading) return (<div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#EFECE5", fontFamily: "'Playfair Display',serif", fontSize: 18, color: "#0C2E24" }}>Loading...</div>);
   if (!user) return (<Login onLogin={login} />);
 
-  const counts = { purch: purch.length, returns: 0, hist: bills.length, inv: inv.length, stock: inv.filter((m) => m.stock > 0 && m.stock < 3).length, rack: inv.filter((m) => !m.rack).length };
+  const counts = useMemo(() => ({
+    purch: purch.length, returns: 0, hist: bills.length, inv: inv.length,
+    stock: inv.filter((m) => m.stock > 0 && m.stock < 3).length,
+    rack: inv.filter((m) => !m.rack).length
+  }), [inv, bills, purch]);
 
   return (
     <div style={{ display: "flex", height: "100vh", fontFamily: "'DM Sans',sans-serif", background: "#EFECE5", overflow: "hidden" }}>
