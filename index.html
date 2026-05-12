@@ -147,16 +147,19 @@ const ALL_PAGES = [
 function genOTP() { return String(Math.floor(100000 + Math.random() * 900000)); }
 async function sendOTPEmail(toEmail, otp, recipientName) {
   try {
+    console.log("[OTP] Sending email to:", toEmail, "name:", recipientName);
     var resp = await fetch(PROXY_URL + "/send-otp-email", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ to_email: toEmail, to_name: recipientName || toEmail, otp_code: otp })
     });
     var data = await resp.json();
+    console.log("[OTP] Email response:", resp.status, data);
     if (!resp.ok || !data.ok) {
       throw new Error(data.error || "HTTP " + resp.status);
     }
   } catch(e) {
+    console.error("[OTP] Email send failed:", e);
     throw new Error("Email failed: " + e.message);
   }
 }
@@ -1378,6 +1381,7 @@ function Login({ onLogin }) {
         if (profile.disabled) { setErr("Your account has been disabled. Contact owner."); setLoading(false); return; }
       }
       const code = genOTP();
+      console.log("[OTP DEBUG] Code for " + em + ": " + code);
       await saveOTP(em, code);
       var emailOk = false;
       var emailErr = "";
@@ -1403,6 +1407,7 @@ function Login({ onLogin }) {
         setInfo("Could not send OTP email. Please contact admin.");
       }
     } catch(e) {
+      console.error("[OTP ERROR]", e);
       setErr("Failed to send OTP: " + e.message);
     }
     setLoading(false);
@@ -3023,6 +3028,8 @@ function UsersPage({ sessions, mob, user }) {
     const nm = newName.trim();
     if (!em.includes("@")) { setMsg("❌ Enter a valid email"); return; }
     if (!nm) { setMsg("❌ Enter a name"); return; }
+    if (newOutlets.length === 0) { setMsg("❌ Select at least one outlet (store) for this user"); return; }
+    if (newPages.length === 0) { setMsg("❌ Select at least one page for this user"); return; }
     if (OWNER_EMAILS.includes(em)) { setMsg("❌ This email is an owner — cannot add as staff"); return; }
     setSaving(true); setMsg("");
     try {
@@ -3988,6 +3995,23 @@ function RackPage({ inv, saveInv, mob }) {
   const [editRackVal, setEditRackVal] = useState("");
   const [editStockVal, setEditStockVal] = useState("");
 
+  // Add new medicine form state
+  const [showAddNew, setShowAddNew] = useState(false);
+  const [addMsg, setAddMsg] = useState("");
+  const rackBlank = { name: "", manufacturer: "", hsn: "300490", batch: "", expiry: "", pack: "", mrp: 0, ptr: 0, stock: 0, gstRate: 5, rack: "", distributor: "", packQty: 0 };
+  const [addFm, setAddFm] = useState(rackBlank);
+
+  var doAddNewMedicine = function() {
+    if (!addFm.name || !addFm.batch) { setAddMsg("❌ Name and Batch are required"); return; }
+    var stockVal = addFm._stockStr !== undefined ? parseStockInput(addFm._stockStr, addFm.packQty) : addFm.stock;
+    var fmRest = Object.assign({}, addFm); delete fmRest._stockStr;
+    var fmClean = Object.assign({}, fmRest, { stock: stockVal });
+    saveInv([].concat(inv, [Object.assign({}, fmClean, { id: mkId(), addedFrom: "rack-page", uid: mkUID() })]));
+    setAddMsg("✅ " + addFm.name + " added to inventory" + (addFm.rack ? " → Rack " + addFm.rack : ""));
+    setAddFm(rackBlank);
+    setTimeout(function() { setAddMsg(""); }, 3000);
+  };
+
   // Generate all rack names
   var ALL_RACKS = [];
   var letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
@@ -4082,7 +4106,55 @@ function RackPage({ inv, saveInv, mob }) {
   var assignedCount = inv.filter(function(m) { return !!m.rack; }).length;
 
   return (
-    <div><h2 style={hds}>Rack Management</h2>
+    <div><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+      <h2 style={{ ...hds, marginBottom: 0 }}>Rack Management</h2>
+      <button onClick={function() { setShowAddNew(!showAddNew); setAddFm(rackBlank); setAddMsg(""); }} style={{ ...bts(true), fontSize: 13, padding: "9px 18px" }}>+ Add New Medicine</button>
+    </div>
+
+      {/* ── Add New Medicine Modal ── */}
+      {showAddNew && <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={function(e) { if (e.target === e.currentTarget) setShowAddNew(false); }}>
+        <div style={{ background: "#fff", borderRadius: 16, padding: mob ? "20px 16px" : "28px 28px", width: "100%", maxWidth: 620, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 24px 80px rgba(0,0,0,0.3)" }} onClick={function(e) { e.stopPropagation(); }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+            <div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "#0C2E24" }}>💊 Add New Medicine</div>
+              <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>This will add to inventory. Assign a rack below to place it directly.</div>
+            </div>
+            <button onClick={function() { setShowAddNew(false); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 22, color: "#888", padding: 4 }}>✕</button>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "1fr 1fr 1fr 1fr", gap: 10 }}>
+            {[["name","Name *"],["manufacturer","Manufacturer"],["batch","Batch *"],["expiry","Expiry (YYYY-MM)"],["pack","Pack (e.g. 10 Tab)"],["distributor","Distributor"],["hsn","HSN Code"]].map(function(pair) { var k = pair[0]; var l = pair[1]; return (
+              <div key={k}><label style={{ fontSize: 10, fontWeight: 600, color: "#888", textTransform: "uppercase" }}>{l}</label><input value={addFm[k] || ""} onChange={function(e) { setAddFm(function(f) { return Object.assign({}, f, {[k]: e.target.value}); }); }} style={inps} /></div>
+            ); })}
+            <div>
+              <label style={{ fontSize: 10, fontWeight: 600, color: "#888", textTransform: "uppercase" }}>Rack</label>
+              <select value={addFm.rack || ""} onChange={function(e) { setAddFm(function(f) { return Object.assign({}, f, { rack: e.target.value }); }); }} style={inps}>
+                <option value="">No rack</option>
+                {ALL_RACKS.map(function(r) { return <option key={r} value={r}>{r}</option>; })}
+              </select>
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "1fr 1fr 1fr 1fr 1fr", gap: 10, marginTop: 10 }}>
+            {[["mrp","MRP *"],["ptr","PTR"],["gstRate","GST %"],["packQty","Pack Qty"]].map(function(pair) { var k = pair[0]; var l = pair[1]; return (
+              <div key={k}><label style={{ fontSize: 10, fontWeight: 600, color: "#888", textTransform: "uppercase" }}>{l}</label><input type="number" step="0.01" value={addFm[k] || 0} onChange={function(e) { setAddFm(function(f) { return Object.assign({}, f, {[k]: Number(e.target.value)}); }); }} style={inps} /></div>
+            ); })}
+            <div>
+              <label style={{ fontSize: 10, fontWeight: 600, color: "#888", textTransform: "uppercase" }}>Stock <span style={{ fontWeight: 400, color: "#aaa" }}>(packs.tablets)</span></label>
+              <input type="text" value={addFm._stockStr !== undefined ? addFm._stockStr : fStock(addFm.stock, addFm.packQty)} onChange={function(e) { setAddFm(function(f) { return Object.assign({}, f, { _stockStr: e.target.value }); }); }} onBlur={function(e) { var parsed = parseStockInput(e.target.value, addFm.packQty); setAddFm(function(f) { return Object.assign({}, f, { stock: parsed, _stockStr: fStock(parsed, f.packQty) }); }); }} style={inps} />
+            </div>
+          </div>
+
+          {addMsg && <div style={{ padding: "10px 14px", borderRadius: 8, marginTop: 12, background: addMsg.startsWith("✅") ? "#F0FDF4" : "#FEF2F2", color: addMsg.startsWith("✅") ? "#166534" : "#DC2626", fontSize: 13, fontWeight: 500 }}>{addMsg}</div>}
+
+          <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+            <button onClick={doAddNewMedicine} style={{ ...bts(true), padding: "11px 24px", flex: 1, fontSize: 14 }}>Add to Inventory</button>
+            <button onClick={function() { setAddFm(rackBlank); setAddMsg(""); }} style={{ ...bts(false), padding: "11px 18px", fontSize: 13 }}>Clear</button>
+            <button onClick={function() { setShowAddNew(false); }} style={{ ...bts(false), padding: "11px 18px", fontSize: 13 }}>Close</button>
+          </div>
+        </div>
+      </div>}
+
       <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
         <button onClick={function() { setShowAll(!showAll); }} style={bts(!showAll)}>{showAll ? "Show Used Racks Only" : "Show All Racks"}</button>
         {showAll && <input value={filterRack} onChange={function(e) { setFilterRack(e.target.value); }} placeholder="Filter racks (e.g. A1, BH-5)" style={{ ...inps, maxWidth: 200 }} />}
