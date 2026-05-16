@@ -1644,7 +1644,7 @@ function Login({ onLogin }) {
         name: profile.name || em,
         role: isOwner ? "owner" : "staff",
         pages: isOwner ? null : (profile.pages || []), // null = all pages for owner
-        outlets: isOwner ? null : (profile.outlets || Object.keys(OUTLETS)), // null = all outlets for owner
+        outlets: isOwner ? null : (profile.outlets && profile.outlets.length > 0 ? profile.outlets : ["outlet1"]), // null = all outlets for owner; default to outlet1 only if unset
       });
     } catch(e) {
       setErr("Verification failed: " + e.message);
