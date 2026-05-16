@@ -186,26 +186,66 @@ async function sendOTPFallback(toEmail, otp) {
   } catch(e) { return false; }
 }
 // Firebase paths for OTP store
+var FIREBASE_DB_URL = "https://atoz-pharmacy-9adbe-default-rtdb.asia-southeast1.firebasedatabase.app";
+
+async function fbRest(path, method, body) {
+  // Plain HTTPS REST call to Firebase — works on Android where WebSocket SDK hangs
+  var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+  var tid = controller ? setTimeout(function() { controller.abort(); }, 10000) : null;
+  var opts = { method: method || "GET", headers: { "Content-Type": "application/json" } };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  if (controller) opts.signal = controller.signal;
+  var resp = await fetch(FIREBASE_DB_URL + "/" + path + ".json", opts);
+  if (tid) clearTimeout(tid);
+  if (!resp.ok) throw new Error("Firebase REST error: " + resp.status);
+  return resp.json();
+}
+
 async function saveOTP(email, otp) {
   const key = email.replace(/\./g, "_").replace(/@/g, "__");
-  await fbSetPath("otps/" + key, { otp, ts: Date.now(), email });
+  try {
+    await fbRest("otps/" + key, "PUT", { otp: otp, ts: Date.now(), email: email });
+  } catch(e) {
+    console.warn("[saveOTP REST failed, using SDK]", e);
+    await fbSetPath("otps/" + key, { otp, ts: Date.now(), email });
+  }
 }
 async function verifyOTP(email, enteredOtp) {
   const key = email.replace(/\./g, "_").replace(/@/g, "__");
-  const snap = await new Promise(res => db.ref("otps/" + key).once("value", res));
-  const data = snap.val();
+  var data = null;
+  try {
+    data = await fbRest("otps/" + key, "GET");
+  } catch(e) {
+    console.warn("[verifyOTP REST failed, using SDK]", e);
+    const snap = await new Promise(res => db.ref("otps/" + key).once("value", res));
+    data = snap.val();
+  }
   if (!data) return { ok: false, err: "No OTP found. Please request again." };
   if (Date.now() - data.ts > 10 * 60 * 1000) return { ok: false, err: "OTP expired. Please request again." };
   if (data.otp !== enteredOtp.trim()) return { ok: false, err: "Incorrect OTP. Please try again." };
   // Clear used OTP
-  await fbSetPath("otps/" + key, null);
+  try { await fbRest("otps/" + key, "DELETE"); } catch(e) { fbSetPath("otps/" + key, null); }
   return { ok: true };
 }
 // Load user profile from Firebase
 async function loadUserProfile(email) {
   const key = email.replace(/\./g, "_").replace(/@/g, "__");
-  const snap = await new Promise(res => db.ref("userProfiles/" + key).once("value", res));
-  return snap.val();
+  // Use Firebase REST API (plain HTTPS) instead of SDK WebSocket — more reliable on Android
+  try {
+    var dbUrl = "https://atoz-pharmacy-9adbe-default-rtdb.asia-southeast1.firebasedatabase.app";
+    var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    var tid = controller ? setTimeout(function() { controller.abort(); }, 8000) : null;
+    var opts = controller ? { signal: controller.signal } : {};
+    var resp = await fetch(dbUrl + "/userProfiles/" + key + ".json", opts);
+    if (tid) clearTimeout(tid);
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch(e) {
+    console.warn("[loadUserProfile REST failed, falling back to SDK]", e);
+    // Fallback to SDK if REST also fails
+    const snap = await new Promise(res => db.ref("userProfiles/" + key).once("value", res));
+    return snap.val();
+  }
 }
 // Save user profile
 async function saveUserProfile(email, profile) {
