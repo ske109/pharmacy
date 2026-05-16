@@ -141,6 +141,7 @@ const ALL_PAGES = [
   { id: "compare",   label: "Price Compare",   icon: "⚖️" },
   { id: "users",     label: "Users & Roles",   icon: "👥" },
   { id: "backup",    label: "Backup",          icon: "💾" },
+  { id: "changelog", label: "Change Log",      icon: "📜" },
 ];
 
 // ── OTP helpers (6-digit, stored in Firebase with 10min expiry) ───────────
@@ -252,13 +253,95 @@ function parseStockInput(val, packQty) {
 }
 
 // ══════════════════════════════════════════════
+// AUDIT TRAIL — logs who changed what and when
+// ══════════════════════════════════════════════
+function logAudit(action, details, user) {
+  if (!db) return;
+  var entry = {
+    id: "aud" + Date.now().toString(36) + Math.random().toString(36).slice(2,5),
+    action: action,
+    details: details,
+    user: user ? (user.name || user.email || "unknown") : "system",
+    ts: new Date().toISOString(),
+    tsDisplay: new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: true })
+  };
+  var path = getOutletPath ? getOutletPath("auditTrail/" + entry.id) : "auditTrail/" + entry.id;
+  db.ref(path).set(entry);
+}
+
+// ══════════════════════════════════════════════
+// DATA VALIDATION — validates medicine fields
+// ══════════════════════════════════════════════
+var VALID_GST = [0, 3, 5, 12, 18, 28];
+function validateMedicine(fm, isEdit) {
+  var errors = [];
+  if (!fm.name || !fm.name.trim()) errors.push("Medicine name is required");
+  if (!fm.batch || !fm.batch.trim()) errors.push("Batch number is required");
+  if (fm.mrp !== undefined && fm.mrp !== "" && (isNaN(Number(fm.mrp)) || Number(fm.mrp) < 0)) errors.push("MRP must be a positive number");
+  if (fm.ptr !== undefined && fm.ptr !== "" && fm.ptr !== 0 && (isNaN(Number(fm.ptr)) || Number(fm.ptr) < 0)) errors.push("PTR must be a positive number");
+  if (fm.gstRate !== undefined && fm.gstRate !== "" && VALID_GST.indexOf(Number(fm.gstRate)) === -1) errors.push("GST must be one of: " + VALID_GST.join("%, ") + "%");
+  if (fm.expiry && fm.expiry.trim()) {
+    var exp = fm.expiry.trim();
+    var expValid = /^\d{4}[-\/]\d{1,2}$/.test(exp) || /^\d{1,2}[-\/]\d{4}$/.test(exp) || /^\d{1,2}[-\/]\d{1,2}[-\/]\d{2,4}$/.test(exp);
+    if (!expValid) errors.push("Expiry format should be YYYY-MM (e.g. 2025-06)");
+  }
+  if (fm.mrp && fm.ptr && Number(fm.ptr) > Number(fm.mrp) * 1.5) errors.push("PTR (" + fm.ptr + ") seems unusually high vs MRP (" + fm.mrp + ")");
+  return errors;
+}
+
+// ══════════════════════════════════════════════
+// DUPLICATE DETECTION — check Name+Batch+Expiry
+// ══════════════════════════════════════════════
+function findDuplicate(inv, fm, editId) {
+  return inv.find(function(m) {
+    if (editId && m.id === editId) return false;
+    return m.name.toLowerCase().trim() === (fm.name || "").toLowerCase().trim() &&
+           m.batch.toLowerCase().trim() === (fm.batch || "").toLowerCase().trim() &&
+           (m.expiry || "").trim() === (fm.expiry || "").trim();
+  });
+}
+
+// ══════════════════════════════════════════════
+// LOW STOCK THRESHOLD — configurable per medicine
+// ══════════════════════════════════════════════
+var DEFAULT_LOW_STOCK = 3;
+function isLowStock(m) {
+  var threshold = m.lowStockThreshold || DEFAULT_LOW_STOCK;
+  return (m.stock || 0) > 0 && (m.stock || 0) < threshold;
+}
+
+// ══════════════════════════════════════════════
+// EXPIRY HELPERS — days until expiry
+// ══════════════════════════════════════════════
+function getDaysToExpiry(m) {
+  if (!m || !m.expiry) return 9999;
+  try {
+    var parts = String(m.expiry).split(/[-\/]/);
+    var yr, mo;
+    if (parts.length === 2) {
+      if (parts[0].length === 4) { yr = parseInt(parts[0]); mo = parseInt(parts[1]); }
+      else if (parts[1].length === 4) { yr = parseInt(parts[1]); mo = parseInt(parts[0]); }
+      else { yr = 2000 + parseInt(parts[1]); mo = parseInt(parts[0]); }
+    } else if (parts.length === 3) {
+      var p0 = parseInt(parts[0]), p2 = parseInt(parts[2]);
+      if (parts[0].length === 4 || p0 > 31) { yr = p0; mo = parseInt(parts[1]); }
+      else if (parts[2].length === 4 || p2 > 31) { yr = p2; mo = parseInt(parts[1]); }
+      else { yr = 2000 + p2; mo = parseInt(parts[1]); }
+    } else return 9999;
+    if (yr < 100) yr = 2000 + yr;
+    var ed = new Date(yr, (mo || 1) - 1, 28);
+    return Math.floor((ed - new Date()) / 86400000);
+  } catch(e) { return 9999; }
+}
+
+// ══════════════════════════════════════════════
 // FIREBASE DATABASE HELPERS (real-time sync)
 // ══════════════════════════════════════════════
 // Current outlet prefix for Firebase paths
 var _currentOutlet = localStorage.getItem("currentOutlet") || "outlet2";
 function getOutletPath(path) {
   // Paths that are outlet-specific
-  var outletPaths = ["inventory", "bills", "purchases", "returns", "billReturns", "racks", "audits", "customers", "ledger", "sessions"];
+  var outletPaths = ["inventory", "bills", "purchases", "returns", "billReturns", "racks", "audits", "customers", "ledger", "sessions", "auditTrail"];
   var root = path.split("/")[0];
   if (outletPaths.indexOf(root) >= 0) return "outlets/" + _currentOutlet + "/" + path;
   return path; // global paths (users, etc)
@@ -1554,7 +1637,7 @@ function Sidebar({ page, setPage, user, onLogout, counts, mob, sideOpen, setSide
 // DASHBOARD
 // ══════════════════════════════════════════════
 function DashPage({ inv, bills, purch, isO, mob }) {
-  const ts = Math.floor(inv.reduce((s, m) => s + (m.stock || 0), 0)), low = inv.filter((m) => m.stock > 0 && m.stock < 3).length;
+  const ts = Math.floor(inv.reduce((s, m) => s + (m.stock || 0), 0)), low = inv.filter(function(m) { return isLowStock(m); }).length;
   const today = new Date().toDateString(), tb = bills.filter((b) => new Date(b.date).toDateString() === today);
   const tr = tb.reduce((s, b) => s + b.netAmount, 0);
   const tc = tb.reduce((s, b) => s + b.items.reduce((ss, i) => {
@@ -1927,14 +2010,40 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
     }; reader.readAsText(file); e.target.value = "";
   };
 
-  const doSave = () => { if (!fm.name || !fm.batch) { alert("Name and Batch required"); return; }
+  const doSave = () => {
+    var vErrors = validateMedicine(fm);
+    if (vErrors.length > 0) { alert("Validation errors:\n\n" + vErrors.join("\n")); return; }
+    var dup = findDuplicate(inv, fm, ed);
+    if (dup && !ed) {
+      var doMerge = confirm("A medicine with same Name + Batch + Expiry already exists:\n\n" + dup.name + " | Batch: " + dup.batch + " | Stock: " + fStock(dup.stock, dup.packQty) + "\n\nClick OK to add stock to existing item, or Cancel to go back.");
+      if (doMerge) {
+        var addStock = fm._stockStr !== undefined ? parseStockInput(fm._stockStr, fm.packQty || dup.packQty) : (fm.stock || 0);
+        saveInv(inv.map(function(m) { return m.id === dup.id ? Object.assign({}, m, { stock: (m.stock || 0) + addStock, mrp: fm.mrp || m.mrp, ptr: fm.ptr || m.ptr }) : m; }));
+        logAudit("STOCK_MERGE", "Merged stock into " + dup.name + " Batch:" + dup.batch + " added " + addStock, typeof user !== "undefined" ? user : null);
+        setSf(false); setEd(null); setFm(blank); return;
+      }
+      return;
+    }
     const stockVal = fm._stockStr !== undefined ? parseStockInput(fm._stockStr, fm.packQty) : fm.stock;
     const { _stockStr, ...fmRest } = fm;
     const fmClean = { ...fmRest, stock: stockVal };
-    if (ed) saveInv(inv.map((m) => m.id === ed ? { ...fmClean, id: ed, uid: m.uid || mkUID() } : m));
-    else saveInv([...inv, { ...fmClean, id: mkId(), addedFrom: "manual", uid: mkUID() }]);
+    if (ed) {
+      var oldMed = inv.find(function(m) { return m.id === ed; });
+      saveInv(inv.map((m) => m.id === ed ? { ...fmClean, id: ed, uid: m.uid || mkUID() } : m));
+      var changes = [];
+      if (oldMed) {
+        if (oldMed.mrp !== fmClean.mrp) changes.push("MRP:" + oldMed.mrp + "→" + fmClean.mrp);
+        if (oldMed.ptr !== fmClean.ptr) changes.push("PTR:" + oldMed.ptr + "→" + fmClean.ptr);
+        if (oldMed.stock !== stockVal) changes.push("Stock:" + oldMed.stock + "→" + stockVal);
+        if (oldMed.name !== fmClean.name) changes.push("Name:" + oldMed.name + "→" + fmClean.name);
+      }
+      if (changes.length) logAudit("INV_EDIT", fmClean.name + " " + changes.join(", "), typeof user !== "undefined" ? user : null);
+    } else {
+      saveInv([...inv, { ...fmClean, id: mkId(), addedFrom: "manual", uid: mkUID() }]);
+      logAudit("INV_ADD", "Added " + fmClean.name + " Batch:" + fmClean.batch + " Stock:" + stockVal, typeof user !== "undefined" ? user : null);
+    }
     setSf(false); setEd(null); setFm(blank); };
-  const doDelete = (id) => { askConfirm("Delete this medicine?", () => saveInv(inv.filter((x) => x.id !== id))); };
+  const doDelete = (id) => { var m = inv.find(function(x) { return x.id === id; }); askConfirm("Delete this medicine?\n" + (m ? m.name + " Batch:" + m.batch : ""), () => { saveInv(inv.filter((x) => x.id !== id)); if (m) logAudit("INV_DELETE", "Deleted " + m.name + " Batch:" + m.batch + " Stock:" + m.stock, typeof user !== "undefined" ? user : null); }); };
 
   const [invExpand, setInvExpand] = useState(null);
   var getSalesHistory = function(medId) {
@@ -1985,7 +2094,7 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
       {sf && <div style={{ ...cds, border: "2px solid #0D6B5B" }}><b style={{ color: "#0D6B5B" }}>{ed ? "Edit" : "Add"} Medicine</b>
         <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "1fr 1fr 1fr 1fr", gap: 10, marginTop: 12 }}>
           {[["name","Name*"],["manufacturer","Mfg"],["batch","Batch*"],["expiry","Expiry"],["pack","Pack"],["rack","Rack"],["distributor","Distributor"],["hsn","HSN"]].map(([k, l]) => <div key={k}><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>{l}</label><input value={fm[k] || ""} onChange={(e) => setFm((f) => ({ ...f, [k]: e.target.value }))} style={inps} /></div>)}
-          {[["mrp","MRP"],["ptr","PTR"],["gstRate","GST%"],["packQty","Pack Qty"]].map(([k, l]) => <div key={k}><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>{l}</label><input type="number" value={fm[k] || 0} onChange={(e) => setFm((f) => ({ ...f, [k]: Number(e.target.value) }))} style={inps} /></div>)}
+          {[["mrp","MRP"],["ptr","PTR"],["gstRate","GST%"],["packQty","Pack Qty"],["lowStockThreshold","Low Stock Alert"]].map(([k, l]) => <div key={k}><label style={{ fontSize: 10, fontWeight: 600, color: k === "lowStockThreshold" ? "#B45309" : "#888" }}>{l}</label><input type="number" value={fm[k] || (k === "lowStockThreshold" ? DEFAULT_LOW_STOCK : 0)} onChange={(e) => setFm((f) => ({ ...f, [k]: Number(e.target.value) }))} style={inps} placeholder={k === "lowStockThreshold" ? "3" : ""} /></div>)}
           <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Stock <span style={{ fontWeight: 400, color: "#aaa" }}>(packs.tablets)</span></label><input type="text" value={fm._stockStr !== undefined ? fm._stockStr : fStock(fm.stock, fm.packQty)} onChange={(e) => setFm((f) => ({ ...f, _stockStr: e.target.value }))} onBlur={(e) => { var parsed = parseStockInput(e.target.value, fm.packQty); setFm((f) => ({ ...f, stock: parsed, _stockStr: fStock(parsed, f.packQty) })); }} style={inps} /></div>
         </div><div style={{ display: "flex", gap: 8, marginTop: 12 }}><button onClick={doSave} style={bts(true)}>Save</button><button onClick={() => setSf(false)} style={bts(false)}>Cancel</button></div></div>}
       {/* Mobile card view */}
@@ -2001,7 +2110,7 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
               </div>
               <div style={{ textAlign: "right" }}>
                 <div style={{ fontWeight: 800, fontSize: 16, color: "#0D6B5B" }}>{fStock(m.stock, m.packQty)}</div>
-                <div style={{ fontSize: 12, color: "#555" }}>MRP: <input type="number" step="0.01" defaultValue={m.mrp} onBlur={function(e) { var v = parseFloat(e.target.value) || 0; if (v !== m.mrp) saveInv(inv.map(function(x) { return x.id === m.id ? Object.assign({}, x, { mrp: v }) : x; })); }} style={{ width: 60, border: "1px solid #eee", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "right", background: "#FAFAF7" }} /></div>
+                <div style={{ fontSize: 12, color: "#555" }}>MRP: <input type="number" step="0.01" defaultValue={m.mrp} onBlur={function(e) { var v = parseFloat(e.target.value) || 0; if (v !== m.mrp) { logAudit("INV_EDIT", m.name + " MRP:" + m.mrp + "→" + v); saveInv(inv.map(function(x) { return x.id === m.id ? Object.assign({}, x, { mrp: v }) : x; })); } }} style={{ width: 60, border: "1px solid #eee", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "right", background: "#FAFAF7" }} /></div>
               </div>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6, fontSize: 11, color: "#888" }}>
@@ -2052,7 +2161,7 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
           {sh("name") && <td style={{ ...tds, fontWeight: 500, whiteSpace: "nowrap" }}>{m.name}</td>}
           {sh("batch") && <td style={{ ...tds, fontFamily: "monospace", fontSize: 11 }}>{m.batch}</td>}
           {sh("exp") && <td style={tds}>{m.expiry || "-"}</td>}
-          {sh("mrp") && <td style={{ ...tds, fontWeight: 600 }}><input type="number" step="0.01" defaultValue={m.mrp} onBlur={function(e) { var v = parseFloat(e.target.value) || 0; if (v !== m.mrp) saveInv(inv.map(function(x) { return x.id === m.id ? Object.assign({}, x, { mrp: v }) : x; })); }} style={{ width: 65, border: "1px solid #eee", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "right", background: "#FAFAF7" }} /></td>}
+          {sh("mrp") && <td style={{ ...tds, fontWeight: 600 }}><input type="number" step="0.01" defaultValue={m.mrp} onBlur={function(e) { var v = parseFloat(e.target.value) || 0; if (v !== m.mrp) { logAudit("INV_EDIT", m.name + " MRP:" + m.mrp + "→" + v); saveInv(inv.map(function(x) { return x.id === m.id ? Object.assign({}, x, { mrp: v }) : x; })); } }} style={{ width: 65, border: "1px solid #eee", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "right", background: "#FAFAF7" }} /></td>}
           {isO && sh("ptr") && <td style={{ ...tds, color: "#B45309" }}>Rs.{f2(m.ptr)}</td>}
           {sh("stock") && <td style={tds}><span style={{ fontWeight: 700, color: m.stock < 3 ? "#DC2626" : m.stock < 5 ? "#D97706" : "#065F46" }}>{fStock(m.stock, m.packQty)}</span></td>}
           {sh("rack") && <td style={tds}>{m.rack || "-"}</td>}
@@ -2340,7 +2449,12 @@ function BillPage({ inv, saveInv, addBill, mob, showBill, user }) {
     var chosenDate = billDate ? new Date(billDate + "T" + new Date().toLocaleTimeString("en-US", { hour12: false, timeZone: "Asia/Kolkata" })) : new Date(getIST());
     const bill = { billNo: mkBill(), date: chosenDate.toISOString(), dateIST: chosenDate.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true }), patient: pt, patientContact: pc, patientAddress: pa, doctor: doc, doctorContact: dc, paymentMode: pm, createdBy: user ? (user.name || user.email) : "", items: items.map((i) => ({ ...i, amount: ca(i) })), totalMRP: tMRP, totalDiscount: tDisc, billDiscount: billDisc, netAmount: net, cgst: tGST / 2, sgst: tGST / 2 };
     const updInv = inv.map((m) => { const sold = items.filter((i) => i.mid === m.id); if (!sold.length) return m; const totalSold = sold.reduce((s, i) => i.loose ? s + (i.qty / (i.packQty || 10)) : s + i.qty, 0); var newMrp = m.mrp; var fullPack = sold.find(function(i) { return !i.loose && i.unitPrice !== m.mrp; }); if (fullPack) newMrp = fullPack.unitPrice; return { ...m, stock: Math.max(0, Math.round((m.stock - totalSold) * 10000) / 10000), mrp: newMrp }; });
-    saveInv(updInv); addBill(bill); showBill(bill); setPt(""); setPc(""); setPa(""); setDoc(""); setDc(""); setItems([]); setPm("Cash"); setBillDisc(0); setBillDiscPct(0); setBillDate(new Date().toISOString().slice(0, 10)); };
+    saveInv(updInv); addBill(bill); showBill(bill);
+    // Check for low stock warnings after this bill
+    var lowAfter = [];
+    updInv.forEach(function(m) { if (isLowStock(m)) { var sold = items.find(function(i) { return i.mid === m.id; }); if (sold) lowAfter.push(m.name + " → " + fStock(m.stock, m.packQty) + " left"); } });
+    if (lowAfter.length > 0) setTimeout(function() { alert("⚠️ Low Stock Warning:\n\n" + lowAfter.join("\n") + "\n\nConsider reordering these items."); }, 500);
+    setPt(""); setPc(""); setPa(""); setDoc(""); setDc(""); setItems([]); setPm("Cash"); setBillDisc(0); setBillDiscPct(0); setBillDate(new Date().toISOString().slice(0, 10)); };
 
   return (
     <div><h2 style={hds}>New Bill</h2>
@@ -2436,7 +2550,7 @@ function BillPage({ inv, saveInv, addBill, mob, showBill, user }) {
 function StockPage({ inv, saveInv, isO, mob }) {
   const [v, setV] = useState("all"); const [q, setQ] = useState("");
   const safeExp = (m) => { if (!m || !m.expiry) return 9999; try { return (new Date(m.expiry + "-01") - new Date()) / 864e5; } catch(e) { return 9999; } };
-  const low = inv.filter((m) => m.stock > 0 && m.stock < 3), out = inv.filter((m) => m.stock <= 0);
+  const low = inv.filter(function(m) { return isLowStock(m); }), out = inv.filter((m) => m.stock <= 0);
   const expS = inv.filter((m) => { const d = safeExp(m); return d < 90 && d > 0; });
   const expD = inv.filter((m) => safeExp(m) <= 0 && m.expiry);
   let list = v === "low" ? low : v === "out" ? out : v === "exp" ? expS : v === "expd" ? expD : inv;
@@ -2475,7 +2589,7 @@ function StockPage({ inv, saveInv, isO, mob }) {
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 }}>
               <span style={{ fontWeight: 800, fontSize: 16, color: sc }}>{fStock(m.stock, m.packQty)}</span>
-              <span style={{ fontSize: 12 }}>MRP: <input type="number" step="0.01" defaultValue={m.mrp} onBlur={function(e) { var v = parseFloat(e.target.value) || 0; if (v !== m.mrp) saveInv(inv.map(function(x) { return x.id === m.id ? Object.assign({}, x, { mrp: v }) : x; })); }} style={{ width: 60, border: "1px solid #eee", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "right", background: "#FAFAF7" }} /></span>
+              <span style={{ fontSize: 12 }}>MRP: <input type="number" step="0.01" defaultValue={m.mrp} onBlur={function(e) { var v = parseFloat(e.target.value) || 0; if (v !== m.mrp) { logAudit("INV_EDIT", m.name + " MRP:" + m.mrp + "→" + v); saveInv(inv.map(function(x) { return x.id === m.id ? Object.assign({}, x, { mrp: v }) : x; })); } }} style={{ width: 60, border: "1px solid #eee", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "right", background: "#FAFAF7" }} /></span>
             </div>
           </div>;
         })}
@@ -2499,7 +2613,7 @@ function StockPage({ inv, saveInv, isO, mob }) {
             {sh("name") && <td style={{ ...tds, fontWeight: 500, whiteSpace: "nowrap" }}>{m.name}</td>}
             {sh("batch") && <td style={{ ...tds, fontFamily: "monospace", fontSize: 11 }}>{m.batch}</td>}
             {sh("exp") && <td style={{ ...tds, color: isE ? "#DC2626" : isES ? "#B45309" : "inherit" }}>{m.expiry || "-"}</td>}
-            {sh("mrp") && <td style={{ ...tds, fontWeight: 600 }}><input type="number" step="0.01" defaultValue={m.mrp} onBlur={function(e) { var v = parseFloat(e.target.value) || 0; if (v !== m.mrp) saveInv(inv.map(function(x) { return x.id === m.id ? Object.assign({}, x, { mrp: v }) : x; })); }} style={{ width: 65, border: "1px solid #eee", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "right", background: "#FAFAF7" }} /></td>}
+            {sh("mrp") && <td style={{ ...tds, fontWeight: 600 }}><input type="number" step="0.01" defaultValue={m.mrp} onBlur={function(e) { var v = parseFloat(e.target.value) || 0; if (v !== m.mrp) { logAudit("INV_EDIT", m.name + " MRP:" + m.mrp + "→" + v); saveInv(inv.map(function(x) { return x.id === m.id ? Object.assign({}, x, { mrp: v }) : x; })); } }} style={{ width: 65, border: "1px solid #eee", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "right", background: "#FAFAF7" }} /></td>}
             {isO && sh("ptr") && <td style={{ ...tds, color: "#B45309" }}>Rs.{f2(m.ptr)}</td>}
             {sh("stock") && <td style={{ ...tds, fontWeight: 700, color: sc }}>{fStock(m.stock, m.packQty)}</td>}
             {sh("status") && <td style={tds}><Tag bg={sb} fg={sc}>{st}</Tag></td>}
@@ -2669,6 +2783,7 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
 
       saveInv(updInv);
     }
+    logAudit("BILL_EDIT", "Edited bill " + editBill.billNo + " Patient:" + (editBill.patient || "-") + " NewAmt:Rs." + f2(net));
     setEditBill(null);
   };
 
@@ -2676,6 +2791,7 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
     askConfirm("Delete this bill? Stock will be restored to inventory.", function() {
       var nextBills = bills.filter(function(x) { return x.billNo !== bill.billNo; });
       saveBills(nextBills);
+      logAudit("BILL_DELETE", "Deleted bill " + bill.billNo + " Patient:" + (bill.patient || "-") + " Amt:Rs." + f2(bill.netAmount));
       if (inv && saveInv) {
         var nextInv = inv.map(function(m) { return Object.assign({}, m); });
         (bill.items || []).forEach(function(it) {
@@ -2724,6 +2840,7 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
         return Object.assign({}, m, { stock: Math.round((m.stock + addBack) * 10000) / 10000 });
       });
       saveInv(updInv);
+      logAudit("BILL_RETURN", "Return on bill " + retBill.billNo + " Patient:" + (retBill.patient || "-") + " Items:" + returnItems.length + " Refund:Rs." + f2(refundAmt));
       setRetBill(null);
       setRetQtys({});
     });
@@ -3323,6 +3440,7 @@ function BackupPage({ inv, bills, purch, saveAll, askConfirm, saveInv, saveBills
         if (d.billReturns && d.billReturns.length) { var bro = {}; d.billReturns.forEach(function(r) { bro[r.id] = r; }); fbSet("billReturns", bro); } else { fbSet("billReturns", null); }
         if (d.racks) { fbSet("racks", d.racks); } else { fbSet("racks", null); }
         if (d.audits) { fbSet("audits", d.audits); } else { fbSet("audits", null); }
+        if (d.auditTrail) { fbSet("auditTrail", d.auditTrail); }
         alert("Restored!");
       });
     } catch(err) { alert("Invalid file"); } }; r.readAsText(file); e.target.value = ""; };
@@ -3386,7 +3504,7 @@ function BackupPage({ inv, bills, purch, saveAll, askConfirm, saveInv, saveBills
           <button onClick={function() {
             askConfirm("Migrate ALL root data to outlet '" + getCurrentOutlet() + "' (" + PH.shortName + ")? This copies data - original root data stays intact.", function() {
               var outletId = getCurrentOutlet();
-              var paths = ["inventory", "bills", "purchases", "returns", "billReturns", "racks", "audits", "customers", "ledger"];
+              var paths = ["inventory", "bills", "purchases", "returns", "billReturns", "racks", "audits", "customers", "ledger", "auditTrail"];
               var done = 0;
               paths.forEach(function(p) {
                 db.ref(p).once("value").then(function(snap) {
@@ -6614,6 +6732,78 @@ function StockPredictPage({ inv, bills, mob }) {
   );
 }
 
+// ══════════════════════════════════════════════
+// AUDIT TRAIL / CHANGE LOG PAGE
+// ══════════════════════════════════════════════
+function AuditTrailPage({ mob }) {
+  var [logs, setLogs] = useState([]);
+  var [filter, setFilter] = useState("all");
+  var [loading, setLoading] = useState(true);
+
+  useEffect(function() {
+    var unsub = fbListen("auditTrail", function(data) {
+      var entries = data ? Object.values(data) : [];
+      entries.sort(function(a, b) { return new Date(b.ts) - new Date(a.ts); });
+      setLogs(entries);
+      setLoading(false);
+    });
+    return unsub;
+  }, []);
+
+  var filtered = filter === "all" ? logs : logs.filter(function(l) { return l.action.indexOf(filter) >= 0; });
+
+  var actionColors = {
+    INV_ADD: { bg: "#D1FAE5", fg: "#065F46", label: "Added" },
+    INV_EDIT: { bg: "#DBEAFE", fg: "#1E40AF", label: "Edited" },
+    INV_DELETE: { bg: "#FEE2E2", fg: "#991B1B", label: "Deleted" },
+    STOCK_MERGE: { bg: "#FEF3C7", fg: "#92400E", label: "Merged" },
+    BILL_EDIT: { bg: "#EDE9FE", fg: "#5B21B6", label: "Bill Edit" },
+    BILL_DELETE: { bg: "#FEE2E2", fg: "#991B1B", label: "Bill Del" },
+    BILL_RETURN: { bg: "#FCE7F3", fg: "#9D174D", label: "Return" },
+    PURCH_ADD: { bg: "#D1FAE5", fg: "#065F46", label: "Purchase" },
+    PURCH_DELETE: { bg: "#FEE2E2", fg: "#991B1B", label: "Purch Del" },
+  };
+
+  return (
+    <div>
+      <h2 style={hds}>Change Log (Audit Trail)</h2>
+      <p style={{ fontSize: 12, color: "#888", marginBottom: 14 }}>Every inventory change, bill edit, and deletion is logged here with timestamp and user.</p>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+        {[["all","All"],["INV","Inventory"],["BILL","Bills"],["PURCH","Purchases"],["STOCK","Stock Merge"]].map(function(f) {
+          return <button key={f[0]} onClick={function() { setFilter(f[0]); }} style={{ padding: "6px 14px", borderRadius: 8, border: filter === f[0] ? "2px solid #0D6B5B" : "1px solid #ddd", background: filter === f[0] ? "#D1FAE5" : "#fff", cursor: "pointer", fontSize: 12, fontWeight: filter === f[0] ? 700 : 400 }}>{f[1]}</button>;
+        })}
+      </div>
+      {loading ? <div style={{ padding: 20, textAlign: "center", color: "#888" }}>Loading audit trail...</div> :
+       filtered.length === 0 ? <div style={{ padding: 20, textAlign: "center", color: "#888" }}>No audit entries yet. Changes will appear here automatically.</div> :
+       <div style={{ ...cds, padding: 0, overflow: "hidden" }}><div style={{ overflowX: "auto" }}>
+         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 400 }}>
+           <thead><tr><th style={ths}>When</th><th style={ths}>Type</th><th style={ths}>Details</th><th style={ths}>User</th></tr></thead>
+           <tbody>
+             {filtered.slice(0, 200).map(function(l) {
+               var ac = actionColors[l.action] || { bg: "#F3F4F6", fg: "#374151", label: l.action };
+               return <tr key={l.id}>
+                 <td style={{ ...tds, whiteSpace: "nowrap", fontSize: 11 }}>{l.tsDisplay || fDT(l.ts)}</td>
+                 <td style={tds}><span style={{ background: ac.bg, color: ac.fg, padding: "2px 10px", borderRadius: 14, fontSize: 10.5, fontWeight: 600, whiteSpace: "nowrap" }}>{ac.label}</span></td>
+                 <td style={{ ...tds, fontSize: 12, maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis" }}>{l.details}</td>
+                 <td style={{ ...tds, fontSize: 11, color: "#888" }}>{l.user}</td>
+               </tr>;
+             })}
+           </tbody>
+         </table>
+       </div></div>}
+       {filtered.length > 200 && <div style={{ color: "#888", fontSize: 12, padding: 8 }}>Showing 200 of {filtered.length} entries</div>}
+       {logs.length > 0 && <div style={{ marginTop: 16, textAlign: "right" }}>
+         <button onClick={function() {
+           var csv = "Timestamp,Action,Details,User\n";
+           logs.forEach(function(l) { csv += "\"" + (l.tsDisplay || l.ts) + "\",\"" + l.action + "\",\"" + (l.details || "").replace(/"/g,"'") + "\",\"" + l.user + "\"\n"; });
+           var blob = new Blob([csv], { type: "text/csv" }); var url = URL.createObjectURL(blob);
+           var a = document.createElement("a"); a.href = url; a.download = "AtoZ_AuditTrail_" + new Date().toISOString().slice(0,10) + ".csv"; a.click(); URL.revokeObjectURL(url);
+         }} style={{ padding: "8px 20px", background: "#0D6B5B", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 600, fontSize: 12 }}>📥 Export Audit Log CSV</button>
+       </div>}
+    </div>
+  );
+}
+
 // MAIN APP
 // ══════════════════════════════════════════════
 function App() {
@@ -6629,6 +6819,7 @@ function App() {
   const confirmCb = useRef(null);
   const [viewBill, setViewBill] = useState(null);
   const [billFromHist, setBillFromHist] = useState(false);
+  const [loginAlert, setLoginAlert] = useState(null);
   const [currentOutletId, setCurrentOutletId] = useState(getCurrentOutlet());
   const mob = useM();
   const isO = user ? user.role === "owner" : false;
@@ -6674,7 +6865,24 @@ function App() {
   useEffect(() => {
     if (!user) return;
     const unsubs = [
-      fbListen("inventory", (data) => { setInv(data ? Object.values(data) : []); }),
+      fbListen("inventory", (data) => {
+        var items = data ? Object.values(data) : [];
+        setInv(items);
+        // Login alert — check on first load only
+        if (!loginAlert && items.length > 0) {
+          var expired = []; var expSoon = []; var lowItems = [];
+          items.forEach(function(m) {
+            if ((m.stock || 0) <= 0) return;
+            var days = getDaysToExpiry(m);
+            if (days <= 0 && m.expiry) expired.push(m);
+            else if (days > 0 && days <= 30) expSoon.push(m);
+            if (isLowStock(m)) lowItems.push(m);
+          });
+          if (expired.length > 0 || expSoon.length > 0 || lowItems.length > 0) {
+            setLoginAlert({ expired: expired, expSoon: expSoon, lowItems: lowItems });
+          }
+        }
+      }),
       fbListen("bills", (data) => { setBills(data ? Object.values(data) : []); }),
       fbListen("purchases", (data) => { setPurch(data ? Object.values(data) : []); }),
       fbListen("sessions", (data) => { setSessions(data ? Object.values(data) : []); }),
@@ -6724,7 +6932,8 @@ function App() {
 
   const addBill = useCallback((bill) => {
     setBills((p) => { const next = [...p, bill]; saveBills(next); return next; });
-  }, [saveBills]);
+    logAudit("BILL_ADD", "Bill " + (bill.billNo || "") + " Patient:" + (bill.patient || "-") + " Amt:Rs." + f2(bill.netAmount) + " Items:" + (bill.items || []).length, user);
+  }, [saveBills, user]);
 
   const addPurchase = useCallback((rev) => {
     const pur = { id: mkId(), invoiceNo: rev.invoiceNo || "", supplier: rev.supplier || "", date: rev.date || "", entryDate: new Date().toISOString(), items: rev.items, sourceType: rev.srcType || "manual", sourceFile: rev.srcFile || "", netAmount: rev.items.reduce((s, i) => s + (i.amount || purchCalcAmt(i)), 0) };
@@ -6746,7 +6955,8 @@ function App() {
       saveInv(next);
       return next;
     });
-  }, [saveInv, savePurch]);
+    logAudit("PURCH_ADD", "Purchase from " + (rev.supplier || "unknown") + " Inv:" + (rev.invoiceNo || "-") + " Items:" + rev.items.length, user);
+  }, [saveInv, savePurch, user]);
 
   const deletePurchase = useCallback((id) => {
     // Find the purchase to get its items before deleting
@@ -6776,16 +6986,47 @@ function App() {
         return next;
       });
     }
-  }, [purch, saveInv, savePurch]);
+    if (delPurch) logAudit("PURCH_DELETE", "Deleted purchase from " + (delPurch.supplier || "unknown") + " Inv:" + (delPurch.invoiceNo || "-") + " Items:" + (delPurch.items || []).length, user);
+  }, [purch, saveInv, savePurch, user]);
 
   if (loading) return (<div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: "#EFECE5", fontFamily: "'Playfair Display',serif", fontSize: 18, color: "#0C2E24" }}>Loading...</div>);
   if (!user) return (<Login onLogin={login} />);
 
-  const counts = { purch: purch.length, returns: 0, hist: bills.length, inv: inv.length, stock: inv.filter((m) => m.stock > 0 && m.stock < 3).length, rack: inv.filter((m) => !m.rack).length };
+  const counts = { purch: purch.length, returns: 0, hist: bills.length, inv: inv.length, stock: inv.filter(function(m) { return isLowStock(m); }).length, rack: inv.filter((m) => !m.rack).length };
 
   return (
     <div style={{ display: "flex", height: "100vh", fontFamily: "'DM Sans',sans-serif", background: "#EFECE5", overflow: "hidden" }}>
       <ConfirmModal msg={confirmMsg} onYes={onConfirmYes} onNo={onConfirmNo} />
+      {loginAlert && <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", zIndex: 10000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+        <div style={{ background: "#fff", borderRadius: 16, maxWidth: 480, width: "100%", maxHeight: "80vh", overflow: "auto", boxShadow: "0 8px 32px rgba(0,0,0,.2)" }}>
+          <div style={{ padding: "20px 24px", borderBottom: "1px solid #eee", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ fontWeight: 700, fontSize: 16, color: "#0C2E24" }}>⚠️ Attention Required</div>
+            <button onClick={function() { setLoginAlert(null); }} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#888" }}>✕</button>
+          </div>
+          <div style={{ padding: "16px 24px" }}>
+            {loginAlert.expired.length > 0 && <div style={{ marginBottom: 16, padding: "12px 16px", background: "#FEF2F2", borderRadius: 10, borderLeft: "4px solid #DC2626" }}>
+              <div style={{ fontWeight: 700, color: "#DC2626", fontSize: 14, marginBottom: 6 }}>❌ {loginAlert.expired.length} EXPIRED Medicine(s)</div>
+              {loginAlert.expired.slice(0, 5).map(function(m, i) { return <div key={i} style={{ fontSize: 12, color: "#991B1B", padding: "2px 0" }}>{m.name} — Batch: {m.batch} — Exp: {m.expiry} — Stock: {fStock(m.stock, m.packQty)}</div>; })}
+              {loginAlert.expired.length > 5 && <div style={{ fontSize: 11, color: "#DC2626", marginTop: 4 }}>+{loginAlert.expired.length - 5} more...</div>}
+            </div>}
+            {loginAlert.expSoon.length > 0 && <div style={{ marginBottom: 16, padding: "12px 16px", background: "#FFFBEB", borderRadius: 10, borderLeft: "4px solid #D97706" }}>
+              <div style={{ fontWeight: 700, color: "#D97706", fontSize: 14, marginBottom: 6 }}>⏰ {loginAlert.expSoon.length} Expiring Within 30 Days</div>
+              {loginAlert.expSoon.slice(0, 5).map(function(m, i) { var d = getDaysToExpiry(m); return <div key={i} style={{ fontSize: 12, color: "#92400E", padding: "2px 0" }}>{m.name} — {d} day(s) left — Stock: {fStock(m.stock, m.packQty)}</div>; })}
+              {loginAlert.expSoon.length > 5 && <div style={{ fontSize: 11, color: "#D97706", marginTop: 4 }}>+{loginAlert.expSoon.length - 5} more...</div>}
+            </div>}
+            {loginAlert.lowItems.length > 0 && <div style={{ marginBottom: 16, padding: "12px 16px", background: "#FEF3C7", borderRadius: 10, borderLeft: "4px solid #B45309" }}>
+              <div style={{ fontWeight: 700, color: "#B45309", fontSize: 14, marginBottom: 6 }}>⚠️ {loginAlert.lowItems.length} Low Stock Item(s)</div>
+              {loginAlert.lowItems.slice(0, 5).map(function(m, i) { return <div key={i} style={{ fontSize: 12, color: "#78350F", padding: "2px 0" }}>{m.name} — Stock: {fStock(m.stock, m.packQty)} (threshold: {m.lowStockThreshold || DEFAULT_LOW_STOCK})</div>; })}
+              {loginAlert.lowItems.length > 5 && <div style={{ fontSize: 11, color: "#B45309", marginTop: 4 }}>+{loginAlert.lowItems.length - 5} more...</div>}
+            </div>}
+          </div>
+          <div style={{ padding: "12px 24px 20px", display: "flex", gap: 10 }}>
+            <button onClick={function() { setLoginAlert(null); setPage("expiry"); }} style={{ flex: 1, padding: "10px 16px", background: "#DC2626", color: "#fff", border: "none", borderRadius: 8, fontWeight: 600, cursor: "pointer", fontSize: 13 }}>View Expiry Page</button>
+            <button onClick={function() { setLoginAlert(null); setPage("stock"); }} style={{ flex: 1, padding: "10px 16px", background: "#D97706", color: "#fff", border: "none", borderRadius: 8, fontWeight: 600, cursor: "pointer", fontSize: 13 }}>View Stock</button>
+            <button onClick={function() { setLoginAlert(null); }} style={{ flex: 1, padding: "10px 16px", background: "#eee", color: "#333", border: "none", borderRadius: 8, fontWeight: 600, cursor: "pointer", fontSize: 13 }}>Dismiss</button>
+          </div>
+        </div>
+      </div>}
       <BillView bill={viewBill} onClose={() => setViewBill(null)} fromHistory={billFromHist} />
       <Sidebar page={page} setPage={setPage} user={user} onLogout={logout} counts={counts} mob={mob} sideOpen={sideOpen} setSideOpen={setSideOpen} currentOutletId={currentOutletId} switchOutlet={switchOutlet} />
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -6821,6 +7062,7 @@ function App() {
           {page === "compare" && <ComparePage inv={inv} mob={mob} />}
           {page === "users" && isO && <UsersPage sessions={sessions} mob={mob} user={user} />}
           {page === "backup" && isO && <BackupPage inv={inv} bills={bills} purch={purch} saveAll={saveAll} askConfirm={askConfirm} saveInv={saveInv} saveBills={saveBills} />}
+          {page === "changelog" && isO && <AuditTrailPage mob={mob} />}
         </div></div></div>
   );
 }
