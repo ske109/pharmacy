@@ -6281,6 +6281,7 @@ function ExpiryPage({ inv, mob, saveInv }) {
   const [editExpiry, setEditExpiry] = useState("");
   const [showNoExpiry, setShowNoExpiry] = useState(false);
   const [noExpEdit, setNoExpEdit] = useState({});
+  const [noExpPackQty, setNoExpPackQty] = useState({});
 
   var today = new Date();
   var getExpiryDate = function(m) {
@@ -6358,11 +6359,24 @@ function ExpiryPage({ inv, mob, saveInv }) {
 
   var updateNoExpiryItem = function(medId) {
     var val = noExpEdit[medId];
+    var pqVal = noExpPackQty[medId];
     if (!val || !saveInv) return;
-    var updated = inv.map(function(m) { return m.id === medId ? Object.assign({}, m, { expiry: val }) : m; });
+    var changes = { expiry: val };
+    if (pqVal !== undefined && pqVal !== "" && Number(pqVal) > 0) changes.packQty = Number(pqVal);
+    var updated = inv.map(function(m) { return m.id === medId ? Object.assign({}, m, changes) : m; });
     saveInv(updated);
-    logAudit("INV_EDIT", inv.find(function(m){return m.id===medId;})?.name + " Expiry set to " + val);
+    var med = inv.find(function(m){return m.id===medId;});
+    logAudit("INV_EDIT", (med ? med.name : medId) + " Expiry set to " + val + (changes.packQty ? " PackQty→" + changes.packQty : ""));
     setNoExpEdit(function(prev) { var n = Object.assign({}, prev); delete n[medId]; return n; });
+    setNoExpPackQty(function(prev) { var n = Object.assign({}, prev); delete n[medId]; return n; });
+  };
+
+  var updateNoExpiryPackQty = function(medId, pqVal) {
+    if (!pqVal || Number(pqVal) <= 0 || !saveInv) return;
+    var updated = inv.map(function(m) { return m.id === medId ? Object.assign({}, m, { packQty: Number(pqVal) }) : m; });
+    saveInv(updated);
+    var med = inv.find(function(m){return m.id===medId;});
+    logAudit("INV_EDIT", (med ? med.name : medId) + " PackQty→" + pqVal);
   };
 
   var printReport = function() {
@@ -6401,14 +6415,22 @@ function ExpiryPage({ inv, mob, saveInv }) {
         </div>
         {showNoExpiry && <div style={{ ...cds, marginTop: 6, padding: 0, overflow: "hidden" }}>
           <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
-            <th style={ths}>Medicine</th><th style={ths}>Batch</th><th style={ths}>Stock</th><th style={ths}>Distributor</th><th style={ths}>Set Expiry</th><th style={ths}></th>
+            <th style={ths}>Medicine</th><th style={ths}>Batch</th><th style={ths}>Stock</th><th style={ths}>Rack</th><th style={ths}>Distributor</th><th style={ths}>Pack Qty</th><th style={ths}>Set Expiry</th><th style={ths}></th>
           </tr></thead><tbody>
             {noExpiryItems.map(function(m) {
               return <tr key={m.id}>
                 <td style={{ ...tds, fontWeight: 600 }}>{m.name}</td>
                 <td style={{ ...tds, fontFamily: "monospace", fontSize: 11 }}>{m.batch || "-"}</td>
                 <td style={tds}>{fStock(m.stock, m.packQty)}</td>
+                <td style={{ ...tds, fontSize: 11 }}>{m.rack || <span style={{ color: "#ccc" }}>—</span>}</td>
                 <td style={{ ...tds, fontSize: 11 }}>{m.distributor || m.purchaseDistributor || "-"}</td>
+                <td style={{ padding: "4px 6px" }}>
+                  <input type="number" min="1" placeholder={m.packQty || "e.g. 10"}
+                    value={noExpPackQty[m.id] !== undefined ? noExpPackQty[m.id] : (m.packQty || "")}
+                    onChange={function(e) { var v = e.target.value; setNoExpPackQty(function(prev) { var o = Object.assign({}, prev); o[m.id] = v; return o; }); }}
+                    onBlur={function(e) { var v = e.target.value; if (v && Number(v) > 0 && Number(v) !== (m.packQty || 0)) { updateNoExpiryPackQty(m.id, v); } }}
+                    style={{ border: "1px solid #6366F1", borderRadius: 6, padding: "4px 8px", fontSize: 12, background: "#EEF2FF", width: 70 }} />
+                </td>
                 <td style={{ padding: "4px 6px" }}><input type="month" value={noExpEdit[m.id] || ""} onChange={function(e) { setNoExpEdit(function(prev) { return Object.assign({}, prev, (function(){ var o={}; o[m.id]=e.target.value; return o; })()); }); }} style={{ border: "1px solid #D97706", borderRadius: 6, padding: "4px 8px", fontSize: 12, background: "#FFFBEB" }} /></td>
                 <td style={{ padding: "4px 6px" }}>{noExpEdit[m.id] && <button onClick={function() { updateNoExpiryItem(m.id); }} style={{ padding: "4px 12px", background: "#059669", color: "#fff", border: "none", borderRadius: 6, fontSize: 11, cursor: "pointer", fontWeight: 600 }}>Save</button>}</td>
               </tr>;
