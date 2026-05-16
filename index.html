@@ -7281,16 +7281,30 @@ function App() {
     // Set PH from stored outlet
     PH = OUTLETS[getCurrentOutlet()] || OUTLETS.outlet2;
 
-    // OTP-based auth: no Firebase Auth session, user stored in component state.
-    // On page reload, user must log in again (security by design for pharmacy).
-    // Check if we have a recent session in localStorage (persists across tabs/restarts).
+    // OTP-based auth: check localStorage session, but always refresh profile from Firebase
+    // to pick up any changes to pages/outlets made by owner after last login.
     const saved = localStorage.getItem("atoz_session");
     if (saved) {
       try {
         const u = JSON.parse(saved);
-        if (u && u.email && u.loginTs && (Date.now() - u.loginTs) < 24 * 60 * 60 * 1000) {
-          // Session still valid (8 hours)
+        // v2 sessions have a version field — clear old sessions that may have stale pages/outlets
+        if (u && u.email && u.loginTs && (Date.now() - u.loginTs) < 24 * 60 * 60 * 1000 && u.sessionV === 2) {
+          // Set user immediately from cache so app loads fast
           setUser(u);
+          // Then refresh profile from Firebase in background to get latest pages/outlets
+          if (u.role !== "owner") {
+            loadUserProfile(u.email).then(function(freshProfile) {
+              if (freshProfile && !freshProfile.disabled) {
+                var refreshed = Object.assign({}, u, {
+                  name: freshProfile.name || u.name,
+                  pages: freshProfile.pages && freshProfile.pages.length > 0 ? freshProfile.pages : u.pages,
+                  outlets: freshProfile.outlets && freshProfile.outlets.length > 0 ? freshProfile.outlets : u.outlets,
+                });
+                localStorage.setItem("atoz_session", JSON.stringify(refreshed));
+                setUser(refreshed);
+              }
+            }).catch(function(e) { console.warn("[session refresh failed]", e.message); });
+          }
         } else {
           localStorage.removeItem("atoz_session");
         }
@@ -7363,7 +7377,7 @@ function App() {
   const showBill = useCallback((b, hist) => { setViewBill(b); setBillFromHist(!!hist); }, []);
 
   const login = (u) => {
-    const withTs = { ...u, loginTs: Date.now() };
+    const withTs = { ...u, loginTs: Date.now(), sessionV: 2 };
     localStorage.setItem("atoz_session", JSON.stringify(withTs));
     setUser(withTs);
   };
