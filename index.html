@@ -6273,30 +6273,31 @@ function CustomersPage({ bills, mob, showBill }) {
 // ══════════════════════════════════════════════
 // EXPIRY MANAGEMENT PAGE
 // ══════════════════════════════════════════════
-function ExpiryPage({ inv, mob }) {
+function ExpiryPage({ inv, mob, saveInv }) {
   const [filter, setFilter] = useState("90");
   const [q, setQ] = useState("");
   const [sortBy, setSortBy] = useState("expiry");
+  const [expanded, setExpanded] = useState(null);
+  const [editExpiry, setEditExpiry] = useState("");
+  const [showNoExpiry, setShowNoExpiry] = useState(false);
+  const [noExpEdit, setNoExpEdit] = useState({});
 
   var today = new Date();
   var getExpiryDate = function(m) {
     if (!m.expiry) return null;
     var parts = String(m.expiry).split(/[-\/]/);
     if (parts.length === 2) {
-      // YYYY-MM or MM-YY
       var a = parseInt(parts[0]), b = parseInt(parts[1]);
-      if (parts[0].length === 4) return new Date(a, b - 1, 28); // 2028-03
-      if (parts[1].length === 4) return new Date(b, a - 1, 28); // 03-2028
-      // MM/YY
+      if (parts[0].length === 4) return new Date(a, b - 1, 28);
+      if (parts[1].length === 4) return new Date(b, a - 1, 28);
       return new Date(2000 + b, a - 1, 28);
     }
     if (parts.length === 3) {
-      // Find which part is the year (4 digits or > 31)
       var p = parts.map(function(x) { return parseInt(x); });
       var yr, mo;
-      if (parts[0].length === 4 || p[0] > 31) { yr = p[0]; mo = p[1]; } // YYYY-MM-DD
-      else if (parts[2].length === 4 || p[2] > 31) { yr = p[2]; mo = p[1]; } // DD-MM-YYYY or MM-DD-YYYY
-      else { yr = 2000 + p[2]; mo = p[1]; } // DD-MM-YY
+      if (parts[0].length === 4 || p[0] > 31) { yr = p[0]; mo = p[1]; }
+      else if (parts[2].length === 4 || p[2] > 31) { yr = p[2]; mo = p[1]; }
+      else { yr = 2000 + p[2]; mo = p[1]; }
       if (yr < 100) yr = 2000 + yr;
       return new Date(yr, (mo || 1) - 1, 28);
     }
@@ -6339,13 +6340,30 @@ function ExpiryPage({ inv, mob }) {
   else if (sortBy === "stock") filtered.sort(function(a, b) { return (b.stock || 0) - (a.stock || 0); });
   else if (sortBy === "value") filtered.sort(function(a, b) { return (b.mrp * (b.stock || 0)) - (a.mrp * (a.stock || 0)); });
 
-  // Summary counts
   var expiredCount = inv.filter(function(m) { return m.expiry && (m.stock || 0) > 0 && getDaysLeft(m) <= 0; }).length;
   var in30 = inv.filter(function(m) { return m.expiry && (m.stock || 0) > 0 && getDaysLeft(m) > 0 && getDaysLeft(m) <= 30; }).length;
   var in60 = inv.filter(function(m) { return m.expiry && (m.stock || 0) > 0 && getDaysLeft(m) > 30 && getDaysLeft(m) <= 60; }).length;
   var in90 = inv.filter(function(m) { return m.expiry && (m.stock || 0) > 0 && getDaysLeft(m) > 60 && getDaysLeft(m) <= 90; }).length;
   var totalAtRisk = filtered.reduce(function(s, m) { return s + (m.mrp * (m.stock || 0)); }, 0);
-  var noExpiry = inv.filter(function(m) { return (m.stock || 0) > 0 && !m.expiry; }).length;
+  var noExpiryItems = inv.filter(function(m) { return (m.stock || 0) > 0 && !m.expiry; });
+
+  var updateExpiry = function(medId, newExpiry) {
+    if (!saveInv) return;
+    var updated = inv.map(function(m) { return m.id === medId ? Object.assign({}, m, { expiry: newExpiry }) : m; });
+    saveInv(updated);
+    logAudit("INV_EDIT", inv.find(function(m){return m.id===medId;})?.name + " Expiry→" + newExpiry);
+    setExpanded(null);
+    setEditExpiry("");
+  };
+
+  var updateNoExpiryItem = function(medId) {
+    var val = noExpEdit[medId];
+    if (!val || !saveInv) return;
+    var updated = inv.map(function(m) { return m.id === medId ? Object.assign({}, m, { expiry: val }) : m; });
+    saveInv(updated);
+    logAudit("INV_EDIT", inv.find(function(m){return m.id===medId;})?.name + " Expiry set to " + val);
+    setNoExpEdit(function(prev) { var n = Object.assign({}, prev); delete n[medId]; return n; });
+  };
 
   var printReport = function() {
     var html = "<html><head><title>Expiry Report</title><style>body{font-family:sans-serif;font-size:11px;padding:20px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #999;padding:4px 6px;font-size:10px}th{background:#eee}.red{color:#DC2626;font-weight:700}.orange{color:#EA580C}.yellow{color:#D97706}</style></head><body>";
@@ -6376,7 +6394,28 @@ function ExpiryPage({ inv, mob }) {
           <div style={{ fontSize: 24, fontWeight: 800, color: "#059669" }}>{inv.filter(function(m){return m.expiry && (m.stock||0)>0;}).length}</div><div style={{ fontSize: 10, color: "#888" }}>All with expiry</div></div>
       </div>
 
-      {noExpiry > 0 && <div style={{ padding: "6px 12px", background: "#FEF3C7", borderRadius: 8, fontSize: 11, color: "#92400E", marginBottom: 12 }}>{noExpiry} medicines in stock have no expiry date set</div>}
+      {noExpiryItems.length > 0 && <div style={{ marginBottom: 14 }}>
+        <div onClick={function() { setShowNoExpiry(!showNoExpiry); }} style={{ padding: "8px 14px", background: "#FEF3C7", borderRadius: 8, fontSize: 12, color: "#92400E", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span>{noExpiryItems.length} medicine(s) in stock have no expiry date set</span>
+          <span style={{ fontSize: 16, fontWeight: 700 }}>{showNoExpiry ? "▲" : "▼"}</span>
+        </div>
+        {showNoExpiry && <div style={{ ...cds, marginTop: 6, padding: 0, overflow: "hidden" }}>
+          <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
+            <th style={ths}>Medicine</th><th style={ths}>Batch</th><th style={ths}>Stock</th><th style={ths}>Distributor</th><th style={ths}>Set Expiry</th><th style={ths}></th>
+          </tr></thead><tbody>
+            {noExpiryItems.map(function(m) {
+              return <tr key={m.id}>
+                <td style={{ ...tds, fontWeight: 600 }}>{m.name}</td>
+                <td style={{ ...tds, fontFamily: "monospace", fontSize: 11 }}>{m.batch || "-"}</td>
+                <td style={tds}>{fStock(m.stock, m.packQty)}</td>
+                <td style={{ ...tds, fontSize: 11 }}>{m.distributor || m.purchaseDistributor || "-"}</td>
+                <td style={{ padding: "4px 6px" }}><input type="month" value={noExpEdit[m.id] || ""} onChange={function(e) { setNoExpEdit(function(prev) { return Object.assign({}, prev, (function(){ var o={}; o[m.id]=e.target.value; return o; })()); }); }} style={{ border: "1px solid #D97706", borderRadius: 6, padding: "4px 8px", fontSize: 12, background: "#FFFBEB" }} /></td>
+                <td style={{ padding: "4px 6px" }}>{noExpEdit[m.id] && <button onClick={function() { updateNoExpiryItem(m.id); }} style={{ padding: "4px 12px", background: "#059669", color: "#fff", border: "none", borderRadius: 6, fontSize: 11, cursor: "pointer", fontWeight: 600 }}>Save</button>}</td>
+              </tr>;
+            })}
+          </tbody></table></div>
+        </div>}
+      </div>}
 
       <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
         <input value={q} onChange={function(e) { setQ(e.target.value); }} placeholder="Search medicine, batch..." style={{ ...inps, flex: 1, minWidth: 180 }} />
@@ -6397,23 +6436,49 @@ function ExpiryPage({ inv, mob }) {
         <div style={{ fontSize: 40, marginBottom: 12, opacity: 0.3 }}>✅</div>
         <div style={{ fontSize: 14 }}>No medicines expiring in this period</div>
       </div> :
-      <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
-        {["#","Medicine","Batch","Expiry","Days Left","Stock","MRP","Value","Status"].map(function(h) { return <th key={h} style={ths}>{h}</th>; })}</tr></thead><tbody>
-        {filtered.map(function(m, i) {
-          var days = getDaysLeft(m);
-          var st = getStatus(days);
-          return <tr key={m.id} style={{ background: st.bg }}>
-            <td style={{ ...tds, color: "#888" }}>{i + 1}</td>
-            <td style={{ ...tds, fontWeight: 600 }}>{m.name}</td>
-            <td style={{ ...tds, fontFamily: "monospace", fontSize: 11 }}>{m.batch || "-"}</td>
-            <td style={tds}>{m.expiry || "-"}</td>
-            <td style={{ ...tds, fontWeight: 800, color: st.color, fontSize: 14 }}>{days <= 0 ? "EXPIRED" : days + "d"}</td>
-            <td style={{ ...tds, fontWeight: 600 }}>{fStock(m.stock, m.packQty)}</td>
-            <td style={tds}>Rs.{f2(m.mrp)}</td>
-            <td style={{ ...tds, fontWeight: 600 }}>Rs.{f2(m.mrp * (m.stock || 0))}</td>
-            <td style={tds}><span style={{ padding: "2px 8px", borderRadius: 10, fontSize: 10, fontWeight: 600, background: st.bg, color: st.color, border: "1px solid " + st.color }}>{st.label}</span></td>
-          </tr>;
-        })}</tbody></table></div>}
+      <div>{filtered.map(function(m, i) {
+        var days = getDaysLeft(m);
+        var st = getStatus(days);
+        var isOpen = expanded === m.id;
+        return <div key={m.id} style={{ marginBottom: 6 }}>
+          <div onClick={function() { setExpanded(isOpen ? null : m.id); setEditExpiry(m.expiry || ""); }} style={{ ...cds, padding: "10px 14px", cursor: "pointer", borderLeft: "4px solid " + st.color, background: st.bg, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 12, color: "#888", minWidth: 24 }}>{i + 1}.</span>
+                <span style={{ fontWeight: 700, fontSize: 13 }}>{m.name}</span>
+                <span style={{ fontFamily: "monospace", fontSize: 10, color: "#888" }}>{m.batch}</span>
+                <span style={{ padding: "2px 8px", borderRadius: 10, fontSize: 10, fontWeight: 600, background: st.bg, color: st.color, border: "1px solid " + st.color }}>{st.label}</span>
+              </div>
+              <div style={{ fontSize: 11, color: "#888", marginTop: 3, display: "flex", gap: 12, flexWrap: "wrap" }}>
+                <span>Exp: <b style={{ color: st.color }}>{m.expiry}</b></span>
+                <span>Days: <b style={{ color: st.color }}>{days <= 0 ? "EXPIRED" : days + "d"}</b></span>
+                <span>Stock: <b>{fStock(m.stock, m.packQty)}</b></span>
+                <span>Value: <b style={{ color: "#DC2626" }}>Rs.{f2(m.mrp * (m.stock || 0))}</b></span>
+              </div>
+            </div>
+            <span style={{ fontSize: 16, color: "#888", marginLeft: 8 }}>{isOpen ? "▲" : "▼"}</span>
+          </div>
+          {isOpen && <div style={{ background: "#fff", border: "1px solid #e8e4dd", borderTop: "none", borderRadius: "0 0 10px 10px", padding: 14 }}>
+            <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(4, 1fr)", gap: 10, marginBottom: 12 }}>
+              <div><div style={{ fontSize: 10, color: "#888", fontWeight: 600 }}>Manufacturer</div><div style={{ fontSize: 12 }}>{m.manufacturer || "-"}</div></div>
+              <div><div style={{ fontSize: 10, color: "#888", fontWeight: 600 }}>Distributor</div><div style={{ fontSize: 12 }}>{m.distributor || m.purchaseDistributor || "-"}</div></div>
+              <div><div style={{ fontSize: 10, color: "#888", fontWeight: 600 }}>MRP</div><div style={{ fontSize: 12, fontWeight: 600 }}>Rs.{f2(m.mrp)}</div></div>
+              <div><div style={{ fontSize: 10, color: "#888", fontWeight: 600 }}>PTR</div><div style={{ fontSize: 12 }}>Rs.{f2(m.ptr)}</div></div>
+              <div><div style={{ fontSize: 10, color: "#888", fontWeight: 600 }}>Pack</div><div style={{ fontSize: 12 }}>{m.pack || "-"} ({m.packQty || 0})</div></div>
+              <div><div style={{ fontSize: 10, color: "#888", fontWeight: 600 }}>Rack</div><div style={{ fontSize: 12 }}>{m.rack || "-"}</div></div>
+              <div><div style={{ fontSize: 10, color: "#888", fontWeight: 600 }}>GST</div><div style={{ fontSize: 12 }}>{m.gstRate || 0}%</div></div>
+              <div><div style={{ fontSize: 10, color: "#888", fontWeight: 600 }}>UID</div><div style={{ fontSize: 12, fontFamily: "monospace", color: "#7C3AED" }}>{m.uid || "-"}</div></div>
+            </div>
+            <div style={{ borderTop: "1px solid #eee", paddingTop: 12, display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
+              <div><label style={{ fontSize: 10, fontWeight: 700, color: "#DC2626" }}>Edit Expiry Date</label>
+                <input type="month" value={editExpiry} onChange={function(e) { setEditExpiry(e.target.value); }} style={{ display: "block", border: "2px solid #DC2626", borderRadius: 8, padding: "6px 10px", fontSize: 13, marginTop: 4, background: "#FEF2F2" }} />
+              </div>
+              <button onClick={function() { if (editExpiry && editExpiry !== m.expiry) updateExpiry(m.id, editExpiry); else alert("Enter a new expiry date"); }} style={{ padding: "8px 20px", background: "#059669", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, cursor: "pointer", fontSize: 13 }}>Update Expiry</button>
+              {editExpiry && editExpiry !== m.expiry && <span style={{ fontSize: 11, color: "#059669" }}>Will change from {m.expiry} → {editExpiry}</span>}
+            </div>
+          </div>}
+        </div>;
+      })}</div>}
     </div>
   );
 }
@@ -7371,7 +7436,7 @@ function App() {
           {page === "bill" && <BillPage inv={inv} saveInv={saveInv} addBill={addBill} mob={mob} showBill={showBill} user={user} />}
           {page === "profit" && isO && <ProfitPage bills={bills} inv={inv} mob={mob} purch={purch} saveBills={saveBills} showBill={showBill} setPage={setPage} />}
           {page === "stock" && <StockPage inv={inv} saveInv={saveInv} isO={isO} mob={mob} />}
-          {page === "expiry" && <ExpiryPage inv={inv} mob={mob} />}
+          {page === "expiry" && <ExpiryPage inv={inv} mob={mob} saveInv={saveInv} />}
           {page === "gst" && isO && <GSTPage bills={bills} inv={inv} purch={purch} mob={mob} />}
           {page === "ledger" && isO && <SupplierLedgerPage purch={purch} mob={mob} />}
           {page === "predict" && isO && <StockPredictPage inv={inv} bills={bills} mob={mob} />}
