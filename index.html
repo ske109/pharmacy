@@ -1585,12 +1585,8 @@ function Login({ onLogin }) {
 
     try {
       const isOwner = OWNER_EMAILS.includes(em);
-      let profile = null;
-      if (!isOwner) {
-        profile = await withTimeout(loadUserProfile(em), 10000, "Account check");
-        if (!profile) { setErr("This email is not registered. Contact owner to add you."); setLoading(false); setInfo(""); return; }
-        if (profile.disabled) { setErr("Your account has been disabled. Contact owner."); setLoading(false); setInfo(""); return; }
-      }
+      // Skip pre-check Firebase call entirely — registration is verified AFTER OTP succeeds.
+      // This avoids Firebase WebSocket hanging on Android devices.
       const code = genOTP();
       console.log("[OTP DEBUG] Code for " + em + ": " + code);
       setInfo("Saving OTP...");
@@ -1600,7 +1596,7 @@ function Login({ onLogin }) {
       var emailErr = "";
       var fallbackOk = false;
       try {
-        await withTimeout(sendOTPEmail(em, code, isOwner ? "Owner" : (profile && profile.name) || em), 20000, "Send email");
+        await withTimeout(sendOTPEmail(em, code, isOwner ? "Owner" : em), 20000, "Send email");
         emailOk = true;
       } catch(mailErr) {
         emailErr = mailErr.message || "Unknown error";
@@ -1640,13 +1636,20 @@ function Login({ onLogin }) {
     try {
       const result = await verifyOTP(email.trim().toLowerCase(), otp.trim());
       if (!result.ok) { setErr(result.err); setLoading(false); return; }
-      // Successful OTP — sign in via Firebase Anonymous or load profile
+      // Successful OTP — now check registration & load profile
       const em = email.trim().toLowerCase();
       const isOwner = OWNER_EMAILS.includes(em);
-      let profile = isOwner ? { name: em === "krishkwish@gmail.com" ? "Krish" : "Saloni", role: "owner", pages: null } : await loadUserProfile(em);
-      if (!profile) { setErr("Profile not found. Contact owner."); setLoading(false); return; }
-      // Update last login
-      if (!isOwner) await saveUserProfile(em, { ...profile, lastLogin: new Date().toISOString() });
+      let profile = null;
+      if (isOwner) {
+        profile = { name: em === "krishkwish@gmail.com" ? "Krish" : "Saloni", role: "owner", pages: null };
+      } else {
+        // Firebase SDK is fine here — OTP verify already used REST so SDK is warmed up
+        profile = await loadUserProfile(em);
+        if (!profile) { setErr("This email is not registered. Contact owner to add you."); setLoading(false); return; }
+        if (profile.disabled) { setErr("Your account has been disabled. Contact owner."); setLoading(false); return; }
+        // Update last login
+        await saveUserProfile(em, { ...profile, lastLogin: new Date().toISOString() });
+      }
       onLogin({
         id: em.replace(/[^a-z0-9]/gi, "_"),
         email: em,
