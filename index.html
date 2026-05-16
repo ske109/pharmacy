@@ -1635,8 +1635,8 @@ function Login({ onLogin }) {
         profile = await loadUserProfile(em);
         if (!profile) { setErr("This email is not registered. Contact owner to add you."); setLoading(false); return; }
         if (profile.disabled) { setErr("Your account has been disabled. Contact owner."); setLoading(false); return; }
-        // Update last login
-        await saveUserProfile(em, { ...profile, lastLogin: new Date().toISOString() });
+        // Update last login — silently ignore if rules block it (user not yet authenticated)
+        try { await saveUserProfile(em, { ...profile, lastLogin: new Date().toISOString() }); } catch(e) { console.warn("[lastLogin write blocked]", e.message); }
       }
       onLogin({
         id: em.replace(/[^a-z0-9]/gi, "_"),
