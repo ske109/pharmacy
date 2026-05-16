@@ -4251,7 +4251,6 @@ function RackPage({ inv, saveInv, mob }) {
   const [editRackVal, setEditRackVal] = useState("");
   const [editStockVal, setEditStockVal] = useState("");
   const [editPackQtyVal, setEditPackQtyVal] = useState("");
-  const [editExpiryVal, setEditExpiryVal] = useState("");
 
   // Add new medicine form state
   const [showAddNew, setShowAddNew] = useState(false);
@@ -4314,18 +4313,21 @@ function RackPage({ inv, saveInv, mob }) {
     setEditExpiryVal(m.expiry || "");
   };
 
+  const [editExpiryVal, setEditExpiryVal] = useState("");
+
   var saveEditMed = function() {
     if (!editingMed) return;
     var med = inv.find(function(m) { return m.id === editingMed; });
     var newStock = parseStockInput(editStockVal, med ? med.packQty : 0);
-    var changes = { rack: editRackVal, stock: newStock, packQty: editPackQtyVal ? parseInt(editPackQtyVal, 10) || 0 : (med ? med.packQty || 0 : 0) };
+    var fixedRack = normalizeRack(editRackVal);
+    var changes = { rack: fixedRack, stock: newStock, packQty: editPackQtyVal ? parseInt(editPackQtyVal, 10) || 0 : (med ? med.packQty || 0 : 0) };
     if (editExpiryVal !== undefined) changes.expiry = editExpiryVal;
     var next = inv.map(function(m) {
       if (m.id !== editingMed) return m;
       return Object.assign({}, m, changes);
     });
     saveInv(next);
-    if (med) logAudit("INV_EDIT", med.name + " Rack→" + editRackVal + (editExpiryVal !== (med.expiry || "") ? " Expiry→" + editExpiryVal : ""));
+    if (med) logAudit("INV_EDIT", med.name + " Rack→" + fixedRack + (editExpiryVal !== (med.expiry || "") ? " Expiry→" + editExpiryVal : ""));
     setEditingMed(null);
     setEditRackVal("");
     setEditStockVal("");
@@ -4339,6 +4341,48 @@ function RackPage({ inv, saveInv, mob }) {
     setEditStockVal("");
     setEditPackQtyVal("");
     setEditExpiryVal("");
+  };
+
+  const [fixRackMsg, setFixRackMsg] = useState("");
+
+  // Normalize a rack name: remove spaces between letter prefix and number (e.g. "A 1" → "A1", "BH- 3" → "BH-3")
+  var normalizeRack = function(rack) {
+    if (!rack) return rack;
+    var trimmed = rack.trim();
+    // Pattern: one or more letters, optional dash, optional spaces, digits  → collapse spaces
+    var m = trimmed.match(/^([A-Za-z]+(-)?)\s+(\d+)$/);
+    if (m) return (m[1] + (m[3])).replace(/\s+/g, "");
+    // Also handle "BH - 3" style with spaces around dash
+    var m2 = trimmed.match(/^([A-Za-z]+)\s*-\s*(\d+)$/);
+    if (m2) return m2[1] + "-" + m2[2];
+    return trimmed;
+  };
+
+  var fixAllRacks = function() {
+    var changed = 0;
+    var newRackNames = [];
+    var next = inv.map(function(m) {
+      if (!m.rack) return m;
+      var fixed = normalizeRack(m.rack);
+      // Collect any rack names not already in ALL_RACKS
+      if (fixed && ALL_RACKS.indexOf(fixed) === -1 && newRackNames.indexOf(fixed) === -1) {
+        newRackNames.push(fixed);
+      }
+      if (fixed !== m.rack) { changed++; return Object.assign({}, m, { rack: fixed }); }
+      return m;
+    });
+    if (newRackNames.length > 0) {
+      // Prepend new rack names to ALL_RACKS so they show in dropdowns
+      newRackNames.forEach(function(r) { if (ALL_RACKS.indexOf(r) === -1) ALL_RACKS.unshift(r); });
+    }
+    if (changed > 0) {
+      saveInv(next);
+      logAudit("INV_EDIT", "Rack name cleanup: fixed " + changed + " item(s)" + (newRackNames.length ? ", added racks: " + newRackNames.join(", ") : ""));
+      setFixRackMsg("✅ Fixed " + changed + " item(s)" + (newRackNames.length ? " · " + newRackNames.length + " new rack(s) added: " + newRackNames.join(", ") : ""));
+    } else {
+      setFixRackMsg(newRackNames.length ? "✅ No spacing issues found · " + newRackNames.length + " new rack(s) registered: " + newRackNames.join(", ") : "✅ All rack names are already clean, nothing to fix.");
+    }
+    setTimeout(function() { setFixRackMsg(""); }, 5000);
   };
 
   var toggleSelect = function(id) {
@@ -4426,6 +4470,8 @@ function RackPage({ inv, saveInv, mob }) {
         <button onClick={function() { setShowAll(!showAll); }} style={bts(!showAll)}>{showAll ? "Show Used Racks Only" : "Show All Racks"}</button>
         {showAll && <input value={filterRack} onChange={function(e) { setFilterRack(e.target.value); }} placeholder="Filter racks (e.g. A1, BH-5)" style={{ ...inps, maxWidth: 200 }} />}
         {showAll && <span style={{ fontSize: 11, color: "#888" }}>Showing max 50. Type to filter.</span>}
+        <button onClick={fixAllRacks} style={{ ...bts(false), padding: "6px 14px", fontSize: 12, background: "#EEF2FF", color: "#4338CA", border: "1px solid #C7D2FE", fontWeight: 600 }} title="Remove spaces in rack names (e.g. 'A 1' → 'A1') and register any new rack names">🔧 Fix Rack Names</button>
+        {fixRackMsg && <span style={{ fontSize: 11, color: "#059669", fontWeight: 500, background: "#F0FDF4", padding: "4px 10px", borderRadius: 6, border: "1px solid #BBF7D0" }}>{fixRackMsg}</span>}
       </div>
 
       {/* Search within assigned racks */}
