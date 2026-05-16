@@ -221,22 +221,18 @@ async function verifyOTP(email, enteredOtp) {
 // Load user profile from Firebase
 async function loadUserProfile(email) {
   const key = email.replace(/\./g, "_").replace(/@/g, "__");
-  // Use Firebase REST API (plain HTTPS) instead of SDK WebSocket — more reliable on Android
-  try {
-    var dbUrl = "https://atoz-pharmacy-9adbe-default-rtdb.asia-southeast1.firebasedatabase.app";
-    var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-    var tid = controller ? setTimeout(function() { controller.abort(); }, 8000) : null;
-    var opts = controller ? { signal: controller.signal } : {};
-    var resp = await fetch(dbUrl + "/userProfiles/" + key + ".json", opts);
-    if (tid) clearTimeout(tid);
-    if (!resp.ok) return null;
-    return await resp.json();
-  } catch(e) {
-    console.warn("[loadUserProfile REST failed, falling back to SDK]", e);
-    // Fallback to SDK if REST also fails
-    const snap = await new Promise(res => db.ref("userProfiles/" + key).once("value", res));
-    return snap.val();
-  }
+  // Use SDK directly — REST is blocked by Firebase rules (requires auth)
+  // Wrap in a timeout so it never hangs forever on Android
+  return new Promise(function(resolve, reject) {
+    var tid = setTimeout(function() { reject(new Error("Profile load timed out")); }, 12000);
+    db.ref("userProfiles/" + key).once("value", function(snap) {
+      clearTimeout(tid);
+      resolve(snap.val());
+    }, function(err) {
+      clearTimeout(tid);
+      reject(err);
+    });
+  });
 }
 // Save user profile
 async function saveUserProfile(email, profile) {
@@ -1623,34 +1619,37 @@ function Login({ onLogin }) {
 
   const verifyOtp = async () => {
     if (!otp.trim() || otp.trim().length !== 6) { setErr("Enter the 6-digit OTP"); return; }
-    setLoading(true); setErr("");
+    setLoading(true); setErr(""); setInfo("Verifying OTP...");
     try {
       const result = await verifyOTP(email.trim().toLowerCase(), otp.trim());
-      if (!result.ok) { setErr(result.err); setLoading(false); return; }
-      // Successful OTP — now check registration & load profile
+      if (!result.ok) { setErr(result.err); setInfo(""); setLoading(false); return; }
       const em = email.trim().toLowerCase();
       const isOwner = OWNER_EMAILS.includes(em);
       let profile = null;
       if (isOwner) {
         profile = { name: em === "krishkwish@gmail.com" ? "Krish" : "Saloni", role: "owner", pages: null };
       } else {
-        // Firebase SDK is fine here — OTP verify already used REST so SDK is warmed up
+        setInfo("Loading your profile...");
         profile = await loadUserProfile(em);
-        if (!profile) { setErr("This email is not registered. Contact owner to add you."); setLoading(false); return; }
-        if (profile.disabled) { setErr("Your account has been disabled. Contact owner."); setLoading(false); return; }
-        // Update last login — silently ignore if rules block it (user not yet authenticated)
+        console.log("[verifyOtp] profile loaded:", JSON.stringify(profile));
+        if (!profile) { setErr("Profile not found. Please ask owner to re-save your account in Users page."); setInfo(""); setLoading(false); return; }
+        if (profile.disabled) { setErr("Your account has been disabled. Contact owner."); setInfo(""); setLoading(false); return; }
         try { await saveUserProfile(em, { ...profile, lastLogin: new Date().toISOString() }); } catch(e) { console.warn("[lastLogin write blocked]", e.message); }
       }
+      setInfo("Logging in...");
+      console.log("[verifyOtp] onLogin pages:", profile.pages, "outlets:", profile.outlets);
       onLogin({
         id: em.replace(/[^a-z0-9]/gi, "_"),
         email: em,
         name: profile.name || em,
         role: isOwner ? "owner" : "staff",
-        pages: isOwner ? null : (profile.pages || []), // null = all pages for owner
-        outlets: isOwner ? null : (profile.outlets && profile.outlets.length > 0 ? profile.outlets : ["outlet1"]), // null = all outlets for owner; default to outlet1 only if unset
+        pages: isOwner ? null : (profile.pages && profile.pages.length > 0 ? profile.pages : []),
+        outlets: isOwner ? null : (profile.outlets && profile.outlets.length > 0 ? profile.outlets : ["outlet1"]),
       });
     } catch(e) {
+      console.error("[verifyOtp error]", e);
       setErr("Verification failed: " + e.message);
+      setInfo("");
     }
     setLoading(false);
   };
