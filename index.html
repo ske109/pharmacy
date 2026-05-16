@@ -50,12 +50,9 @@ input,select,button,textarea{font-family:inherit;-webkit-appearance:none}
 }
 </style>
 
-<meta name="app-version" content="2.3.1">
-<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta http-equiv="Pragma" content="no-cache">
-<meta http-equiv="Expires" content="0">
+<meta name="app-version" content="2.3.0">
 <meta name="app-changes" content="["Removed Claude API dependency for image/PDF bill reading [security/privacy]", "Added local Tesseract.js OCR with canvas preprocessing for purchase bill images", "Enhanced parsing with fallback line-by-line item extraction", "Cleaner worker without hardcoded API keys or Claude proxy route", "Improved error handling and user feedback for OCR quality", "v2.2.0: Advanced multi-pass image processing with deskew, adaptive thresholding, Sauvola binarization, OTSU thresholding, unsharp mask sharpening, multi-PSM Tesseract passes, and 3-strategy invoice parser (Vardhman columnar, flexible numeric-anchor, token-based)"]">
-<script>window.APP_VERSION = {"version": "2.3.1", "changes": ["Replaced EmailJS with Cloudflare Worker + Resend for reliable OTP delivery (no Gmail scope issues)", "Added /send-otp-email route to Cloudflare Worker", "3000 free emails/month via Resend vs 200 via EmailJS", "Proper error handling — shows actual failure reason instead of silent swallow", "OTP always logged to console as fallback"], "date": "2026-05-16", "type": "production"};</script>
+<script>window.APP_VERSION = {"version": "2.3.0", "changes": ["Replaced EmailJS with Cloudflare Worker + Resend for reliable OTP delivery (no Gmail scope issues)", "Added /send-otp-email route to Cloudflare Worker", "3000 free emails/month via Resend vs 200 via EmailJS", "Proper error handling — shows actual failure reason instead of silent swallow", "OTP always logged to console as fallback"], "date": "2026-05-10", "type": "production"};</script>
 
 <!-- OTP emails sent via Cloudflare Worker + Brevo (300 free/day, ANY recipient, no domain needed) -->
 <!-- Setup: 1) Sign up at brevo.com  2) Get API key  3) Add as BREVO_API_KEY secret in your Cloudflare Worker -->
@@ -154,16 +151,11 @@ function genOTP() { return String(Math.floor(100000 + Math.random() * 900000)); 
 async function sendOTPEmail(toEmail, otp, recipientName) {
   try {
     console.log("[OTP] Sending email to:", toEmail, "name:", recipientName);
-    var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-    var timeoutId = controller ? setTimeout(function() { controller.abort(); }, 15000) : null;
-    var fetchOpts = {
+    var resp = await fetch(PROXY_URL + "/send-otp-email", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ to_email: toEmail, to_name: recipientName || toEmail, otp_code: otp })
-    };
-    if (controller) fetchOpts.signal = controller.signal;
-    var resp = await fetch(PROXY_URL + "/send-otp-email", fetchOpts);
-    if (timeoutId) clearTimeout(timeoutId);
+    });
     var data = await resp.json();
     console.log("[OTP] Email response:", resp.status, data);
     if (!resp.ok || !data.ok) {
@@ -171,7 +163,6 @@ async function sendOTPEmail(toEmail, otp, recipientName) {
     }
   } catch(e) {
     console.error("[OTP] Email send failed:", e);
-    if (e.name === "AbortError") throw new Error("Request timed out. Check internet connection and try again.");
     throw new Error("Email failed: " + e.message);
   }
 }
@@ -189,50 +180,26 @@ async function sendOTPFallback(toEmail, otp) {
   } catch(e) { return false; }
 }
 // Firebase paths for OTP store
-var FIREBASE_DB_URL = "https://atoz-pharmacy-9adbe-default-rtdb.asia-southeast1.firebasedatabase.app";
-
-async function fbRest(path, method, body) {
-  // Plain HTTPS REST call to Firebase — works on Android where WebSocket SDK hangs
-  var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-  var tid = controller ? setTimeout(function() { controller.abort(); }, 10000) : null;
-  var opts = { method: method || "GET", headers: { "Content-Type": "application/json" } };
-  if (body !== undefined) opts.body = JSON.stringify(body);
-  if (controller) opts.signal = controller.signal;
-  var resp = await fetch(FIREBASE_DB_URL + "/" + path + ".json", opts);
-  if (tid) clearTimeout(tid);
-  if (!resp.ok) throw new Error("Firebase REST error: " + resp.status);
-  return resp.json();
-}
-
 async function saveOTP(email, otp) {
   const key = email.replace(/\./g, "_").replace(/@/g, "__");
-  await fbSetPath("otps/" + key, { otp: otp, ts: Date.now(), email: email });
+  await fbSetPath("otps/" + key, { otp, ts: Date.now(), email });
 }
 async function verifyOTP(email, enteredOtp) {
   const key = email.replace(/\./g, "_").replace(/@/g, "__");
-  const snap = await new Promise(function(res) { db.ref("otps/" + key).once("value", res); });
+  const snap = await new Promise(res => db.ref("otps/" + key).once("value", res));
   const data = snap.val();
   if (!data) return { ok: false, err: "No OTP found. Please request again." };
   if (Date.now() - data.ts > 10 * 60 * 1000) return { ok: false, err: "OTP expired. Please request again." };
   if (data.otp !== enteredOtp.trim()) return { ok: false, err: "Incorrect OTP. Please try again." };
+  // Clear used OTP
   await fbSetPath("otps/" + key, null);
   return { ok: true };
 }
 // Load user profile from Firebase
 async function loadUserProfile(email) {
   const key = email.replace(/\./g, "_").replace(/@/g, "__");
-  // Use SDK directly — REST is blocked by Firebase rules (requires auth)
-  // Wrap in a timeout so it never hangs forever on Android
-  return new Promise(function(resolve, reject) {
-    var tid = setTimeout(function() { reject(new Error("Profile load timed out")); }, 12000);
-    db.ref("userProfiles/" + key).once("value", function(snap) {
-      clearTimeout(tid);
-      resolve(snap.val());
-    }, function(err) {
-      clearTimeout(tid);
-      reject(err);
-    });
-  });
+  const snap = await new Promise(res => db.ref("userProfiles/" + key).once("value", res));
+  return snap.val();
 }
 // Save user profile
 async function saveUserProfile(email, profile) {
@@ -1556,41 +1523,32 @@ function Login({ onLogin }) {
   }, [resendCd]);
 
   const sendOtp = async () => {
-    // Trim + lowercase defensively — Android keyboards can autocapitalise/autocorrect
-    const em = email.trim().toLowerCase().replace(/\s/g, "");
-    if (!em || !em.includes("@") || !em.includes(".")) { setErr("Enter a valid email address"); return; }
-    setEmail(em);
-    setLoading(true); setErr(""); setInfo("Checking account...");
-
-    // Helper: wrap any promise with a timeout so Android never hangs forever
-    function withTimeout(promise, ms, label) {
-      return new Promise(function(resolve, reject) {
-        var tid = setTimeout(function() { reject(new Error((label || "Request") + " timed out. Check internet and try again.")); }, ms);
-        promise.then(function(v) { clearTimeout(tid); resolve(v); }, function(e) { clearTimeout(tid); reject(e); });
-      });
-    }
-
+    const em = email.trim().toLowerCase();
+    if (!em || !em.includes("@")) { setErr("Enter a valid email address"); return; }
+    setLoading(true); setErr(""); setInfo("");
     try {
+      // Check if user is registered (owner or in userProfiles)
       const isOwner = OWNER_EMAILS.includes(em);
-      // Skip pre-check Firebase call entirely — registration is verified AFTER OTP succeeds.
-      // This avoids Firebase WebSocket hanging on Android devices.
+      let profile = null;
+      if (!isOwner) {
+        profile = await loadUserProfile(em);
+        if (!profile) { setErr("This email is not registered. Contact owner to add you."); setLoading(false); return; }
+        if (profile.disabled) { setErr("Your account has been disabled. Contact owner."); setLoading(false); return; }
+      }
       const code = genOTP();
       console.log("[OTP DEBUG] Code for " + em + ": " + code);
-      setInfo("Saving OTP...");
-      await withTimeout(saveOTP(em, code), 10000, "Save OTP");
-      setInfo("Sending email...");
+      await saveOTP(em, code);
       var emailOk = false;
       var emailErr = "";
       var fallbackOk = false;
       try {
-        await withTimeout(sendOTPEmail(em, code, isOwner ? "Owner" : em), 20000, "Send email");
+        await sendOTPEmail(em, code, isOwner ? "Owner" : (profile && profile.name) || em);
         emailOk = true;
       } catch(mailErr) {
         emailErr = mailErr.message || "Unknown error";
-        console.warn("[OTP] Primary email failed:", emailErr);
-        setInfo("Trying fallback...");
+        // Try sending to admin as fallback
         if (em.toLowerCase() !== "krishkwish@gmail.com") {
-          fallbackOk = await withTimeout(sendOTPFallback(em, code), 15000, "Fallback email").catch(function() { return false; });
+          fallbackOk = await sendOTPFallback(em, code);
         }
       }
       setStep("otp");
@@ -1600,56 +1558,39 @@ function Login({ onLogin }) {
       } else if (fallbackOk) {
         setInfo("OTP sent to admin (krishkwish@gmail.com). Please ask admin for the OTP code.");
       } else {
-        setErr("Could not send email (" + emailErr + "). Contact admin or check internet.");
-        setInfo("Try: 1) Refresh page  2) Use Chrome browser  3) Contact admin");
+        setErr("Email failed: " + emailErr);
+        setInfo("Could not send OTP email. Please contact admin.");
       }
     } catch(e) {
       console.error("[OTP ERROR]", e);
-      var msg = e.message || "Unknown error";
-      if (msg.includes("timed out")) {
-        setErr("Connection timed out. Please check your internet and try again.");
-      } else if (msg.includes("network") || msg.includes("fetch") || msg.includes("Failed to fetch")) {
-        setErr("Network error. Check your internet connection and try again.");
-      } else {
-        setErr("Failed to send OTP: " + msg);
-      }
+      setErr("Failed to send OTP: " + e.message);
     }
     setLoading(false);
   };
 
   const verifyOtp = async () => {
     if (!otp.trim() || otp.trim().length !== 6) { setErr("Enter the 6-digit OTP"); return; }
-    setLoading(true); setErr(""); setInfo("Verifying OTP...");
+    setLoading(true); setErr("");
     try {
       const result = await verifyOTP(email.trim().toLowerCase(), otp.trim());
-      if (!result.ok) { setErr(result.err); setInfo(""); setLoading(false); return; }
+      if (!result.ok) { setErr(result.err); setLoading(false); return; }
+      // Successful OTP — sign in via Firebase Anonymous or load profile
       const em = email.trim().toLowerCase();
       const isOwner = OWNER_EMAILS.includes(em);
-      let profile = null;
-      if (isOwner) {
-        profile = { name: em === "krishkwish@gmail.com" ? "Krish" : "Saloni", role: "owner", pages: null };
-      } else {
-        setInfo("Loading your profile...");
-        profile = await loadUserProfile(em);
-        console.log("[verifyOtp] profile loaded:", JSON.stringify(profile));
-        if (!profile) { setErr("Profile not found. Please ask owner to re-save your account in Users page."); setInfo(""); setLoading(false); return; }
-        if (profile.disabled) { setErr("Your account has been disabled. Contact owner."); setInfo(""); setLoading(false); return; }
-        try { await saveUserProfile(em, { ...profile, lastLogin: new Date().toISOString() }); } catch(e) { console.warn("[lastLogin write blocked]", e.message); }
-      }
-      setInfo("Logging in...");
-      console.log("[verifyOtp] onLogin pages:", profile.pages, "outlets:", profile.outlets);
+      let profile = isOwner ? { name: em === "krishkwish@gmail.com" ? "Krish" : "Saloni", role: "owner", pages: null } : await loadUserProfile(em);
+      if (!profile) { setErr("Profile not found. Contact owner."); setLoading(false); return; }
+      // Update last login
+      if (!isOwner) await saveUserProfile(em, { ...profile, lastLogin: new Date().toISOString() });
       onLogin({
         id: em.replace(/[^a-z0-9]/gi, "_"),
         email: em,
         name: profile.name || em,
         role: isOwner ? "owner" : "staff",
-        pages: isOwner ? null : (profile.pages && profile.pages.length > 0 ? profile.pages : []),
-        outlets: isOwner ? null : (profile.outlets && profile.outlets.length > 0 ? profile.outlets : ["outlet1"]),
+        pages: isOwner ? null : (profile.pages || []), // null = all pages for owner
+        outlets: isOwner ? null : (profile.outlets || Object.keys(OUTLETS)), // null = all outlets for owner
       });
     } catch(e) {
-      console.error("[verifyOtp error]", e);
       setErr("Verification failed: " + e.message);
-      setInfo("");
     }
     setLoading(false);
   };
@@ -1673,13 +1614,11 @@ function Login({ onLogin }) {
               <label style={{ fontSize: 11, fontWeight: 700, color: "#6B7280", display: "block", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>Email Address</label>
               <input value={email} onChange={e => { setEmail(e.target.value); setErr(""); }}
                 placeholder="your@email.com" onKeyDown={e => e.key === "Enter" && sendOtp()}
-                style={inp} autoComplete="email" inputMode="email" type="email"
-                autoCorrect="off" autoCapitalize="none" spellCheck="false" />
+                style={inp} autoComplete="email" inputMode="email" type="email" />
             </div>
-            {info && <div style={{ background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, padding: "8px 14px", color: "#1D4ED8", fontSize: 12.5 }}>{info}</div>}
             {err && <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "10px 14px", color: "#DC2626", fontSize: 13 }}>{err}</div>}
             <button onClick={sendOtp} disabled={loading} style={{ ...btn(true), opacity: loading ? 0.7 : 1 }}>
-              {loading ? (info || "Sending OTP...") : "Send OTP →"}
+              {loading ? "Sending OTP..." : "Send OTP →"}
             </button>
             <div style={{ textAlign: "center", fontSize: 12, color: "#9CA3AF", marginTop: 4 }}>
               You'll receive a 6-digit code on your email
@@ -4371,21 +4310,29 @@ function RackPage({ inv, saveInv, mob }) {
     setEditRackVal(m.rack || "");
     setEditStockVal(fStock(m.stock, m.packQty));
     setEditPackQtyVal(m.packQty ? String(m.packQty) : "");
+    setEditExpiryVal(m.expiry || "");
   };
+
+  const [editExpiryVal, setEditExpiryVal] = useState("");
 
   var saveEditMed = function() {
     if (!editingMed) return;
     var med = inv.find(function(m) { return m.id === editingMed; });
     var newStock = parseStockInput(editStockVal, med ? med.packQty : 0);
+    var fixedRack = normalizeRack(editRackVal);
+    var changes = { rack: fixedRack, stock: newStock, packQty: editPackQtyVal ? parseInt(editPackQtyVal, 10) || 0 : (med ? med.packQty || 0 : 0) };
+    if (editExpiryVal !== undefined) changes.expiry = editExpiryVal;
     var next = inv.map(function(m) {
       if (m.id !== editingMed) return m;
-      return Object.assign({}, m, { rack: editRackVal, stock: newStock, packQty: editPackQtyVal ? parseInt(editPackQtyVal, 10) || 0 : m.packQty || 0 });
+      return Object.assign({}, m, changes);
     });
     saveInv(next);
+    if (med) logAudit("INV_EDIT", med.name + " Rack→" + fixedRack + (editExpiryVal !== (med.expiry || "") ? " Expiry→" + editExpiryVal : ""));
     setEditingMed(null);
     setEditRackVal("");
     setEditStockVal("");
     setEditPackQtyVal("");
+    setEditExpiryVal("");
   };
 
   var cancelEditMed = function() {
@@ -4393,6 +4340,49 @@ function RackPage({ inv, saveInv, mob }) {
     setEditRackVal("");
     setEditStockVal("");
     setEditPackQtyVal("");
+    setEditExpiryVal("");
+  };
+
+  const [fixRackMsg, setFixRackMsg] = useState("");
+
+  // Normalize a rack name: remove spaces between letter prefix and number (e.g. "A 1" → "A1", "BH- 3" → "BH-3")
+  var normalizeRack = function(rack) {
+    if (!rack) return rack;
+    var trimmed = rack.trim();
+    // Pattern: one or more letters, optional dash, optional spaces, digits  → collapse spaces
+    var m = trimmed.match(/^([A-Za-z]+(-)?)\s+(\d+)$/);
+    if (m) return (m[1] + (m[3])).replace(/\s+/g, "");
+    // Also handle "BH - 3" style with spaces around dash
+    var m2 = trimmed.match(/^([A-Za-z]+)\s*-\s*(\d+)$/);
+    if (m2) return m2[1] + "-" + m2[2];
+    return trimmed;
+  };
+
+  var fixAllRacks = function() {
+    var changed = 0;
+    var newRackNames = [];
+    var next = inv.map(function(m) {
+      if (!m.rack) return m;
+      var fixed = normalizeRack(m.rack);
+      // Collect any rack names not already in ALL_RACKS
+      if (fixed && ALL_RACKS.indexOf(fixed) === -1 && newRackNames.indexOf(fixed) === -1) {
+        newRackNames.push(fixed);
+      }
+      if (fixed !== m.rack) { changed++; return Object.assign({}, m, { rack: fixed }); }
+      return m;
+    });
+    if (newRackNames.length > 0) {
+      // Prepend new rack names to ALL_RACKS so they show in dropdowns
+      newRackNames.forEach(function(r) { if (ALL_RACKS.indexOf(r) === -1) ALL_RACKS.unshift(r); });
+    }
+    if (changed > 0) {
+      saveInv(next);
+      logAudit("INV_EDIT", "Rack name cleanup: fixed " + changed + " item(s)" + (newRackNames.length ? ", added racks: " + newRackNames.join(", ") : ""));
+      setFixRackMsg("✅ Fixed " + changed + " item(s)" + (newRackNames.length ? " · " + newRackNames.length + " new rack(s) added: " + newRackNames.join(", ") : ""));
+    } else {
+      setFixRackMsg(newRackNames.length ? "✅ No spacing issues found · " + newRackNames.length + " new rack(s) registered: " + newRackNames.join(", ") : "✅ All rack names are already clean, nothing to fix.");
+    }
+    setTimeout(function() { setFixRackMsg(""); }, 5000);
   };
 
   var toggleSelect = function(id) {
@@ -4480,6 +4470,8 @@ function RackPage({ inv, saveInv, mob }) {
         <button onClick={function() { setShowAll(!showAll); }} style={bts(!showAll)}>{showAll ? "Show Used Racks Only" : "Show All Racks"}</button>
         {showAll && <input value={filterRack} onChange={function(e) { setFilterRack(e.target.value); }} placeholder="Filter racks (e.g. A1, BH-5)" style={{ ...inps, maxWidth: 200 }} />}
         {showAll && <span style={{ fontSize: 11, color: "#888" }}>Showing max 50. Type to filter.</span>}
+        <button onClick={fixAllRacks} style={{ ...bts(false), padding: "6px 14px", fontSize: 12, background: "#EEF2FF", color: "#4338CA", border: "1px solid #C7D2FE", fontWeight: 600 }} title="Remove spaces in rack names (e.g. 'A 1' → 'A1') and register any new rack names">🔧 Fix Rack Names</button>
+        {fixRackMsg && <span style={{ fontSize: 11, color: "#059669", fontWeight: 500, background: "#F0FDF4", padding: "4px 10px", borderRadius: 6, border: "1px solid #BBF7D0" }}>{fixRackMsg}</span>}
       </div>
 
       {/* Search within assigned racks */}
@@ -4570,6 +4562,10 @@ function RackPage({ inv, saveInv, mob }) {
                             <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                               <label style={{ fontSize: 10, fontWeight: 600, color: "#92400E" }}>PackQty:</label>
                               <input value={editPackQtyVal} onChange={function(e) { setEditPackQtyVal(e.target.value); }} style={{ ...inps, width: 60, fontSize: 11, padding: "3px 6px", textAlign: "right" }} placeholder="0" type="number" min="0" />
+                            </div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                              <label style={{ fontSize: 10, fontWeight: 600, color: "#92400E" }}>Expiry:</label>
+                              <input type="month" value={editExpiryVal} onChange={function(e) { setEditExpiryVal(e.target.value); }} style={{ ...inps, width: 130, fontSize: 11, padding: "3px 6px", background: editExpiryVal ? "#F0FDF4" : "#FFFBEB", borderColor: editExpiryVal ? "#059669" : "#D97706" }} />
                             </div>
                             <button onClick={saveEditMed} style={{ ...bts(true), padding: "3px 10px", fontSize: 11 }}>Save</button>
                             <button onClick={cancelEditMed} style={{ ...bts(false), padding: "3px 10px", fontSize: 11 }}>Cancel</button>
@@ -7281,30 +7277,16 @@ function App() {
     // Set PH from stored outlet
     PH = OUTLETS[getCurrentOutlet()] || OUTLETS.outlet2;
 
-    // OTP-based auth: check localStorage session, but always refresh profile from Firebase
-    // to pick up any changes to pages/outlets made by owner after last login.
+    // OTP-based auth: no Firebase Auth session, user stored in component state.
+    // On page reload, user must log in again (security by design for pharmacy).
+    // Check if we have a recent session in localStorage (persists across tabs/restarts).
     const saved = localStorage.getItem("atoz_session");
     if (saved) {
       try {
         const u = JSON.parse(saved);
-        // v2 sessions have a version field — clear old sessions that may have stale pages/outlets
-        if (u && u.email && u.loginTs && (Date.now() - u.loginTs) < 24 * 60 * 60 * 1000 && u.sessionV === 2) {
-          // Set user immediately from cache so app loads fast
+        if (u && u.email && u.loginTs && (Date.now() - u.loginTs) < 24 * 60 * 60 * 1000) {
+          // Session still valid (8 hours)
           setUser(u);
-          // Then refresh profile from Firebase in background to get latest pages/outlets
-          if (u.role !== "owner") {
-            loadUserProfile(u.email).then(function(freshProfile) {
-              if (freshProfile && !freshProfile.disabled) {
-                var refreshed = Object.assign({}, u, {
-                  name: freshProfile.name || u.name,
-                  pages: freshProfile.pages && freshProfile.pages.length > 0 ? freshProfile.pages : u.pages,
-                  outlets: freshProfile.outlets && freshProfile.outlets.length > 0 ? freshProfile.outlets : u.outlets,
-                });
-                localStorage.setItem("atoz_session", JSON.stringify(refreshed));
-                setUser(refreshed);
-              }
-            }).catch(function(e) { console.warn("[session refresh failed]", e.message); });
-          }
         } else {
           localStorage.removeItem("atoz_session");
         }
@@ -7377,7 +7359,7 @@ function App() {
   const showBill = useCallback((b, hist) => { setViewBill(b); setBillFromHist(!!hist); }, []);
 
   const login = (u) => {
-    const withTs = { ...u, loginTs: Date.now(), sessionV: 2 };
+    const withTs = { ...u, loginTs: Date.now() };
     localStorage.setItem("atoz_session", JSON.stringify(withTs));
     setUser(withTs);
   };
