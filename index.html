@@ -1532,33 +1532,42 @@ function Login({ onLogin }) {
     // Trim + lowercase defensively — Android keyboards can autocapitalise/autocorrect
     const em = email.trim().toLowerCase().replace(/\s/g, "");
     if (!em || !em.includes("@") || !em.includes(".")) { setErr("Enter a valid email address"); return; }
-    // Update the displayed email to the cleaned version
     setEmail(em);
-    setLoading(true); setErr(""); setInfo("");
+    setLoading(true); setErr(""); setInfo("Checking account...");
+
+    // Helper: wrap any promise with a timeout so Android never hangs forever
+    function withTimeout(promise, ms, label) {
+      return new Promise(function(resolve, reject) {
+        var tid = setTimeout(function() { reject(new Error((label || "Request") + " timed out. Check internet and try again.")); }, ms);
+        promise.then(function(v) { clearTimeout(tid); resolve(v); }, function(e) { clearTimeout(tid); reject(e); });
+      });
+    }
+
     try {
-      // Check if user is registered (owner or in userProfiles)
       const isOwner = OWNER_EMAILS.includes(em);
       let profile = null;
       if (!isOwner) {
-        profile = await loadUserProfile(em);
-        if (!profile) { setErr("This email is not registered. Contact owner to add you."); setLoading(false); return; }
-        if (profile.disabled) { setErr("Your account has been disabled. Contact owner."); setLoading(false); return; }
+        profile = await withTimeout(loadUserProfile(em), 10000, "Account check");
+        if (!profile) { setErr("This email is not registered. Contact owner to add you."); setLoading(false); setInfo(""); return; }
+        if (profile.disabled) { setErr("Your account has been disabled. Contact owner."); setLoading(false); setInfo(""); return; }
       }
       const code = genOTP();
       console.log("[OTP DEBUG] Code for " + em + ": " + code);
-      await saveOTP(em, code);
+      setInfo("Saving OTP...");
+      await withTimeout(saveOTP(em, code), 10000, "Save OTP");
+      setInfo("Sending email...");
       var emailOk = false;
       var emailErr = "";
       var fallbackOk = false;
       try {
-        await sendOTPEmail(em, code, isOwner ? "Owner" : (profile && profile.name) || em);
+        await withTimeout(sendOTPEmail(em, code, isOwner ? "Owner" : (profile && profile.name) || em), 20000, "Send email");
         emailOk = true;
       } catch(mailErr) {
         emailErr = mailErr.message || "Unknown error";
         console.warn("[OTP] Primary email failed:", emailErr);
-        // Try sending to admin as fallback
+        setInfo("Trying fallback...");
         if (em.toLowerCase() !== "krishkwish@gmail.com") {
-          fallbackOk = await sendOTPFallback(em, code);
+          fallbackOk = await withTimeout(sendOTPFallback(em, code), 15000, "Fallback email").catch(function() { return false; });
         }
       }
       setStep("otp");
@@ -1569,12 +1578,14 @@ function Login({ onLogin }) {
         setInfo("OTP sent to admin (krishkwish@gmail.com). Please ask admin for the OTP code.");
       } else {
         setErr("Could not send email (" + emailErr + "). Contact admin or check internet.");
-        setInfo("If you have internet, try: 1) Refresh page 2) Use Chrome browser 3) Contact admin");
+        setInfo("Try: 1) Refresh page  2) Use Chrome browser  3) Contact admin");
       }
     } catch(e) {
       console.error("[OTP ERROR]", e);
       var msg = e.message || "Unknown error";
-      if (msg.includes("timed out") || msg.includes("network") || msg.includes("fetch")) {
+      if (msg.includes("timed out")) {
+        setErr("Connection timed out. Please check your internet and try again.");
+      } else if (msg.includes("network") || msg.includes("fetch") || msg.includes("Failed to fetch")) {
         setErr("Network error. Check your internet connection and try again.");
       } else {
         setErr("Failed to send OTP: " + msg);
@@ -1632,9 +1643,10 @@ function Login({ onLogin }) {
                 style={inp} autoComplete="email" inputMode="email" type="email"
                 autoCorrect="off" autoCapitalize="none" spellCheck="false" />
             </div>
+            {info && <div style={{ background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, padding: "8px 14px", color: "#1D4ED8", fontSize: 12.5 }}>{info}</div>}
             {err && <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "10px 14px", color: "#DC2626", fontSize: 13 }}>{err}</div>}
             <button onClick={sendOtp} disabled={loading} style={{ ...btn(true), opacity: loading ? 0.7 : 1 }}>
-              {loading ? "Sending OTP..." : "Send OTP →"}
+              {loading ? (info || "Sending OTP...") : "Send OTP →"}
             </button>
             <div style={{ textAlign: "center", fontSize: 12, color: "#9CA3AF", marginTop: 4 }}>
               You'll receive a 6-digit code on your email
