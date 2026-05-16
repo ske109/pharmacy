@@ -203,28 +203,16 @@ async function fbRest(path, method, body) {
 
 async function saveOTP(email, otp) {
   const key = email.replace(/\./g, "_").replace(/@/g, "__");
-  try {
-    await fbRest("otps/" + key, "PUT", { otp: otp, ts: Date.now(), email: email });
-  } catch(e) {
-    console.warn("[saveOTP REST failed, using SDK]", e);
-    await fbSetPath("otps/" + key, { otp, ts: Date.now(), email });
-  }
+  await fbSetPath("otps/" + key, { otp: otp, ts: Date.now(), email: email });
 }
 async function verifyOTP(email, enteredOtp) {
   const key = email.replace(/\./g, "_").replace(/@/g, "__");
-  var data = null;
-  try {
-    data = await fbRest("otps/" + key, "GET");
-  } catch(e) {
-    console.warn("[verifyOTP REST failed, using SDK]", e);
-    const snap = await new Promise(res => db.ref("otps/" + key).once("value", res));
-    data = snap.val();
-  }
+  const snap = await new Promise(function(res) { db.ref("otps/" + key).once("value", res); });
+  const data = snap.val();
   if (!data) return { ok: false, err: "No OTP found. Please request again." };
   if (Date.now() - data.ts > 10 * 60 * 1000) return { ok: false, err: "OTP expired. Please request again." };
   if (data.otp !== enteredOtp.trim()) return { ok: false, err: "Incorrect OTP. Please try again." };
-  // Clear used OTP
-  try { await fbRest("otps/" + key, "DELETE"); } catch(e) { fbSetPath("otps/" + key, null); }
+  await fbSetPath("otps/" + key, null);
   return { ok: true };
 }
 // Load user profile from Firebase
