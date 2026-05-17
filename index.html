@@ -144,6 +144,7 @@ const ALL_PAGES = [
   { id: "users",     label: "Users & Roles",   icon: "👥" },
   { id: "backup",    label: "Backup",          icon: "💾" },
   { id: "changelog", label: "Change Log",      icon: "📜" },
+  { id: "bankSync",  label: "Bank Sync",       icon: "🏦" },
 ];
 
 // ── OTP helpers (6-digit, stored in Firebase with 10min expiry) ───────────
@@ -7531,7 +7532,484 @@ function App() {
           {page === "users" && isO && <UsersPage sessions={sessions} mob={mob} user={user} />}
           {page === "backup" && isO && <BackupPage inv={inv} bills={bills} purch={purch} saveAll={saveAll} askConfirm={askConfirm} saveInv={saveInv} saveBills={saveBills} />}
           {page === "changelog" && isO && <AuditTrailPage mob={mob} />}
+          {page === "bankSync" && isO && <BankSyncPage bills={bills} mob={mob} />}
         </div></div></div>
+  );
+}
+
+// ══════════════════════════════════════════════
+// BANK SYNC PAGE — match bank statement vs online bills
+// ══════════════════════════════════════════════
+function BankSyncPage({ bills, mob }) {
+  // ── State ────────────────────────────────────────────────────────────────
+  const [rangeType, setRangeType] = React.useState("month");
+  const [fromD, setFromD] = React.useState("");
+  const [toD, setToD] = React.useState("");
+  const [stmtFiles, setStmtFiles] = React.useState([]); // [{name, entries:[]}]
+  const [loading, setLoading] = React.useState(false);
+  const [loadMsg, setLoadMsg] = React.useState("");
+  const [matchResult, setMatchResult] = React.useState(null); // computed after sync
+  const [activeTab, setActiveTab] = React.useState("matched"); // matched|unmatched|extra
+  const fileRef = React.useRef(null);
+
+  const now = new Date();
+
+  // ── Compute effective date range ─────────────────────────────────────────
+  function getRange() {
+    if (rangeType === "today") {
+      const d = now.toISOString().split("T")[0];
+      return { from: new Date(d + "T00:00:00"), to: new Date(d + "T23:59:59") };
+    }
+    if (rangeType === "week") {
+      const f = new Date(now); f.setDate(f.getDate() - 6); f.setHours(0,0,0,0);
+      const t = new Date(now); t.setHours(23,59,59,999);
+      return { from: f, to: t };
+    }
+    if (rangeType === "month") {
+      return { from: new Date(now.getFullYear(), now.getMonth(), 1), to: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59) };
+    }
+    if (rangeType === "year") {
+      return { from: new Date(now.getFullYear(), 0, 1), to: new Date(now.getFullYear(), 11, 31, 23, 59, 59) };
+    }
+    if (rangeType === "custom" && fromD && toD) {
+      return { from: new Date(fromD + "T00:00:00"), to: new Date(toD + "T23:59:59") };
+    }
+    return null;
+  }
+
+  // ── PDF parsing — extract transactions from bank statement text ──────────
+  async function parseBankStatementPdf(file) {
+    setLoadMsg("Reading " + file.name + "…");
+    var arrayBuf = await file.arrayBuffer();
+    var pdf = await pdfjsLib.getDocument({ data: arrayBuf }).promise;
+    var allText = "";
+    for (var p = 1; p <= pdf.numPages; p++) {
+      var page = await pdf.getPage(p);
+      var content = await page.getTextContent();
+      // Preserve spatial layout — group by Y coordinate
+      var lineMap = {};
+      content.items.forEach(function(item) {
+        var y = Math.round(item.transform[5]);
+        if (!lineMap[y]) lineMap[y] = [];
+        lineMap[y].push({ x: item.transform[4], text: item.str });
+      });
+      Object.keys(lineMap).sort(function(a,b){return b-a;}).forEach(function(y) {
+        var sorted = lineMap[y].sort(function(a,b){return a.x-b.x;});
+        allText += sorted.map(function(i){return i.text;}).join(" ") + "\n";
+      });
+    }
+    return parseStatementText(allText, file.name);
+  }
+
+  // ── Parse raw text to extract credit transactions ────────────────────────
+  function parseStatementText(text, filename) {
+    var entries = [];
+    var lines = text.split("\n").map(function(l){return l.trim();}).filter(Boolean);
+
+    // Date patterns: DD/MM/YYYY, DD-MM-YYYY, DD MMM YYYY, YYYY-MM-DD
+    var dateRe = /(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{4}-\d{2}-\d{2}|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{2,4})/i;
+    // Amount: digits with commas and decimal  e.g. 1,234.56 or 1234.56
+    var amtRe = /(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?)/g;
+
+    // Keywords that suggest online / UPI / digital payments (credit to merchant)
+    var onlineKw = /UPI|IMPS|NEFT|RTGS|PhonePe|GPay|Google Pay|Paytm|Razorpay|PayU|Cashfree|Stripe|CCAvenue|Juspay|QR|UPI-CR|CR|Cr\b/i;
+
+    // Debit keywords — skip debit entries when looking for receipts
+    var debitKw = /DR\b|Debit|ATM|POS|NEFT-DR|IMPS-DR|Transfer-DR|Withdrawal/i;
+
+    lines.forEach(function(line) {
+      var dm = line.match(dateRe);
+      if (!dm) return;
+
+      var dateStr = dm[1];
+      var isoDate = parseBankDate(dateStr);
+      if (!isoDate) return;
+
+      // Extract all numbers from the line
+      var nums = [];
+      var m; amtRe.lastIndex = 0;
+      var cleanLine = line.replace(/[\u20B9$€£]/g, ""); // strip currency symbols
+      while ((m = amtRe.exec(cleanLine)) !== null) {
+        var v = parseFloat(m[1].replace(/,/g,""));
+        if (v > 0.5) nums.push(v);
+      }
+      if (nums.length === 0) return;
+
+      // Skip if looks like a debit/withdrawal
+      if (debitKw.test(line) && !onlineKw.test(line)) return;
+
+      // For bank statements, credit amounts are typically at a specific column
+      // Heuristic: take the amount that is most likely the transaction value
+      // (not balance — balance is usually the last and largest number)
+      // Strategy: if 3+ numbers, the 2nd-to-last is often the credit/debit amount, last is balance
+      var amount = 0;
+      if (nums.length >= 2) {
+        amount = nums[nums.length - 2]; // second to last = transaction amount
+      } else {
+        amount = nums[nums.length - 1];
+      }
+
+      // Skip very small (< Rs.1) or very large outliers likely to be account numbers
+      if (amount < 1 || amount > 500000) return;
+
+      // Build description: remove date and numbers, keep text
+      var desc = line.replace(dateRe, "").replace(/[\d,]+\.?\d*/g,"").replace(/\s{2,}/g," ").trim().slice(0, 120);
+
+      // Only include if it looks like an online/UPI credit
+      // Be inclusive — keep if has online keyword OR if it's a credit entry
+      var isOnline = onlineKw.test(line);
+      var isCredit = /CR\b|Credit|Cr\b|\+/i.test(line) || isOnline;
+      if (!isCredit && nums.length < 2) return; // need at least 2 numbers (amount + balance) to be confident
+
+      entries.push({
+        date: isoDate,
+        amount: Math.round(amount * 100) / 100,
+        description: desc,
+        raw: line,
+        isOnline: isOnline,
+        source: filename
+      });
+    });
+
+    // Deduplicate by date+amount+desc similarity
+    var deduped = [];
+    entries.forEach(function(e) {
+      var dup = deduped.find(function(x) {
+        return x.date === e.date && Math.abs(x.amount - e.amount) < 0.5 && x.description.slice(0,20) === e.description.slice(0,20);
+      });
+      if (!dup) deduped.push(e);
+    });
+
+    return deduped;
+  }
+
+  // ── Parse various bank date formats → yyyy-MM-dd ─────────────────────────
+  function parseBankDate(str) {
+    if (!str) return null;
+    str = str.trim();
+    // ISO: yyyy-MM-dd
+    if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+    // DD/MM/YYYY or DD-MM-YYYY
+    var m = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+    if (m) {
+      var yr = m[3].length === 2 ? "20" + m[3] : m[3];
+      return yr + "-" + m[2].padStart(2,"0") + "-" + m[1].padStart(2,"0");
+    }
+    // DD MMM YYYY
+    var months = {jan:"01",feb:"02",mar:"03",apr:"04",may:"05",jun:"06",jul:"07",aug:"08",sep:"09",oct:"10",nov:"11",dec:"12"};
+    var m2 = str.match(/^(\d{1,2})\s+([A-Za-z]{3})\s+(\d{2,4})$/i);
+    if (m2) {
+      var yr2 = m2[3].length === 2 ? "20" + m2[3] : m2[3];
+      var mo = months[m2[2].toLowerCase().slice(0,3)];
+      if (mo) return yr2 + "-" + mo + "-" + m2[1].padStart(2,"0");
+    }
+    return null;
+  }
+
+  // ── Handle file upload ───────────────────────────────────────────────────
+  async function handleFiles(e) {
+    var files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    setLoading(true); setLoadMsg(""); setMatchResult(null);
+    var newStmts = [];
+    for (var i = 0; i < files.length; i++) {
+      try {
+        var entries = await parseBankStatementPdf(files[i]);
+        newStmts.push({ name: files[i].name, entries: entries, count: entries.length });
+      } catch(err) {
+        alert("Error reading " + files[i].name + ": " + err.message);
+      }
+    }
+    setStmtFiles(function(prev) { return prev.concat(newStmts); });
+    setLoading(false); setLoadMsg("");
+    e.target.value = "";
+  }
+
+  // ── Remove a statement file ──────────────────────────────────────────────
+  function removeFile(idx) {
+    setStmtFiles(function(p) { return p.filter(function(_,i){return i!==idx;}); });
+    setMatchResult(null);
+  }
+
+  // ── Run the sync / matching ──────────────────────────────────────────────
+  function runSync() {
+    var range = getRange();
+    if (!range) { alert("Please set a valid date range"); return; }
+    if (!stmtFiles.length) { alert("Please upload at least one bank statement"); return; }
+
+    // 1. Collect all statement entries within the selected date range
+    var allStmtEntries = [];
+    stmtFiles.forEach(function(sf) {
+      sf.entries.forEach(function(e) {
+        var d = new Date(e.date + "T00:00:00");
+        if (d >= range.from && d <= range.to) allStmtEntries.push(e);
+      });
+    });
+
+    // 2. Filter bills: only online payment modes, within date range
+    var onlineModes = ["UPI","Debit Card","Credit Card","Online","NEFT","IMPS","GPay","PhonePe","Paytm"];
+    var onlineBills = bills.filter(function(b) {
+      var d = new Date(b.date);
+      if (d < range.from || d > range.to) return false;
+      var pm = (b.paymentMode || "").trim();
+      return onlineModes.some(function(m) { return pm.toLowerCase().indexOf(m.toLowerCase()) >= 0; });
+    });
+
+    // 3. Match: for each bill, find a statement entry with same amount (±1) and same date (±1 day)
+    var matched = [];
+    var unmatchedBills = [];
+    var usedStmtIdx = new Set();
+
+    onlineBills.forEach(function(bill) {
+      var billAmt = Math.round((bill.netAmount || 0) * 100) / 100;
+      var billDate = new Date(bill.date);
+
+      // Find best matching statement entry
+      var bestIdx = -1;
+      var bestScore = Infinity;
+      allStmtEntries.forEach(function(se, si) {
+        if (usedStmtIdx.has(si)) return;
+        var amtDiff = Math.abs(se.amount - billAmt);
+        if (amtDiff > 2) return; // amount tolerance ±2
+        var stmtDate = new Date(se.date + "T00:00:00");
+        var dayDiff = Math.abs((stmtDate - billDate) / 86400000);
+        if (dayDiff > 2) return; // date tolerance ±2 days
+        var score = amtDiff + dayDiff * 0.1;
+        if (score < bestScore) { bestScore = score; bestIdx = si; }
+      });
+
+      if (bestIdx >= 0) {
+        usedStmtIdx.add(bestIdx);
+        matched.push({ bill: bill, stmtEntry: allStmtEntries[bestIdx], amtMatch: Math.abs(allStmtEntries[bestIdx].amount - billAmt) < 0.5 });
+      } else {
+        unmatchedBills.push(bill);
+      }
+    });
+
+    // 4. Statement entries not matched to any bill
+    var extraStmt = allStmtEntries.filter(function(_,i){ return !usedStmtIdx.has(i); });
+
+    // 5. Totals
+    var matchedTotal = matched.reduce(function(s,m){ return s + (m.bill.netAmount||0); },0);
+    var unmatchedTotal = unmatchedBills.reduce(function(s,b){ return s + (b.netAmount||0); },0);
+    var extraTotal = extraStmt.reduce(function(s,e){ return s + e.amount; },0);
+    var stmtTotal = allStmtEntries.reduce(function(s,e){ return s + e.amount; },0);
+
+    setMatchResult({
+      range,
+      matched,
+      unmatchedBills,
+      extraStmt,
+      onlineBills,
+      allStmtEntries,
+      matchedTotal,
+      unmatchedTotal,
+      extraTotal,
+      stmtTotal,
+      billsTotal: onlineBills.reduce(function(s,b){return s+(b.netAmount||0);},0)
+    });
+    setActiveTab("matched");
+  }
+
+  var range = getRange();
+  var rangeLabel = range ? (fD(range.from) + " → " + fD(range.to)) : "No range selected";
+
+  // ── Render ───────────────────────────────────────────────────────────────
+  return (
+    <div>
+      <h2 style={hds}>🏦 Bank Sync</h2>
+      <div style={{ fontSize: 13, color: "#666", marginBottom: 16 }}>Upload your bank PDF statement(s) and match them against online payments recorded in bills.</div>
+
+      {/* Step 1: Date Range */}
+      <div style={{ ...cds, borderLeft: "4px solid #2563EB" }}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12, color: "#2563EB" }}>① Select Date Range</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          {[["today","Today"],["week","Last 7 Days"],["month","This Month"],["year","This Year"],["custom","Custom"]].map(function(rv) {
+            return <button key={rv[0]} onClick={function(){setRangeType(rv[0]);setMatchResult(null);}} style={{ padding: "7px 14px", borderRadius: 7, border: "none", fontWeight: 600, fontSize: 12, cursor: "pointer", fontFamily: "inherit", background: rangeType === rv[0] ? "#2563EB" : "#E8E4DD", color: rangeType === rv[0] ? "#fff" : "#555" }}>{rv[1]}</button>;
+          })}
+        </div>
+        {rangeType === "custom" && <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <div><label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>From</label><input type="date" value={fromD} onChange={function(e){setFromD(e.target.value);setMatchResult(null);}} style={inps} /></div>
+          <div><label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>To</label><input type="date" value={toD} onChange={function(e){setToD(e.target.value);setMatchResult(null);}} style={inps} /></div>
+        </div>}
+        {range && <div style={{ marginTop: 10, fontSize: 12, color: "#059669", fontWeight: 600, background: "#D1FAE5", padding: "6px 12px", borderRadius: 6, display: "inline-block" }}>📅 {rangeLabel}</div>}
+      </div>
+
+      {/* Step 2: Upload Statements */}
+      <div style={{ ...cds, borderLeft: "4px solid #7C3AED" }}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12, color: "#7C3AED" }}>② Upload Bank Statement PDF(s)</div>
+        <div style={{ fontSize: 12, color: "#888", marginBottom: 10 }}>You can upload multiple monthly statements. Only transactions within your selected date range will be used.</div>
+        <input ref={fileRef} type="file" accept=".pdf" multiple onChange={handleFiles} style={{ display: "none" }} />
+        <div onClick={function(){fileRef.current && fileRef.current.click();}} style={{ border: "2px dashed #7C3AED", borderRadius: 10, padding: "28px 20px", textAlign: "center", cursor: "pointer", background: "#FAF5FF", transition: "background 0.2s" }}
+          onMouseEnter={function(e){e.currentTarget.style.background="#F3E8FF";}} onMouseLeave={function(e){e.currentTarget.style.background="#FAF5FF";}}>
+          <div style={{ fontSize: 32, marginBottom: 8 }}>📄</div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: "#7C3AED" }}>Click to upload PDF statement(s)</div>
+          <div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>Supports HDFC, ICICI, SBI, Axis, Kotak, Yes Bank and most Indian bank statements</div>
+        </div>
+
+        {loading && <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#7C3AED" }}>
+          <span style={{ display: "inline-block", width: 16, height: 16, border: "2px solid #7C3AED", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.7s linear infinite" }}></span>
+          {loadMsg || "Processing…"}
+        </div>}
+
+        {stmtFiles.length > 0 && <div style={{ marginTop: 12 }}>
+          {stmtFiles.map(function(sf, i) {
+            return <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: "#F3E8FF", borderRadius: 8, marginBottom: 6 }}>
+              <div>
+                <span style={{ fontSize: 13, fontWeight: 600, color: "#5B21B6" }}>📄 {sf.name}</span>
+                <span style={{ fontSize: 11, color: "#888", marginLeft: 10 }}>{sf.count} transactions found</span>
+              </div>
+              <button onClick={function(){removeFile(i);}} style={{ background: "none", border: "none", cursor: "pointer", color: "#DC2626", fontSize: 18, fontWeight: 700, padding: "0 4px" }}>×</button>
+            </div>;
+          })}
+          <div style={{ fontSize: 12, color: "#666", marginTop: 4 }}>
+            Total: <b>{stmtFiles.reduce(function(s,f){return s+f.count;},0)}</b> transactions across {stmtFiles.length} file(s)
+          </div>
+        </div>}
+      </div>
+
+      {/* Step 3: Sync Button */}
+      <div style={{ ...cds, borderLeft: "4px solid #059669" }}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12, color: "#059669" }}>③ Run Sync</div>
+        <div style={{ fontSize: 12, color: "#888", marginBottom: 12 }}>
+          Matches bank credits against online bill payments (UPI, Debit Card, Credit Card) recorded in the system for the selected date range.
+        </div>
+        <button onClick={runSync} disabled={!stmtFiles.length || !range} style={{ ...bts(true), background: (!stmtFiles.length || !range) ? "#ccc" : "#059669", fontSize: 14, padding: "11px 28px", opacity: (!stmtFiles.length || !range) ? 0.6 : 1 }}>
+          🔄 Sync & Match
+        </button>
+      </div>
+
+      {/* Results */}
+      {matchResult && (function() {
+        var r = matchResult;
+        var matchPct = r.onlineBills.length > 0 ? Math.round(r.matched.length / r.onlineBills.length * 100) : 0;
+        return <div>
+          {/* Summary Cards */}
+          <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(4,1fr)", gap: 12, marginBottom: 16 }}>
+            <div style={{ ...cds, borderLeft: "4px solid #059669", padding: "14px 16px" }}>
+              <div style={{ fontSize: 22 }}>✅</div>
+              <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "'Playfair Display',serif", color: "#059669" }}>{r.matched.length}</div>
+              <div style={{ fontSize: 11, color: "#888" }}>Matched</div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "#059669", marginTop: 2 }}>Rs.{f2(r.matchedTotal)}</div>
+            </div>
+            <div style={{ ...cds, borderLeft: "4px solid #DC2626", padding: "14px 16px" }}>
+              <div style={{ fontSize: 22 }}>❌</div>
+              <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "'Playfair Display',serif", color: "#DC2626" }}>{r.unmatchedBills.length}</div>
+              <div style={{ fontSize: 11, color: "#888" }}>Bills not in bank</div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "#DC2626", marginTop: 2 }}>Rs.{f2(r.unmatchedTotal)}</div>
+            </div>
+            <div style={{ ...cds, borderLeft: "4px solid #D97706", padding: "14px 16px" }}>
+              <div style={{ fontSize: 22 }}>🏦</div>
+              <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "'Playfair Display',serif", color: "#D97706" }}>{r.extraStmt.length}</div>
+              <div style={{ fontSize: 11, color: "#888" }}>Bank entries not in bills</div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "#D97706", marginTop: 2 }}>Rs.{f2(r.extraTotal)}</div>
+            </div>
+            <div style={{ ...cds, borderLeft: "4px solid #2563EB", padding: "14px 16px" }}>
+              <div style={{ fontSize: 22 }}>📊</div>
+              <div style={{ fontSize: 20, fontWeight: 800, fontFamily: "'Playfair Display',serif", color: "#2563EB" }}>{matchPct}%</div>
+              <div style={{ fontSize: 11, color: "#888" }}>Match rate</div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "#2563EB", marginTop: 2 }}>Bills: Rs.{f2(r.billsTotal)} | Bank: Rs.{f2(r.stmtTotal)}</div>
+            </div>
+          </div>
+
+          {/* Diff Alert */}
+          {Math.abs(r.billsTotal - r.stmtTotal) > 1 && <div style={{ padding: "12px 16px", borderRadius: 10, background: "#FEF3C7", border: "1px solid #FCD34D", marginBottom: 14, fontSize: 13 }}>
+            ⚠️ <b>Amount mismatch:</b> Bills total Rs.{f2(r.billsTotal)} vs Bank statement Rs.{f2(r.stmtTotal)} — difference of Rs.{f2(Math.abs(r.billsTotal - r.stmtTotal))}
+          </div>}
+          {Math.abs(r.billsTotal - r.stmtTotal) <= 1 && r.matched.length > 0 && <div style={{ padding: "12px 16px", borderRadius: 10, background: "#D1FAE5", border: "1px solid #6EE7B7", marginBottom: 14, fontSize: 13 }}>
+            ✅ <b>Amounts match!</b> Both bills and bank statement total approximately Rs.{f2(r.billsTotal)}.
+          </div>}
+
+          {/* Tab Switcher */}
+          <div style={{ display: "flex", gap: 3, background: "#E8E4DD", borderRadius: 8, padding: 3, marginBottom: 14 }}>
+            {[["matched","✅ Matched (" + r.matched.length + ")","#059669"],["unmatched","❌ Unmatched Bills (" + r.unmatchedBills.length + ")","#DC2626"],["extra","🏦 Extra in Bank (" + r.extraStmt.length + ")","#D97706"]].map(function(t) {
+              return <button key={t[0]} onClick={function(){setActiveTab(t[0]);}} style={{ flex: 1, padding: "8px 6px", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: activeTab === t[0] ? "#fff" : "transparent", color: activeTab === t[0] ? t[2] : "#888", boxShadow: activeTab === t[0] ? "0 1px 3px rgba(0,0,0,.1)" : "none" }}>{t[1]}</button>;
+            })}
+          </div>
+
+          {/* Matched Tab */}
+          {activeTab === "matched" && <div style={cds}>
+            <b style={{ fontSize: 14, color: "#059669" }}>Matched Payments ({r.matched.length})</b>
+            {r.matched.length === 0 ? <div style={{ color: "#aaa", textAlign: "center", padding: 24, fontSize: 13 }}>No matches found</div> :
+            <div style={{ overflowX: "auto", marginTop: 12 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <thead><tr>
+                  {["Bill No","Bill Date","Patient","Pay Mode","Bill Amt","Stmt Date","Stmt Amt","Diff","Stmt Desc"].map(function(h) { return <th key={h} style={ths}>{h}</th>; })}
+                </tr></thead>
+                <tbody>
+                  {r.matched.map(function(m, i) {
+                    var diff = Math.round((m.stmtEntry.amount - m.bill.netAmount) * 100) / 100;
+                    return <tr key={i} style={{ background: i % 2 === 0 ? "#F9FFF9" : "#fff" }}>
+                      <td style={{ ...tds, fontFamily: "monospace", color: "#0D6B5B", fontWeight: 700 }}>{m.bill.billNo}</td>
+                      <td style={tds}>{fD(m.bill.date)}</td>
+                      <td style={tds}>{m.bill.patient || "-"}</td>
+                      <td style={tds}><span style={{ background: "#DBEAFE", color: "#1E40AF", padding: "2px 8px", borderRadius: 10, fontSize: 10, fontWeight: 600 }}>{m.bill.paymentMode}</span></td>
+                      <td style={{ ...tds, fontWeight: 700 }}>Rs.{f2(m.bill.netAmount)}</td>
+                      <td style={tds}>{fD(new Date(m.stmtEntry.date))}</td>
+                      <td style={{ ...tds, fontWeight: 700, color: "#059669" }}>Rs.{f2(m.stmtEntry.amount)}</td>
+                      <td style={{ ...tds, color: Math.abs(diff) > 0.5 ? "#D97706" : "#059669", fontWeight: 600 }}>{diff >= 0 ? "+" : ""}{f2(diff)}</td>
+                      <td style={{ ...tds, color: "#888", fontSize: 10, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={m.stmtEntry.description}>{m.stmtEntry.description}</td>
+                    </tr>;
+                  })}
+                </tbody>
+              </table>
+            </div>}
+          </div>}
+
+          {/* Unmatched Bills Tab */}
+          {activeTab === "unmatched" && <div style={cds}>
+            <div style={{ marginBottom: 10 }}><b style={{ fontSize: 14, color: "#DC2626" }}>Bills Not Found in Bank Statement ({r.unmatchedBills.length})</b>
+              <div style={{ fontSize: 12, color: "#888", marginTop: 4 }}>These online payments are recorded in the system but could not be matched to any bank credit. Possible reasons: payment pending, refunded, or not captured in the uploaded statement.</div>
+            </div>
+            {r.unmatchedBills.length === 0 ? <div style={{ color: "#aaa", textAlign: "center", padding: 24, fontSize: 13 }}>All online bills matched! 🎉</div> :
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <thead><tr>
+                  {["Bill No","Date","Patient","Pay Mode","Amount","Items"].map(function(h){ return <th key={h} style={ths}>{h}</th>; })}
+                </tr></thead>
+                <tbody>
+                  {r.unmatchedBills.map(function(b, i) {
+                    return <tr key={i} style={{ background: "#FFF5F5" }}>
+                      <td style={{ ...tds, fontFamily: "monospace", color: "#DC2626", fontWeight: 700 }}>{b.billNo}</td>
+                      <td style={tds}>{fD(b.date)}</td>
+                      <td style={tds}>{b.patient || "-"}</td>
+                      <td style={tds}><span style={{ background: "#FEE2E2", color: "#991B1B", padding: "2px 8px", borderRadius: 10, fontSize: 10, fontWeight: 600 }}>{b.paymentMode}</span></td>
+                      <td style={{ ...tds, fontWeight: 700, color: "#DC2626" }}>Rs.{f2(b.netAmount)}</td>
+                      <td style={{ ...tds, color: "#888" }}>{(b.items||[]).length} item(s)</td>
+                    </tr>;
+                  })}
+                </tbody>
+              </table>
+            </div>}
+          </div>}
+
+          {/* Extra Bank Entries Tab */}
+          {activeTab === "extra" && <div style={cds}>
+            <div style={{ marginBottom: 10 }}><b style={{ fontSize: 14, color: "#D97706" }}>Bank Entries With No Matching Bill ({r.extraStmt.length})</b>
+              <div style={{ fontSize: 12, color: "#888", marginTop: 4 }}>These credits appear in your bank statement but have no corresponding online bill in the system. May be refunds, other income, or payments not yet recorded.</div>
+            </div>
+            {r.extraStmt.length === 0 ? <div style={{ color: "#aaa", textAlign: "center", padding: 24, fontSize: 13 }}>No extra bank entries! ✅</div> :
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <thead><tr>
+                  {["Date","Amount","Description","Source File"].map(function(h){ return <th key={h} style={ths}>{h}</th>; })}
+                </tr></thead>
+                <tbody>
+                  {r.extraStmt.map(function(e, i) {
+                    return <tr key={i} style={{ background: "#FFFBEB" }}>
+                      <td style={tds}>{fD(new Date(e.date))}</td>
+                      <td style={{ ...tds, fontWeight: 700, color: "#D97706" }}>Rs.{f2(e.amount)}</td>
+                      <td style={{ ...tds, color: "#555", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={e.raw}>{e.description || e.raw.slice(0,80)}</td>
+                      <td style={{ ...tds, color: "#888", fontSize: 10 }}>{e.source}</td>
+                    </tr>;
+                  })}
+                </tbody>
+              </table>
+            </div>}
+          </div>}
+        </div>;
+      })()}
+    </div>
   );
 }
 
