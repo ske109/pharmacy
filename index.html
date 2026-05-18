@@ -1799,6 +1799,86 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm, inv, s
   const csvR = useRef(null); const imgR = useRef(null);
   const empty = { name: "", manufacturer: "", hsn: "300490", batch: "", expiry: "", pack: "", mrp: 0, qty: 1, ptr: 0, gstRate: 5, rack: "", packQty: 0, discPct: 0, schemePct: 0, freeQty: 0, amount: 0 };
   const [mf, setMf] = useState({ inv: "", sup: "", date: "", items: [{ ...empty }] });
+  const bulkR = useRef(null);
+  const [bulkInvoices, setBulkInvoices] = useState(null);
+  const [bulkExpanded, setBulkExpanded] = useState(null);
+  const [bulkAdding, setBulkAdding] = useState(false);
+  const [bulkDone, setBulkDone] = useState(null);
+
+  function parseBulkCsv(text, fileName) {
+    var rows = parseCSV(text); if (rows.length < 2) return null;
+    var h = rows[0].map(function(x) { return x.toLowerCase().trim(); });
+    var ix = function(n) { return h.findIndex(function(x) { return x.includes(n); }); };
+    // Detect format: UUID-style (SUPPLIER, BILL NO., ITEM NAME) vs DOCUMENT-style (Invoice Id, Seller Name, Description)
+    var isUUID = ix("supplier") >= 0 && ix("bill no") >= 0 && ix("item name") >= 0;
+    var isDOC = ix("invoice id") >= 0 || ix("seller name") >= 0;
+    if (isUUID) {
+      var iSup = ix("supplier"), iBill = ix("bill no"), iDate = ix("date"), iName = ix("item name"), iPack = ix("pack"), iBatch = ix("batch"), iExp = ix("expiry"), iQty = ix("qty"), iFree = h.findIndex(function(x){return x === "f.qty";}), iMrp = ix("mrp"), iPtr = ix("srate"), iDis = ix("dis"), iAmt = ix("amount"), iHsn = ix("hsncode"), iCgst = ix("cgst"), iMfg = ix("company");
+      var sup = "", inv2 = "", dt = "";
+      var items = [];
+      for (var i = 1; i < rows.length; i++) {
+        var r = rows[i]; if (!r || r.length < 5) continue;
+        var g = function(idx) { return (r[idx] || "").trim(); };
+        var gn = function(idx) { return parseFloat(r[idx]) || 0; };
+        if (!sup) sup = g(iSup); if (!inv2) inv2 = g(iBill);
+        if (!dt && g(iDate)) dt = g(iDate);
+        var name = g(iName); if (!name) continue;
+        var qty = gn(iQty), freeQty = iFree >= 0 ? gn(iFree) : 0;
+        var mrp = gn(iMrp), ptr = iPtr >= 0 ? gn(iPtr) : 0;
+        var discPct = gn(iDis), gstRate = iCgst >= 0 ? gn(iCgst) * 2 : 5;
+        var amt = iAmt >= 0 ? gn(iAmt) : 0;
+        items.push({ name: name, manufacturer: iMfg >= 0 ? g(iMfg) : "", hsn: iHsn >= 0 ? g(iHsn) : "300490", batch: g(iBatch), expiry: g(iExp), pack: iPack >= 0 ? g(iPack) : "", mrp: mrp, qty: qty, ptr: ptr, gstRate: gstRate, packQty: 0, discPct: discPct, schemePct: 0, freeQty: freeQty, amount: amt || purchCalcAmt({ mrp: mrp, ptr: ptr, qty: qty, discPct: discPct, schemePct: 0, freeQty: freeQty, gstRate: gstRate }) });
+      }
+      if (!items.length) return null;
+      return { supplier: sup, invoiceNo: inv2, date: dt, items: items, srcType: "csv", srcFile: fileName };
+    } else if (isDOC) {
+      var p = csvToItems(rows);
+      if (p && p.items.length) return { ...p, srcType: "csv", srcFile: fileName };
+      return null;
+    }
+    // Fallback to generic csvToItems
+    var p2 = csvToItems(rows);
+    if (p2 && p2.items.length) return { ...p2, srcType: "csv", srcFile: fileName };
+    return null;
+  }
+
+  function handleBulkFiles(e) {
+    var files = Array.from(e.target.files); if (!files.length) return;
+    setBulkDone(null);
+    var results = [];
+    var pending = files.length;
+    files.forEach(function(file) {
+      var reader = new FileReader();
+      reader.onload = function(ev) {
+        try {
+          var parsed = parseBulkCsv(ev.target.result, file.name);
+          if (parsed && parsed.items.length) results.push(parsed);
+        } catch(err) { console.error("Bulk parse error:", file.name, err); }
+        pending--;
+        if (pending === 0) {
+          if (results.length) { setBulkInvoices(results); setBulkExpanded(results[0]?.invoiceNo || null); }
+          else alert("No valid purchase invoices found in the uploaded files.");
+        }
+      };
+      reader.readAsText(file);
+    });
+    e.target.value = "";
+  }
+
+  function confirmBulkAdd() {
+    if (!bulkInvoices || !bulkInvoices.length) return;
+    setBulkAdding(true);
+    var existingInvs = new Set(purch.map(function(p) { return (p.invoiceNo || "").toLowerCase(); }));
+    var added = 0, skipped = 0;
+    bulkInvoices.forEach(function(inv2) {
+      if (inv2.invoiceNo && existingInvs.has(inv2.invoiceNo.toLowerCase())) { skipped++; return; }
+      addPurchase(inv2);
+      added++;
+    });
+    setBulkDone({ added: added, skipped: skipped, total: bulkInvoices.length });
+    setBulkInvoices(null);
+    setBulkAdding(false);
+  }
 
   const doCSV = (e) => { const file = e.target.files[0]; if (!file) return; const r = new FileReader(); r.onload = (ev) => { const rows = parseCSV(ev.target.result); const p = csvToItems(rows); if (p && p.items.length) setRev({ ...p, srcType: "csv", srcFile: file.name }); else alert("Cannot parse CSV"); }; r.readAsText(file); e.target.value = ""; };
 
@@ -1965,8 +2045,79 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm, inv, s
           <b style={{ color: "#0D6B5B", fontSize: 14 }}>Total: Rs.{f2(rev.items.reduce((s, i) => s + (i.amount || purchCalcAmt(i)), 0))}</b></div>
       </div>) : (<div style={cds}>
         <div style={{ display: "flex", gap: 3, background: "#E8E4DD", borderRadius: 8, padding: 3, marginBottom: 16 }}>
-          {[["csv","CSV"],["image","Photo/PDF"],["aiExtract","AI Extract"],["manual","Manual"],["dist","Distributors"]].map(([id, l]) => <button key={id} onClick={() => setTab(id)} style={{ flex: 1, padding: 8, border: "none", borderRadius: 6, fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: tab === id ? "#fff" : "transparent", color: tab === id ? "#0D6B5B" : "#888", boxShadow: tab === id ? "0 1px 3px rgba(0,0,0,.1)" : "none" }}>{l}</button>)}</div>
+          {[["csv","CSV"],["bulkCsv","Bulk CSV"],["image","Photo/PDF"],["aiExtract","AI Extract"],["manual","Manual"],["dist","Distributors"]].map(([id, l]) => <button key={id} onClick={() => setTab(id)} style={{ flex: 1, padding: 8, border: "none", borderRadius: 6, fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: tab === id ? "#fff" : "transparent", color: tab === id ? "#0D6B5B" : "#888", boxShadow: tab === id ? "0 1px 3px rgba(0,0,0,.1)" : "none" }}>{l}</button>)}</div>
         {tab === "csv" && <div style={{ border: "2px dashed #bbb", borderRadius: 10, padding: 36, textAlign: "center", cursor: "pointer", background: "#FAFAF7" }} onClick={() => csvR.current && csvR.current.click()}><input ref={csvR} type="file" accept=".csv" onChange={doCSV} style={{ display: "none" }} /><div style={{ fontSize: 36 }}>📄</div><div style={{ fontSize: 14, fontWeight: 600, color: "#555", marginTop: 8 }}>Upload CSV</div></div>}
+        {tab === "bulkCsv" && <div>
+          {bulkDone && <div style={{ padding: "12px 16px", background: "#F0FDF4", border: "1px solid #6EE7B7", borderRadius: 10, marginBottom: 14 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#065F46" }}>✅ Bulk Import Complete</div>
+            <div style={{ fontSize: 13, color: "#047857", marginTop: 4 }}><b>{bulkDone.added}</b> invoice(s) added to purchases &nbsp;•&nbsp; <b>{bulkDone.skipped}</b> skipped (already existed)</div>
+          </div>}
+          {!bulkInvoices ? <div>
+            <div style={{ border: "2px dashed #bbb", borderRadius: 10, padding: 36, textAlign: "center", cursor: "pointer", background: "#FAFAF7" }} onClick={() => bulkR.current && bulkR.current.click()}>
+              <input ref={bulkR} type="file" accept=".csv" multiple onChange={handleBulkFiles} style={{ display: "none" }} />
+              <div style={{ fontSize: 36 }}>📦</div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: "#555", marginTop: 8 }}>Upload Multiple CSV Invoices</div>
+              <div style={{ fontSize: 12, color: "#999", marginTop: 4 }}>Select all distributor + online invoice CSVs at once</div>
+            </div>
+            <div style={{ marginTop: 12, padding: "10px 14px", background: "#FFF7ED", border: "1px solid #FCD34D", borderRadius: 8, fontSize: 12, color: "#92400E" }}>
+              <b>Supports:</b> Distributor CSVs (SUPPLIER, BILL NO., ITEM NAME format) and Hiveloop/Online CSVs (Invoice Id, Seller Name, Description format). Each file = one invoice.
+            </div>
+          </div> : <div>
+            {/* Bulk preview */}
+            <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "#0D6B5B" }}>📦 {bulkInvoices.length} Invoice(s) Parsed</div>
+                <div style={{ fontSize: 12, color: "#888" }}>{bulkInvoices.reduce(function(s,b){return s+b.items.length;},0)} total items &nbsp;•&nbsp; Total: ₹{f2(bulkInvoices.reduce(function(s,b){return s+b.items.reduce(function(ss,it){return ss+(it.amount||purchCalcAmt(it));},0);},0))}</div>
+              </div>
+              <button onClick={confirmBulkAdd} disabled={bulkAdding} style={{ padding: "10px 24px", background: bulkAdding ? "#9CA3AF" : "#0D6B5B", color: "#fff", border: "none", borderRadius: 8, fontWeight: 600, fontSize: 13, cursor: bulkAdding ? "not-allowed" : "pointer" }}>
+                {bulkAdding ? "Adding..." : "✅ Confirm Add All (" + bulkInvoices.length + ")"}
+              </button>
+              <button onClick={function(){setBulkInvoices(null);}} style={{ padding: "10px 16px", background: "#fff", color: "#DC2626", border: "1px solid #FCA5A5", borderRadius: 8, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>Cancel</button>
+            </div>
+            {bulkInvoices.map(function(bInv, bIdx) {
+              var isExp = bulkExpanded === (bInv.invoiceNo || bIdx);
+              var invTotal = bInv.items.reduce(function(s,it){return s+(it.amount||purchCalcAmt(it));},0);
+              var existsAlready = purch.some(function(p){return p.invoiceNo && bInv.invoiceNo && p.invoiceNo.toLowerCase()===bInv.invoiceNo.toLowerCase();});
+              return <div key={bInv.invoiceNo||bIdx} style={{ background: "#fff", borderRadius: 10, border: existsAlready ? "1px solid #FCA5A5" : "1px solid #D1FAE5", marginBottom: 10, overflow: "hidden" }}>
+                <div onClick={function(){setBulkExpanded(isExp?null:(bInv.invoiceNo||bIdx));}} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", cursor: "pointer", background: existsAlready ? "#FFF5F5" : "#F9FAFB", borderBottom: isExp ? "1px solid #E5E2DB" : "none" }}>
+                  <span style={{ fontFamily: "monospace", fontWeight: 700, color: existsAlready ? "#DC2626" : "#0D6B5B", fontSize: 12, minWidth: 90 }}>{bInv.invoiceNo || "—"}</span>
+                  <span style={{ fontSize: 12, color: "#555", flex: 1 }}>{bInv.supplier}</span>
+                  <span style={{ fontSize: 11, color: "#888" }}>{bInv.date || "—"}</span>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: "#0D6B5B" }}>₹{f2(invTotal)}</span>
+                  <span style={{ fontSize: 11, color: "#059669", background: "#D1FAE5", padding: "2px 7px", borderRadius: 10 }}>{bInv.items.length} items</span>
+                  {existsAlready && <span style={{ fontSize: 11, color: "#DC2626", background: "#FEE2E2", padding: "2px 7px", borderRadius: 10 }}>Already exists</span>}
+                  <span style={{ fontSize: 11, color: "#888", background: bInv.srcFile && bInv.srcFile.startsWith("DOCUMENT") ? "#DBEAFE" : "#E8E4DD", padding: "2px 7px", borderRadius: 10 }}>{bInv.srcFile && bInv.srcFile.startsWith("DOCUMENT") ? "Online" : "Dist"}</span>
+                  <span style={{ fontSize: 16, color: "#888" }}>{isExp ? "▲" : "▼"}</span>
+                </div>
+                {isExp && <div style={{ padding: "10px 14px", overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                    <thead><tr style={{ background: "#F3F4F6" }}>
+                      {["#","Medicine","Mfg","Batch","Expiry","Pack","MRP","PTR","Qty","Free","Disc%","GST%","Amount"].map(function(hh){return <th key={hh} style={{ padding: "6px 8px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "#555" }}>{hh}</th>;})}
+                    </tr></thead>
+                    <tbody>{bInv.items.map(function(it, ii) {
+                      return <tr key={ii} style={{ borderBottom: "1px solid #F3F4F6" }}>
+                        <td style={{ padding: "5px 8px", color: "#999" }}>{ii+1}</td>
+                        <td style={{ padding: "5px 8px", fontWeight: 500, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.name}</td>
+                        <td style={{ padding: "5px 8px", color: "#888", fontSize: 11 }}>{it.manufacturer||"—"}</td>
+                        <td style={{ padding: "5px 8px", fontFamily: "monospace", fontSize: 11 }}>{it.batch||"—"}</td>
+                        <td style={{ padding: "5px 8px", fontSize: 11 }}>{it.expiry||"—"}</td>
+                        <td style={{ padding: "5px 8px", fontSize: 11 }}>{it.pack||"—"}</td>
+                        <td style={{ padding: "5px 8px", textAlign: "right" }}>₹{f2(it.mrp)}</td>
+                        <td style={{ padding: "5px 8px", textAlign: "right" }}>₹{f2(it.ptr)}</td>
+                        <td style={{ padding: "5px 8px", textAlign: "center", fontWeight: 600 }}>{it.qty}</td>
+                        <td style={{ padding: "5px 8px", textAlign: "center", color: it.freeQty ? "#059669" : "#ccc" }}>{it.freeQty||0}</td>
+                        <td style={{ padding: "5px 8px", textAlign: "center" }}>{it.discPct||0}%</td>
+                        <td style={{ padding: "5px 8px", textAlign: "center" }}>{it.gstRate||0}%</td>
+                        <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 600, color: "#0D6B5B" }}>₹{f2(it.amount||purchCalcAmt(it))}</td>
+                      </tr>;
+                    })}</tbody>
+                  </table>
+                  <div style={{ textAlign: "right", marginTop: 8, fontWeight: 700, color: "#0D6B5B", fontSize: 13 }}>Invoice Total: ₹{f2(invTotal)}</div>
+                </div>}
+              </div>;
+            })}
+          </div>}
+        </div>}
         {tab === "image" && <div style={{ border: "2px dashed #bbb", borderRadius: 10, padding: 36, textAlign: "center", cursor: "pointer", background: "#FAFAF7" }} onClick={() => !imgP && imgR.current && imgR.current.click()}><input ref={imgR} type="file" accept="image/*,.pdf,application/pdf" onChange={doImg} style={{ display: "none" }} />{imgP ? <div><div style={{ fontSize: 36 }}>🔄</div><div style={{ fontSize: 14, fontWeight: 600, color: "#0D6B5B", marginTop: 8 }}>{imgStatus || "Processing..."}</div><div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>OCR.space — do not close this page</div></div> : <div><div style={{ fontSize: 36 }}>📸</div><div style={{ fontSize: 14, fontWeight: 600, color: "#555", marginTop: 8 }}>Upload Invoice (Photo or PDF)</div></div>}</div>}
         {tab === "aiExtract" && <div style={{ borderRadius: 10, overflow: "hidden", border: "1px solid #ddd", background: "#fff" }}>
           <div style={{ padding: "10px 14px", background: "#F0FDF4", borderBottom: "1px solid #ddd", fontSize: 12 }}>
