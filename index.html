@@ -8339,13 +8339,18 @@ function CsvPurchImportPage({ inv, saveInv, bills, purch, savePurch, mob, user, 
             });
             setCsvInvoices(results);
             setExpandedInv(0);
-            // Default toggles: all ON, qty = CSV qty, rack = invRack or ""
+            // Default toggles: all ON, qty = CSV qty minus sold qty, rack = invRack or ""
             var tInit = {}, qInit = {}, rInit = {};
             results.forEach(function(inv2, ii) {
               inv2.items.forEach(function(it, ji) {
                 var k = ii + "|" + ji;
-                tInit[k] = true;
-                qInit[k] = (it.qty || 0) + (it.freeQty || 0);
+                var csvQty = (it.qty || 0) + (it.freeQty || 0);
+                var soldQty = it.wasSold ? (it.soldQty || 0) : 0;
+                // Net qty to add = purchased qty minus what was already sold
+                var netQty = Math.max(0, csvQty - soldQty);
+                // If fully sold out, default to unchecked; otherwise checked
+                tInit[k] = netQty > 0;
+                qInit[k] = netQty;
                 rInit[k] = it.invRack || "";
               });
             });
@@ -8366,14 +8371,31 @@ function CsvPurchImportPage({ inv, saveInv, bills, purch, savePurch, mob, user, 
     setAddToggles(function(prev) { var n = Object.assign({}, prev); items.forEach(function(_, ji) { n[invIdx+"|"+ji] = val; }); return n; });
   }
   function toggleAll(val) {
-    setAddToggles(function(prev) { var n = Object.assign({}, prev); Object.keys(n).forEach(function(k) { n[k] = val; }); return n; });
+    if (val && csvInvoices) {
+      // When enabling all: net qty = csvQty - soldQty; skip fully-sold
+      var tNext = {}, qNext = {};
+      csvInvoices.forEach(function(inv2, ii) {
+        inv2.items.forEach(function(it, ji) {
+          var k = ii + "|" + ji;
+          var csvQty = (it.qty || 0) + (it.freeQty || 0);
+          var soldQty = it.wasSold ? (it.soldQty || 0) : 0;
+          var netQty = Math.max(0, csvQty - soldQty);
+          tNext[k] = netQty > 0;
+          qNext[k] = netQty;
+        });
+      });
+      setAddToggles(function(prev) { return Object.assign({}, prev, tNext); });
+      setAddQty(function(prev) { return Object.assign({}, prev, qNext); });
+    } else {
+      setAddToggles(function(prev) { var n = Object.assign({}, prev); Object.keys(n).forEach(function(k) { n[k] = val; }); return n; });
+    }
   }
 
   function doImport() {
     if (!csvInvoices || !csvInvoices.length) return;
     var existingInvNos = {};
     purch.forEach(function(p) { if (p.invoiceNo) existingInvNos[p.invoiceNo.toLowerCase()] = true; });
-    var addedInvoices = 0, skippedInvoices = 0, invLinesAdded = 0, invLinesUpdated = 0;
+    var addedInvoices = 0, skippedInvoices = 0, invLinesAdded = 0, invLinesUpdated = 0, soldSkipped = 0;
     var newPurch = purch.slice();
     var updInv = inv.map(function(m) { return Object.assign({}, m); });
 
@@ -8382,8 +8404,13 @@ function CsvPurchImportPage({ inv, saveInv, bills, purch, savePurch, mob, user, 
       var purchItems = [];
       csvInv.items.forEach(function(it, itemIdx) {
         var k = invIdx + "|" + itemIdx;
-        if (!addToggles[k]) return;
+        if (!addToggles[k]) {
+          // Track if unchecked because fully sold
+          if (it.wasSold && addQty[k] === 0) soldSkipped++;
+          return;
+        }
         var addAmt = addQty[k] !== undefined ? addQty[k] : ((it.qty||0) + (it.freeQty||0));
+        if (addAmt <= 0) { soldSkipped++; return; } // sold-out, skip inventory update
         var rack = rackAssign[k] || it.invRack || "";
         purchItems.push(it);
         // Update or create inventory
@@ -8413,8 +8440,8 @@ function CsvPurchImportPage({ inv, saveInv, bills, purch, savePurch, mob, user, 
 
     savePurch(newPurch);
     saveInv(updInv);
-    logAudit("CSV_PURCH_IMPORT", "Bulk purchase import: " + addedInvoices + " invoices, " + invLinesAdded + " new inv items, " + invLinesUpdated + " updated, " + skippedInvoices + " skipped", user);
-    setDone({ addedInvoices: addedInvoices, skippedInvoices: skippedInvoices, invLinesAdded: invLinesAdded, invLinesUpdated: invLinesUpdated });
+    logAudit("CSV_PURCH_IMPORT", "Bulk purchase import: " + addedInvoices + " invoices, " + invLinesAdded + " new inv items, " + invLinesUpdated + " updated, " + skippedInvoices + " skipped, " + soldSkipped + " skipped (already sold)", user);
+    setDone({ addedInvoices: addedInvoices, skippedInvoices: skippedInvoices, invLinesAdded: invLinesAdded, invLinesUpdated: invLinesUpdated, soldSkipped: soldSkipped });
     setCsvInvoices(null);
   }
 
@@ -8489,7 +8516,7 @@ function CsvPurchImportPage({ inv, saveInv, bills, purch, savePurch, mob, user, 
       {done && <div style={{ ...cs.card, background: "#F0FDF4", border: "1px solid #6EE7B7" }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: "#065F46", marginBottom: 4 }}>✅ Purchase Import Complete</div>
         <div style={{ fontSize: 13, color: "#047857" }}>
-          <b>{done.addedInvoices}</b> invoice(s) added &nbsp;•&nbsp; <b>{done.invLinesAdded}</b> new inventory items &nbsp;•&nbsp; <b>{done.invLinesUpdated}</b> existing items updated &nbsp;•&nbsp; <b>{done.skippedInvoices}</b> skipped (duplicate)
+          <b>{done.addedInvoices}</b> invoice(s) added &nbsp;•&nbsp; <b>{done.invLinesAdded}</b> new inventory items &nbsp;•&nbsp; <b>{done.invLinesUpdated}</b> existing items updated &nbsp;•&nbsp; <b>{done.skippedInvoices}</b> skipped (duplicate){done.soldSkipped > 0 ? <span> &nbsp;•&nbsp; <b>{done.soldSkipped}</b> item(s) not added to inventory (already sold)</span> : null}
         </div>
       </div>}
 
@@ -8601,7 +8628,7 @@ function CsvPurchImportPage({ inv, saveInv, bills, purch, savePurch, mob, user, 
 
         {/* How to use */}
         <div style={{ padding: "10px 14px", background: "#FFF7ED", border: "1px solid #FCD34D", borderRadius: 8, marginBottom: 14, fontSize: 12, color: "#92400E" }}>
-          <b>How it works:</b> All items are <b>selected by default</b>. Uncheck items you don't want to add. Edit quantity, assign racks, then click Import. Items matching existing inventory will have stock added; new items will be created.
+          <b>How it works:</b> All items are <b>selected by default</b>. When a Sales CSV is loaded, items already sold are <b>automatically deducted</b> — the "Add Qty" is set to <b>Purchased Qty − Sold Qty</b>. Items fully sold out are unchecked and skipped. Edit quantity, assign racks, then click Import.
         </div>
 
         {/* Invoice list */}
@@ -8693,10 +8720,18 @@ function CsvPurchImportPage({ inv, saveInv, bills, purch, savePurch, mob, user, 
                             {it.invBatchMatch === "none" && it.invRack && <div style={{ fontSize: 9, color: "#059669", marginTop: 1 }}>Rack from same medicine</div>}
                           </td>
                           {salesData && <td style={{ padding: "7px 8px", textAlign: "center", fontSize: 11 }}>
-                            {it.wasSold ? <div>
-                              <span style={{ background: "#FCE7F3", color: "#9D174D", borderRadius: 4, padding: "2px 7px", fontWeight: 600 }}>🛒 {it.soldQty} sold</span>
-                              {it.soldBills.length > 0 && <div style={{ fontSize: 9, color: "#888", marginTop: 2 }}>{it.soldBills.slice(0,3).join(", ")}{it.soldBills.length > 3 ? "…" : ""}</div>}
-                            </div> : <span style={{ background: "#E0E7FF", color: "#3730A3", borderRadius: 4, padding: "2px 7px", fontWeight: 600 }}>📦 In stock</span>}
+                            {it.wasSold ? (function(){
+                              var csvQty = (it.qty||0)+(it.freeQty||0);
+                              var soldQty = it.soldQty || 0;
+                              var netQty = Math.max(0, csvQty - soldQty);
+                              return <div>
+                                <span style={{ background: "#FCE7F3", color: "#9D174D", borderRadius: 4, padding: "2px 7px", fontWeight: 600, display: "block", marginBottom: 3 }}>🛒 {soldQty} sold</span>
+                                {netQty > 0
+                                  ? <span style={{ background: "#D1FAE5", color: "#065F46", borderRadius: 4, padding: "2px 7px", fontWeight: 600, display: "block", marginBottom: 3 }}>+{netQty} to add</span>
+                                  : <span style={{ background: "#FEE2E2", color: "#DC2626", borderRadius: 4, padding: "2px 7px", fontWeight: 700, display: "block", marginBottom: 3 }}>⛔ Skip — fully sold</span>}
+                                {it.soldBills.length > 0 && <div style={{ fontSize: 9, color: "#888", marginTop: 2 }}>{it.soldBills.slice(0,3).join(", ")}{it.soldBills.length > 3 ? "…" : ""}</div>}
+                              </div>;
+                            })() : <span style={{ background: "#E0E7FF", color: "#3730A3", borderRadius: 4, padding: "2px 7px", fontWeight: 600 }}>📦 Not sold</span>}
                           </td>}
                         </tr>
                       );
