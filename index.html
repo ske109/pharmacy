@@ -260,7 +260,7 @@ function parseStockInput(val, packQty) {
 // ══════════════════════════════════════════════
 // AUDIT TRAIL — logs who changed what and when
 // ══════════════════════════════════════════════
-function logAudit(action, details, user) {
+function logAudit(action, details, user, snapshot) {
   if (!db) return;
   var entry = {
     id: "aud" + Date.now().toString(36) + Math.random().toString(36).slice(2,5),
@@ -270,6 +270,8 @@ function logAudit(action, details, user) {
     ts: new Date().toISOString(),
     tsDisplay: new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: true })
   };
+  // Store before-snapshot for revertable actions (INV_EDIT, INV_DELETE, STOCK_MERGE)
+  if (snapshot) entry.snapshot = snapshot;
   var path = getOutletPath ? getOutletPath("auditTrail/" + entry.id) : "auditTrail/" + entry.id;
   db.ref(path).set(entry);
 }
@@ -2285,7 +2287,7 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
       if (doMerge) {
         var addStock = fm._stockStr !== undefined ? parseStockInput(fm._stockStr, fm.packQty || dup.packQty) : (fm.stock || 0);
         saveInv(inv.map(function(m) { return m.id === dup.id ? Object.assign({}, m, { stock: (m.stock || 0) + addStock, mrp: fm.mrp || m.mrp, ptr: fm.ptr || m.ptr }) : m; }));
-        logAudit("STOCK_MERGE", "Merged stock into " + dup.name + " Batch:" + dup.batch + " added " + addStock, typeof user !== "undefined" ? user : null);
+        logAudit("STOCK_MERGE", "Merged stock into " + dup.name + " Batch:" + dup.batch + " added " + addStock, typeof user !== "undefined" ? user : null, { item: dup });
         setSf(false); setEd(null); setFm(blank); return;
       }
       return;
@@ -2303,13 +2305,13 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
         if (oldMed.stock !== stockVal) changes.push("Stock:" + oldMed.stock + "→" + stockVal);
         if (oldMed.name !== fmClean.name) changes.push("Name:" + oldMed.name + "→" + fmClean.name);
       }
-      if (changes.length) logAudit("INV_EDIT", fmClean.name + " " + changes.join(", "), typeof user !== "undefined" ? user : null);
+      if (changes.length) logAudit("INV_EDIT", fmClean.name + " " + changes.join(", "), typeof user !== "undefined" ? user : null, { item: oldMed });
     } else {
       saveInv([...inv, { ...fmClean, id: mkId(), addedFrom: "manual", uid: mkUID() }]);
       logAudit("INV_ADD", "Added " + fmClean.name + " Batch:" + fmClean.batch + " Stock:" + stockVal, typeof user !== "undefined" ? user : null);
     }
     setSf(false); setEd(null); setFm(blank); };
-  const doDelete = (id) => { var m = inv.find(function(x) { return x.id === id; }); askConfirm("Delete this medicine?\n" + (m ? m.name + " Batch:" + m.batch : ""), () => { saveInv(inv.filter((x) => x.id !== id)); if (m) logAudit("INV_DELETE", "Deleted " + m.name + " Batch:" + m.batch + " Stock:" + m.stock, typeof user !== "undefined" ? user : null); }); };
+  const doDelete = (id) => { var m = inv.find(function(x) { return x.id === id; }); askConfirm("Delete this medicine?\n" + (m ? m.name + " Batch:" + m.batch : ""), () => { saveInv(inv.filter((x) => x.id !== id)); if (m) logAudit("INV_DELETE", "Deleted " + m.name + " Batch:" + m.batch + " Stock:" + m.stock, typeof user !== "undefined" ? user : null, { item: m }); }); };
 
   const [zeroRackMsg, setZeroRackMsg] = useState("");
 
@@ -2408,7 +2410,7 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
               </div>
               <div style={{ textAlign: "right" }}>
                 <div style={{ fontWeight: 800, fontSize: 16, color: "#0D6B5B" }}>{fStock(m.stock, m.packQty)}</div>
-                <div style={{ fontSize: 12, color: "#555" }}>MRP: <input type="number" step="0.01" defaultValue={m.mrp} onBlur={function(e) { var v = parseFloat(e.target.value) || 0; if (v !== m.mrp) { logAudit("INV_EDIT", m.name + " MRP:" + m.mrp + "→" + v); saveInv(inv.map(function(x) { return x.id === m.id ? Object.assign({}, x, { mrp: v }) : x; })); } }} style={{ width: 60, border: "1px solid #eee", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "right", background: "#FAFAF7" }} /></div>
+                <div style={{ fontSize: 12, color: "#555" }}>MRP: <input type="number" step="0.01" defaultValue={m.mrp} onBlur={function(e) { var v = parseFloat(e.target.value) || 0; if (v !== m.mrp) { logAudit("INV_EDIT", m.name + " MRP:" + m.mrp + "→" + v, null, { item: Object.assign({}, m) }); saveInv(inv.map(function(x) { return x.id === m.id ? Object.assign({}, x, { mrp: v }) : x; })); } }} style={{ width: 60, border: "1px solid #eee", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "right", background: "#FAFAF7" }} /></div>
               </div>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6, fontSize: 11, color: "#888" }}>
@@ -2459,7 +2461,7 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
           {sh("name") && <td style={{ ...tds, fontWeight: 500, whiteSpace: "nowrap" }}>{m.name}</td>}
           {sh("batch") && <td style={{ ...tds, fontFamily: "monospace", fontSize: 11 }}>{m.batch}</td>}
           {sh("exp") && <td style={tds}>{m.expiry || "-"}</td>}
-          {sh("mrp") && <td style={{ ...tds, fontWeight: 600 }}><input type="number" step="0.01" defaultValue={m.mrp} onBlur={function(e) { var v = parseFloat(e.target.value) || 0; if (v !== m.mrp) { logAudit("INV_EDIT", m.name + " MRP:" + m.mrp + "→" + v); saveInv(inv.map(function(x) { return x.id === m.id ? Object.assign({}, x, { mrp: v }) : x; })); } }} style={{ width: 65, border: "1px solid #eee", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "right", background: "#FAFAF7" }} /></td>}
+          {sh("mrp") && <td style={{ ...tds, fontWeight: 600 }}><input type="number" step="0.01" defaultValue={m.mrp} onBlur={function(e) { var v = parseFloat(e.target.value) || 0; if (v !== m.mrp) { logAudit("INV_EDIT", m.name + " MRP:" + m.mrp + "→" + v, null, { item: Object.assign({}, m) }); saveInv(inv.map(function(x) { return x.id === m.id ? Object.assign({}, x, { mrp: v }) : x; })); } }} style={{ width: 65, border: "1px solid #eee", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "right", background: "#FAFAF7" }} /></td>}
           {isO && sh("ptr") && <td style={{ ...tds, color: "#B45309" }}>Rs.{f2(m.ptr)}</td>}
           {sh("stock") && <td style={tds}><span style={{ fontWeight: 700, color: m.stock < 3 ? "#DC2626" : m.stock < 5 ? "#D97706" : "#065F46" }}>{fStock(m.stock, m.packQty)}</span></td>}
           {sh("rack") && <td style={tds}>{m.rack || "-"}</td>}
@@ -2913,7 +2915,7 @@ function StockPage({ inv, saveInv, isO, mob }) {
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 }}>
               <span style={{ fontWeight: 800, fontSize: 16, color: sc }}>{fStock(m.stock, m.packQty)}</span>
-              <span style={{ fontSize: 12 }}>MRP: <input type="number" step="0.01" defaultValue={m.mrp} onBlur={function(e) { var v = parseFloat(e.target.value) || 0; if (v !== m.mrp) { logAudit("INV_EDIT", m.name + " MRP:" + m.mrp + "→" + v); saveInv(inv.map(function(x) { return x.id === m.id ? Object.assign({}, x, { mrp: v }) : x; })); } }} style={{ width: 60, border: "1px solid #eee", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "right", background: "#FAFAF7" }} /></span>
+              <span style={{ fontSize: 12 }}>MRP: <input type="number" step="0.01" defaultValue={m.mrp} onBlur={function(e) { var v = parseFloat(e.target.value) || 0; if (v !== m.mrp) { logAudit("INV_EDIT", m.name + " MRP:" + m.mrp + "→" + v, null, { item: Object.assign({}, m) }); saveInv(inv.map(function(x) { return x.id === m.id ? Object.assign({}, x, { mrp: v }) : x; })); } }} style={{ width: 60, border: "1px solid #eee", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "right", background: "#FAFAF7" }} /></span>
             </div>
           </div>;
         })}
@@ -2937,7 +2939,7 @@ function StockPage({ inv, saveInv, isO, mob }) {
             {sh("name") && <td style={{ ...tds, fontWeight: 500, whiteSpace: "nowrap" }}>{m.name}</td>}
             {sh("batch") && <td style={{ ...tds, fontFamily: "monospace", fontSize: 11 }}>{m.batch}</td>}
             {sh("exp") && <td style={{ ...tds, color: isE ? "#DC2626" : isES ? "#B45309" : "inherit" }}>{m.expiry || "-"}</td>}
-            {sh("mrp") && <td style={{ ...tds, fontWeight: 600 }}><input type="number" step="0.01" defaultValue={m.mrp} onBlur={function(e) { var v = parseFloat(e.target.value) || 0; if (v !== m.mrp) { logAudit("INV_EDIT", m.name + " MRP:" + m.mrp + "→" + v); saveInv(inv.map(function(x) { return x.id === m.id ? Object.assign({}, x, { mrp: v }) : x; })); } }} style={{ width: 65, border: "1px solid #eee", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "right", background: "#FAFAF7" }} /></td>}
+            {sh("mrp") && <td style={{ ...tds, fontWeight: 600 }}><input type="number" step="0.01" defaultValue={m.mrp} onBlur={function(e) { var v = parseFloat(e.target.value) || 0; if (v !== m.mrp) { logAudit("INV_EDIT", m.name + " MRP:" + m.mrp + "→" + v, null, { item: Object.assign({}, m) }); saveInv(inv.map(function(x) { return x.id === m.id ? Object.assign({}, x, { mrp: v }) : x; })); } }} style={{ width: 65, border: "1px solid #eee", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "right", background: "#FAFAF7" }} /></td>}
             {isO && sh("ptr") && <td style={{ ...tds, color: "#B45309" }}>Rs.{f2(m.ptr)}</td>}
             {sh("stock") && <td style={{ ...tds, fontWeight: 700, color: sc }}>{fStock(m.stock, m.packQty)}</td>}
             {sh("status") && <td style={tds}><Tag bg={sb} fg={sc}>{st}</Tag></td>}
@@ -4528,7 +4530,7 @@ function RackPage({ inv, saveInv, mob }) {
       return Object.assign({}, m, changes);
     });
     saveInv(next);
-    if (med) logAudit("INV_EDIT", med.name + " Rack→" + fixedRack + (editExpiryVal !== (med.expiry || "") ? " Expiry→" + editExpiryVal : ""));
+    if (med) logAudit("INV_EDIT", med.name + " Rack→" + fixedRack + (editExpiryVal !== (med.expiry || "") ? " Expiry→" + editExpiryVal : ""), null, { item: med });
     setEditingMed(null);
     setEditRackVal("");
     setEditStockVal("");
@@ -7262,6 +7264,8 @@ function AuditTrailPage({ mob }) {
   var [logs, setLogs] = useState([]);
   var [filter, setFilter] = useState("all");
   var [loading, setLoading] = useState(true);
+  var [revertMsg, setRevertMsg] = useState("");
+  var [reverting, setReverting] = useState(null);
 
   useEffect(function() {
     var unsub = fbListen("auditTrail", function(data) {
@@ -7276,39 +7280,98 @@ function AuditTrailPage({ mob }) {
   var filtered = filter === "all" ? logs : logs.filter(function(l) { return l.action.indexOf(filter) >= 0; });
 
   var actionColors = {
-    INV_ADD: { bg: "#D1FAE5", fg: "#065F46", label: "Added" },
-    INV_EDIT: { bg: "#DBEAFE", fg: "#1E40AF", label: "Edited" },
-    INV_DELETE: { bg: "#FEE2E2", fg: "#991B1B", label: "Deleted" },
+    INV_ADD:     { bg: "#D1FAE5", fg: "#065F46", label: "Added" },
+    INV_EDIT:    { bg: "#DBEAFE", fg: "#1E40AF", label: "Edited" },
+    INV_DELETE:  { bg: "#FEE2E2", fg: "#991B1B", label: "Deleted" },
     STOCK_MERGE: { bg: "#FEF3C7", fg: "#92400E", label: "Merged" },
-    BILL_EDIT: { bg: "#EDE9FE", fg: "#5B21B6", label: "Bill Edit" },
+    BILL_EDIT:   { bg: "#EDE9FE", fg: "#5B21B6", label: "Bill Edit" },
     BILL_DELETE: { bg: "#FEE2E2", fg: "#991B1B", label: "Bill Del" },
     BILL_RETURN: { bg: "#FCE7F3", fg: "#9D174D", label: "Return" },
-    PURCH_ADD: { bg: "#D1FAE5", fg: "#065F46", label: "Purchase" },
-    PURCH_DELETE: { bg: "#FEE2E2", fg: "#991B1B", label: "Purch Del" },
+    PURCH_ADD:   { bg: "#D1FAE5", fg: "#065F46", label: "Purchase" },
+    PURCH_DELETE:{ bg: "#FEE2E2", fg: "#991B1B", label: "Purch Del" },
+  };
+
+  // Actions that can be reverted and how
+  var canRevert = function(l) {
+    return !!l.snapshot && !!l.snapshot.item && (
+      l.action === "INV_DELETE" ||
+      l.action === "INV_EDIT" ||
+      l.action === "STOCK_MERGE"
+    );
+  };
+
+  var doRevert = function(l) {
+    setReverting(l.id);
+    var item = l.snapshot.item;
+    if (l.action === "INV_DELETE") {
+      // Restore deleted item back to inventory
+      db.ref(getOutletPath("inventory/" + item.id)).set(item).then(function() {
+        logAudit("INV_EDIT", "REVERT: Restored deleted item " + item.name + " Batch:" + item.batch);
+        setRevertMsg("✅ Restored \"" + item.name + "\" back to inventory.");
+        setReverting(null);
+        setTimeout(function() { setRevertMsg(""); }, 5000);
+      });
+    } else if (l.action === "INV_EDIT" || l.action === "STOCK_MERGE") {
+      // Restore item to its before-edit state
+      db.ref(getOutletPath("inventory/" + item.id)).set(item).then(function() {
+        logAudit("INV_EDIT", "REVERT: Restored " + item.name + " to previous state (before: " + l.details + ")");
+        setRevertMsg("✅ Reverted \"" + item.name + "\" to its previous state.");
+        setReverting(null);
+        setTimeout(function() { setRevertMsg(""); }, 5000);
+      }).catch(function() {
+        setRevertMsg("❌ Revert failed — item may no longer exist in inventory.");
+        setReverting(null);
+        setTimeout(function() { setRevertMsg(""); }, 5000);
+      });
+    }
   };
 
   return (
     <div>
       <h2 style={hds}>Change Log (Audit Trail)</h2>
-      <p style={{ fontSize: 12, color: "#888", marginBottom: 14 }}>Every inventory change, bill edit, and deletion is logged here with timestamp and user.</p>
+      <p style={{ fontSize: 12, color: "#888", marginBottom: 14 }}>Every inventory change, bill edit, and deletion is logged here with timestamp and user. Inventory changes can be reverted.</p>
+
+      {revertMsg && <div style={{ marginBottom: 12, padding: "10px 16px", background: revertMsg.startsWith("✅") ? "#F0FDF4" : "#FEF2F2", border: "1px solid " + (revertMsg.startsWith("✅") ? "#6EE7B7" : "#FCA5A5"), borderRadius: 8, fontSize: 13, fontWeight: 600, color: revertMsg.startsWith("✅") ? "#065F46" : "#DC2626" }}>{revertMsg}</div>}
+
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
         {[["all","All"],["INV","Inventory"],["BILL","Bills"],["PURCH","Purchases"],["STOCK","Stock Merge"]].map(function(f) {
           return <button key={f[0]} onClick={function() { setFilter(f[0]); }} style={{ padding: "6px 14px", borderRadius: 8, border: filter === f[0] ? "2px solid #0D6B5B" : "1px solid #ddd", background: filter === f[0] ? "#D1FAE5" : "#fff", cursor: "pointer", fontSize: 12, fontWeight: filter === f[0] ? 700 : 400 }}>{f[1]}</button>;
         })}
       </div>
+
       {loading ? <div style={{ padding: 20, textAlign: "center", color: "#888" }}>Loading audit trail...</div> :
-       filtered.length === 0 ? <div style={{ padding: 20, textAlign: "center", color: "#888" }}>No audit entries yet. Changes will appear here automatically.</div> :
+       filtered.length === 0 ? <div style={{ padding: 20, textAlign: "center", color: "#888" }}>No audit entries yet.</div> :
        <div style={{ ...cds, padding: 0, overflow: "hidden" }}><div style={{ overflowX: "auto" }}>
          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 400 }}>
-           <thead><tr><th style={ths}>When</th><th style={ths}>Type</th><th style={ths}>Details</th><th style={ths}>User</th></tr></thead>
+           <thead><tr>
+             <th style={ths}>When</th>
+             <th style={ths}>Type</th>
+             <th style={ths}>Details</th>
+             <th style={ths}>User</th>
+             <th style={ths}>Revert</th>
+           </tr></thead>
            <tbody>
              {filtered.slice(0, 200).map(function(l) {
                var ac = actionColors[l.action] || { bg: "#F3F4F6", fg: "#374151", label: l.action };
-               return <tr key={l.id}>
+               var revertable = canRevert(l);
+               var isReverting = reverting === l.id;
+               return <tr key={l.id} style={{ borderBottom: "1px solid #F3F4F6" }}>
                  <td style={{ ...tds, whiteSpace: "nowrap", fontSize: 11 }}>{l.tsDisplay || fDT(l.ts)}</td>
                  <td style={tds}><span style={{ background: ac.bg, color: ac.fg, padding: "2px 10px", borderRadius: 14, fontSize: 10.5, fontWeight: 600, whiteSpace: "nowrap" }}>{ac.label}</span></td>
                  <td style={{ ...tds, fontSize: 12, maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis" }}>{l.details}</td>
                  <td style={{ ...tds, fontSize: 11, color: "#888" }}>{l.user}</td>
+                 <td style={{ ...tds, textAlign: "center" }}>
+                   {revertable
+                     ? <button
+                         onClick={function() { doRevert(l); }}
+                         disabled={isReverting}
+                         style={{ padding: "3px 10px", background: isReverting ? "#9CA3AF" : "#FEF3C7", color: isReverting ? "#fff" : "#92400E", border: "1px solid " + (isReverting ? "#9CA3AF" : "#FCD34D"), borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: isReverting ? "not-allowed" : "pointer", whiteSpace: "nowrap" }}
+                         title={"Restore: " + (l.snapshot.item ? l.snapshot.item.name : "")}
+                       >
+                         {isReverting ? "⏳ Reverting…" : "↩ Revert"}
+                       </button>
+                     : <span style={{ color: "#D1D5DB", fontSize: 11 }}>—</span>}
+                 </td>
                </tr>;
              })}
            </tbody>
