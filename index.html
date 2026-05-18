@@ -7582,7 +7582,19 @@ function CsvImportPage({ inv, saveInv, bills, saveBills, mob, user, askConfirm }
     const iBillNo = idx("Bill No."), iBilledOn = idx("Billed On"), iEntry = idx("Entry By");
     const iCustomer = idx("Retailer/Customer Name"), iContact = idx("Contact No");
     const iItem = idx("Item Name"), iBatch = idx("Batch No."), iExpiry = idx("Expiry");
-    const iQty = idx("Qty Sold"), iMRP = idx("MRP"), iDiscPct = idx("Discount %"), iDiscAmt = idx("Discount Amount"), iGST = idx("IGST/SGST/CGST%");
+    const iQty = idx("Qty Sold"), iMRP = idx("MRP"), iDiscPct = idx("Discount %"), iGST = idx("IGST/SGST/CGST%");
+    const iNetAmt = idx("Net Amount"), iTotalProfit = idx("Total Profit"), iMarginPct = idx("Margin Percent");
+
+    // Parse qty field: handles plain numbers and loose-tablet format "strips:tablets" e.g. "0:05" = 5 loose tablets
+    function parseQtyField(raw) {
+      if (raw.includes(":")) {
+        const parts = raw.split(":");
+        const strips = parseInt(parts[0], 10) || 0;
+        const tablets = parseInt(parts[1], 10) || 0;
+        return { qty: strips * 10 + tablets, loose: strips === 0 && tablets > 0 };
+      }
+      return { qty: parseFloat(raw) || 0, loose: false };
+    }
 
     const billMap = {};
     for (let r = 1; r < lines.length; r++) {
@@ -7620,14 +7632,22 @@ function CsvImportPage({ inv, saveInv, bills, saveBills, mob, user, askConfirm }
           source: "csv_import"
         };
       }
-      const qty = parseFloat(g(iQty)) || 0;
+      const { qty, loose } = parseQtyField(g(iQty));
       const mrp = parseFloat(g(iMRP)) || 0;
       const discPct = parseFloat(g(iDiscPct)) || 0;
-      const discAmt = parseFloat(g(iDiscAmt)) || 0;
       const gstRate = parseFloat(g(iGST)) || 5;
+      // Use Net Amount as the authoritative sale amount (already handles GST, pack pricing, rounding)
+      const netAmount = iNetAmt >= 0 ? (parseFloat(g(iNetAmt)) || 0) : (mrp * qty * (1 - discPct / 100));
+      const totalProfit = iTotalProfit >= 0 ? (parseFloat(g(iTotalProfit)) || 0) : 0;
+      const marginPct = iMarginPct >= 0 ? (parseFloat(g(iMarginPct)) || 0) : 0;
       const itemName = g(iItem);
       if (!itemName) continue;
-      // Try to find in inventory by name or batch
+      // Derive unit cost from Net Amount and Total Profit
+      const lineCost = netAmount - totalProfit;                         // what was paid to distributor for this line
+      const unitCost = qty > 0 ? Math.round((lineCost / qty) * 100) / 100 : 0;
+      // Back-calculate PTR (ex-GST cost per unit) for profit margin page compatibility
+      const ptr = Math.round((unitCost / (1 + gstRate / 100)) * 100) / 100;
+      // Try to find in inventory by batch first, then by name
       const batch = g(iBatch);
       const invMatch = inv.find(m =>
         m.batch === batch ||
@@ -7639,15 +7659,22 @@ function CsvImportPage({ inv, saveInv, bills, saveBills, mob, user, askConfirm }
         batch: batch,
         expiry: g(iExpiry),
         qty: qty,
+        loose: loose,
         mrp: mrp,
         discount: discPct,
-        discountRs: discAmt,
+        discountRs: Math.round((mrp * qty - netAmount) * 100) / 100,
         gstRate: gstRate,
-        amount: mrp * qty - discAmt,
+        // Use Net Amount directly — authoritative from billing system
+        amount: netAmount,
         unitPrice: mrp,
+        unitPtr: ptr,
+        ptr: ptr,
+        unitCost: unitCost,
+        marginPct: marginPct,   // signals isMigrated → PTR-editable mode in profit margin page
         mid: invMatch ? invMatch.id : null,
         invMatchName: invMatch ? invMatch.name : null,
         invStock: invMatch ? invMatch.stock : null,
+        invRack: invMatch ? (invMatch.rack || "") : null,
       });
     }
     const result = Object.values(billMap);
@@ -7743,11 +7770,11 @@ function CsvImportPage({ inv, saveInv, bills, saveBills, mob, user, askConfirm }
 
     csvBills.forEach(b => {
       if (existingNos.has(b.billNo)) { skipped++; return; }
-      // Compute totals
-      const totalMRP = b.items.reduce((s, it) => s + it.unitPrice * it.qty, 0);
+      // Compute totals — use item.amount (= Net Amount from CSV) as the authoritative per-line value
+      const totalMRP = b.items.reduce((s, it) => s + it.mrp * it.qty, 0);
       const totalDiscount = b.items.reduce((s, it) => s + (it.discountRs || 0), 0);
+      const netAmount = Math.round(b.items.reduce((s, it) => s + (it.amount || 0), 0) * 100) / 100;
       const tGST = b.items.reduce((s, it) => { const a = it.amount; return s + (a - a / (1 + it.gstRate / 100)); }, 0);
-      const netAmount = Math.max(0, Math.round((totalMRP - totalDiscount) * 100) / 100);
       const fullBill = {
         ...b,
         totalMRP, totalDiscount, netAmount,
@@ -7872,6 +7899,7 @@ function CsvImportPage({ inv, saveInv, bills, saveBills, mob, user, askConfirm }
                       <th style={{ padding: "6px 8px", textAlign: "center", color: "#D97706" }}>Deduct Qty ✏️</th>
                       <th style={{ padding: "6px 8px", textAlign: "right" }}>MRP</th>
                       <th style={{ padding: "6px 8px", textAlign: "right" }}>Amount</th>
+                      <th style={{ padding: "6px 8px", textAlign: "center" }}>Rack</th>
                       <th style={{ padding: "6px 8px", textAlign: "left" }}>Inv Match</th>
                     </tr>
                   </thead>
@@ -7894,9 +7922,12 @@ function CsvImportPage({ inv, saveInv, bills, saveBills, mob, user, askConfirm }
                               style={{ width: 16, height: 16, cursor: hasMatch ? "pointer" : "not-allowed", accentColor: "#059669" }}
                             />
                           </td>
-                          <td style={{ padding: "7px 8px", fontWeight: 500 }}>{it.name}</td>
+                          <td style={{ padding: "7px 8px", fontWeight: 500 }}>
+                            {it.name}
+                            {it.loose && <span style={{ marginLeft: 5, background: "#FEF3C7", color: "#92400E", borderRadius: 4, padding: "1px 5px", fontSize: 10, fontWeight: 700 }}>Loose</span>}
+                          </td>
                           <td style={{ padding: "7px 8px", textAlign: "center", fontFamily: "monospace", color: "#555", fontSize: 11 }}>{it.batch}</td>
-                          <td style={{ padding: "7px 8px", textAlign: "center", fontWeight: 600, color: "#374151" }}>{it.qty}</td>
+                          <td style={{ padding: "7px 8px", textAlign: "center", fontWeight: 600, color: "#374151" }}>{it.qty}{it.loose ? " pcs" : ""}</td>
                           <td style={{ padding: "7px 8px", textAlign: "center" }}>
                             {checked && hasMatch ? (
                               <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "center" }}>
@@ -7918,6 +7949,11 @@ function CsvImportPage({ inv, saveInv, bills, saveBills, mob, user, askConfirm }
                           </td>
                           <td style={{ padding: "7px 8px", textAlign: "right" }}>₹{f2(it.mrp)}</td>
                           <td style={{ padding: "7px 8px", textAlign: "right", fontWeight: 600, color: "#0D6B5B" }}>₹{f2(it.amount)}</td>
+                          <td style={{ padding: "7px 8px", textAlign: "center" }}>
+                            {it.invRack
+                              ? <span style={{ background: "#FEF3C7", color: "#92400E", borderRadius: 4, padding: "2px 7px", fontSize: 11, fontWeight: 700 }}>🗄 {it.invRack}</span>
+                              : <span style={{ color: "#D1D5DB", fontSize: 11 }}>—</span>}
+                          </td>
                           <td style={{ padding: "7px 8px", fontSize: 11 }}>
                             {hasMatch
                               ? <span style={{ color: "#059669" }}>✅ {it.invMatchName} <span style={{ color: "#888" }}>({fStock(it.invStock, 0)} in stock{checked ? ", will deduct " + dqVal : ""})</span></span>
