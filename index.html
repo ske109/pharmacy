@@ -4535,6 +4535,26 @@ function RackPage({ inv, saveInv, mob }) {
   };
 
   const [fixRackMsg, setFixRackMsg] = useState("");
+  const [zeroStockMsg, setZeroStockMsg] = useState("");
+
+  // Remove zero-stock items from their assigned racks (clears rack field only, keeps inventory record)
+  var clearZeroStockFromRacks = function() {
+    var zeroRacked = inv.filter(function(m) { return !!m.rack && (m.stock || 0) <= 0; });
+    if (zeroRacked.length === 0) {
+      setZeroStockMsg("✅ No zero-stock items found in any rack.");
+      setTimeout(function() { setZeroStockMsg(""); }, 4000);
+      return;
+    }
+    var zeroIds = new Set(zeroRacked.map(function(m) { return m.id; }));
+    var next = inv.map(function(m) {
+      if (!zeroIds.has(m.id)) return m;
+      return Object.assign({}, m, { rack: "" });
+    });
+    saveInv(next);
+    logAudit("INV_EDIT", "Cleared rack assignment for " + zeroRacked.length + " zero-stock item(s): " + zeroRacked.map(function(m) { return m.name + " [" + m.rack + "]"; }).join(", "));
+    setZeroStockMsg("✅ Removed " + zeroRacked.length + " zero-stock item(s) from their racks.");
+    setTimeout(function() { setZeroStockMsg(""); }, 5000);
+  };
 
   // Normalize a rack name: remove spaces between letter prefix and number (e.g. "A 1" → "A1", "BH- 3" → "BH-3")
   var normalizeRack = function(rack) {
@@ -4680,7 +4700,9 @@ function RackPage({ inv, saveInv, mob }) {
         {showAll && <input value={filterRack} onChange={function(e) { setFilterRack(e.target.value); }} placeholder="Filter racks (e.g. A1, BH-5)" style={{ ...inps, maxWidth: 200 }} />}
         {showAll && <span style={{ fontSize: 11, color: "#888" }}>Showing max 50. Type to filter.</span>}
         <button onClick={fixAllRacks} style={{ ...bts(false), padding: "6px 14px", fontSize: 12, background: "#EEF2FF", color: "#4338CA", border: "1px solid #C7D2FE", fontWeight: 600 }} title="Remove spaces in rack names (e.g. 'A 1' → 'A1') and register any new rack names">🔧 Fix Rack Names</button>
+        <button onClick={clearZeroStockFromRacks} style={{ ...bts(false), padding: "6px 14px", fontSize: 12, background: "#FEF2F2", color: "#DC2626", border: "1px solid #FCA5A5", fontWeight: 600 }} title="Remove zero-stock items from their assigned racks (only affects rack-assigned items)">🧹 Clear Zero-Stock from Racks</button>
         {fixRackMsg && <span style={{ fontSize: 11, color: "#059669", fontWeight: 500, background: "#F0FDF4", padding: "4px 10px", borderRadius: 6, border: "1px solid #BBF7D0" }}>{fixRackMsg}</span>}
+        {zeroStockMsg && <span style={{ fontSize: 11, color: zeroStockMsg.startsWith("✅ No") ? "#059669" : "#DC2626", fontWeight: 500, background: zeroStockMsg.startsWith("✅ No") ? "#F0FDF4" : "#FEF2F2", padding: "4px 10px", borderRadius: 6, border: zeroStockMsg.startsWith("✅ No") ? "1px solid #BBF7D0" : "1px solid #FCA5A5" }}>{zeroStockMsg}</span>}
         {dupMsg && <span style={{ fontSize: 11, color: "#6D28D9", fontWeight: 500, background: "#F5F3FF", padding: "4px 10px", borderRadius: 6, border: "1px solid #DDD6FE" }}>{dupMsg}</span>}
       </div>
 
@@ -8339,18 +8361,13 @@ function CsvPurchImportPage({ inv, saveInv, bills, purch, savePurch, mob, user, 
             });
             setCsvInvoices(results);
             setExpandedInv(0);
-            // Default toggles: all ON, qty = CSV qty minus sold qty, rack = invRack or ""
+            // Default toggles: all ON, qty = CSV qty, rack = invRack or ""
             var tInit = {}, qInit = {}, rInit = {};
             results.forEach(function(inv2, ii) {
               inv2.items.forEach(function(it, ji) {
                 var k = ii + "|" + ji;
-                var csvQty = (it.qty || 0) + (it.freeQty || 0);
-                var soldQty = it.wasSold ? (it.soldQty || 0) : 0;
-                // Net qty to add = purchased qty minus what was already sold
-                var netQty = Math.max(0, csvQty - soldQty);
-                // If fully sold out, default to unchecked; otherwise checked
-                tInit[k] = netQty > 0;
-                qInit[k] = netQty;
+                tInit[k] = true;
+                qInit[k] = (it.qty || 0) + (it.freeQty || 0);
                 rInit[k] = it.invRack || "";
               });
             });
@@ -8371,31 +8388,14 @@ function CsvPurchImportPage({ inv, saveInv, bills, purch, savePurch, mob, user, 
     setAddToggles(function(prev) { var n = Object.assign({}, prev); items.forEach(function(_, ji) { n[invIdx+"|"+ji] = val; }); return n; });
   }
   function toggleAll(val) {
-    if (val && csvInvoices) {
-      // When enabling all: net qty = csvQty - soldQty; skip fully-sold
-      var tNext = {}, qNext = {};
-      csvInvoices.forEach(function(inv2, ii) {
-        inv2.items.forEach(function(it, ji) {
-          var k = ii + "|" + ji;
-          var csvQty = (it.qty || 0) + (it.freeQty || 0);
-          var soldQty = it.wasSold ? (it.soldQty || 0) : 0;
-          var netQty = Math.max(0, csvQty - soldQty);
-          tNext[k] = netQty > 0;
-          qNext[k] = netQty;
-        });
-      });
-      setAddToggles(function(prev) { return Object.assign({}, prev, tNext); });
-      setAddQty(function(prev) { return Object.assign({}, prev, qNext); });
-    } else {
-      setAddToggles(function(prev) { var n = Object.assign({}, prev); Object.keys(n).forEach(function(k) { n[k] = val; }); return n; });
-    }
+    setAddToggles(function(prev) { var n = Object.assign({}, prev); Object.keys(n).forEach(function(k) { n[k] = val; }); return n; });
   }
 
   function doImport() {
     if (!csvInvoices || !csvInvoices.length) return;
     var existingInvNos = {};
     purch.forEach(function(p) { if (p.invoiceNo) existingInvNos[p.invoiceNo.toLowerCase()] = true; });
-    var addedInvoices = 0, skippedInvoices = 0, invLinesAdded = 0, invLinesUpdated = 0, soldSkipped = 0;
+    var addedInvoices = 0, skippedInvoices = 0, invLinesAdded = 0, invLinesUpdated = 0;
     var newPurch = purch.slice();
     var updInv = inv.map(function(m) { return Object.assign({}, m); });
 
@@ -8404,13 +8404,8 @@ function CsvPurchImportPage({ inv, saveInv, bills, purch, savePurch, mob, user, 
       var purchItems = [];
       csvInv.items.forEach(function(it, itemIdx) {
         var k = invIdx + "|" + itemIdx;
-        if (!addToggles[k]) {
-          // Track if unchecked because fully sold
-          if (it.wasSold && addQty[k] === 0) soldSkipped++;
-          return;
-        }
+        if (!addToggles[k]) return;
         var addAmt = addQty[k] !== undefined ? addQty[k] : ((it.qty||0) + (it.freeQty||0));
-        if (addAmt <= 0) { soldSkipped++; return; } // sold-out, skip inventory update
         var rack = rackAssign[k] || it.invRack || "";
         purchItems.push(it);
         // Update or create inventory
@@ -8440,8 +8435,8 @@ function CsvPurchImportPage({ inv, saveInv, bills, purch, savePurch, mob, user, 
 
     savePurch(newPurch);
     saveInv(updInv);
-    logAudit("CSV_PURCH_IMPORT", "Bulk purchase import: " + addedInvoices + " invoices, " + invLinesAdded + " new inv items, " + invLinesUpdated + " updated, " + skippedInvoices + " skipped, " + soldSkipped + " skipped (already sold)", user);
-    setDone({ addedInvoices: addedInvoices, skippedInvoices: skippedInvoices, invLinesAdded: invLinesAdded, invLinesUpdated: invLinesUpdated, soldSkipped: soldSkipped });
+    logAudit("CSV_PURCH_IMPORT", "Bulk purchase import: " + addedInvoices + " invoices, " + invLinesAdded + " new inv items, " + invLinesUpdated + " updated, " + skippedInvoices + " skipped", user);
+    setDone({ addedInvoices: addedInvoices, skippedInvoices: skippedInvoices, invLinesAdded: invLinesAdded, invLinesUpdated: invLinesUpdated });
     setCsvInvoices(null);
   }
 
@@ -8516,7 +8511,7 @@ function CsvPurchImportPage({ inv, saveInv, bills, purch, savePurch, mob, user, 
       {done && <div style={{ ...cs.card, background: "#F0FDF4", border: "1px solid #6EE7B7" }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: "#065F46", marginBottom: 4 }}>✅ Purchase Import Complete</div>
         <div style={{ fontSize: 13, color: "#047857" }}>
-          <b>{done.addedInvoices}</b> invoice(s) added &nbsp;•&nbsp; <b>{done.invLinesAdded}</b> new inventory items &nbsp;•&nbsp; <b>{done.invLinesUpdated}</b> existing items updated &nbsp;•&nbsp; <b>{done.skippedInvoices}</b> skipped (duplicate){done.soldSkipped > 0 ? <span> &nbsp;•&nbsp; <b>{done.soldSkipped}</b> item(s) not added to inventory (already sold)</span> : null}
+          <b>{done.addedInvoices}</b> invoice(s) added &nbsp;•&nbsp; <b>{done.invLinesAdded}</b> new inventory items &nbsp;•&nbsp; <b>{done.invLinesUpdated}</b> existing items updated &nbsp;•&nbsp; <b>{done.skippedInvoices}</b> skipped (duplicate)
         </div>
       </div>}
 
@@ -8628,7 +8623,7 @@ function CsvPurchImportPage({ inv, saveInv, bills, purch, savePurch, mob, user, 
 
         {/* How to use */}
         <div style={{ padding: "10px 14px", background: "#FFF7ED", border: "1px solid #FCD34D", borderRadius: 8, marginBottom: 14, fontSize: 12, color: "#92400E" }}>
-          <b>How it works:</b> All items are <b>selected by default</b>. When a Sales CSV is loaded, items already sold are <b>automatically deducted</b> — the "Add Qty" is set to <b>Purchased Qty − Sold Qty</b>. Items fully sold out are unchecked and skipped. Edit quantity, assign racks, then click Import.
+          <b>How it works:</b> All items are <b>selected by default</b>. Uncheck items you don't want to add. Edit quantity, assign racks, then click Import. Items matching existing inventory will have stock added; new items will be created.
         </div>
 
         {/* Invoice list */}
@@ -8720,18 +8715,10 @@ function CsvPurchImportPage({ inv, saveInv, bills, purch, savePurch, mob, user, 
                             {it.invBatchMatch === "none" && it.invRack && <div style={{ fontSize: 9, color: "#059669", marginTop: 1 }}>Rack from same medicine</div>}
                           </td>
                           {salesData && <td style={{ padding: "7px 8px", textAlign: "center", fontSize: 11 }}>
-                            {it.wasSold ? (function(){
-                              var csvQty = (it.qty||0)+(it.freeQty||0);
-                              var soldQty = it.soldQty || 0;
-                              var netQty = Math.max(0, csvQty - soldQty);
-                              return <div>
-                                <span style={{ background: "#FCE7F3", color: "#9D174D", borderRadius: 4, padding: "2px 7px", fontWeight: 600, display: "block", marginBottom: 3 }}>🛒 {soldQty} sold</span>
-                                {netQty > 0
-                                  ? <span style={{ background: "#D1FAE5", color: "#065F46", borderRadius: 4, padding: "2px 7px", fontWeight: 600, display: "block", marginBottom: 3 }}>+{netQty} to add</span>
-                                  : <span style={{ background: "#FEE2E2", color: "#DC2626", borderRadius: 4, padding: "2px 7px", fontWeight: 700, display: "block", marginBottom: 3 }}>⛔ Skip — fully sold</span>}
-                                {it.soldBills.length > 0 && <div style={{ fontSize: 9, color: "#888", marginTop: 2 }}>{it.soldBills.slice(0,3).join(", ")}{it.soldBills.length > 3 ? "…" : ""}</div>}
-                              </div>;
-                            })() : <span style={{ background: "#E0E7FF", color: "#3730A3", borderRadius: 4, padding: "2px 7px", fontWeight: 600 }}>📦 Not sold</span>}
+                            {it.wasSold ? <div>
+                              <span style={{ background: "#FCE7F3", color: "#9D174D", borderRadius: 4, padding: "2px 7px", fontWeight: 600 }}>🛒 {it.soldQty} sold</span>
+                              {it.soldBills.length > 0 && <div style={{ fontSize: 9, color: "#888", marginTop: 2 }}>{it.soldBills.slice(0,3).join(", ")}{it.soldBills.length > 3 ? "…" : ""}</div>}
+                            </div> : <span style={{ background: "#E0E7FF", color: "#3730A3", borderRadius: 4, padding: "2px 7px", fontWeight: 600 }}>📦 In stock</span>}
                           </td>}
                         </tr>
                       );
