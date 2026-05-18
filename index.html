@@ -8309,14 +8309,17 @@ function CsvPurchImportPage({ inv, saveInv, bills, purch, savePurch, mob, user, 
               inv2.items.forEach(function(it) {
                 var nameL = it.name.toLowerCase().trim();
                 var batchL = (it.batch || "").trim();
-                // Inventory match
+                // Inventory match — try exact batch first, then name-only
                 var invMatch = inv.find(function(m) { return m.batch === batchL && m.name.toLowerCase() === nameL; });
                 if (!invMatch) invMatch = inv.find(function(m) { return m.name.toLowerCase() === nameL; });
                 it.invMatch = invMatch ? invMatch.name : null;
                 it.invMatchId = invMatch ? invMatch.id : null;
-                it.invRack = invMatch ? (invMatch.rack || "") : "";
                 it.invStock = invMatch ? invMatch.stock : null;
                 it.invBatchMatch = invMatch ? (invMatch.batch === batchL ? "exact" : "name") : "none";
+                // Rack: always find the best rack — from exact match, name match, or ANY same-name medicine with a rack
+                var rackSource = invMatch && invMatch.rack ? invMatch : inv.find(function(m) { return m.name.toLowerCase() === nameL && m.rack; });
+                it.invRack = rackSource ? (rackSource.rack || "") : "";
+                it.rackAutoSource = rackSource ? (rackSource.batch === batchL ? "exact" : "same-name") : "";
                 // Sales match
                 if (salesData) {
                   var saleKey = nameL + "|||" + batchL;
@@ -8522,18 +8525,33 @@ function CsvPurchImportPage({ inv, saveInv, bills, purch, savePurch, mob, user, 
 
         {/* Racks Affected - clickable chips */}
         {rackList.length > 0 && <div style={{ ...cs.card, padding: "12px 16px", marginBottom: 10 }}>
+          {/* No Rack warning */}
+          {rackMap["__unassigned__"] && rackMap["__unassigned__"].items.length > 0 && <div style={{ padding: "10px 14px", background: "#FEF2F2", border: "2px solid #FCA5A5", borderRadius: 8, marginBottom: 12, display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer" }} onClick={function(){setRackFilter(rackFilter === "unassigned" ? null : "unassigned");}}>
+            <div style={{ fontSize: 28 }}>⚠️</div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#DC2626" }}>{rackMap["__unassigned__"].items.length} item(s) have no rack assigned</div>
+              <div style={{ fontSize: 12, color: "#991B1B", marginTop: 2 }}>These items will be added to inventory without a rack location. Click to filter and assign racks before importing.</div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+                {rackMap["__unassigned__"].items.slice(0, 8).map(function(med, mi) {
+                  return <span key={mi} style={{ padding: "3px 8px", background: "#FEE2E2", border: "1px solid #FCA5A5", borderRadius: 6, fontSize: 11, color: "#991B1B", fontWeight: 500 }}>{med.name.length > 25 ? med.name.slice(0,25)+"…" : med.name}</span>;
+                })}
+                {rackMap["__unassigned__"].items.length > 8 && <span style={{ padding: "3px 8px", background: "#FEE2E2", borderRadius: 6, fontSize: 11, color: "#991B1B" }}>+{rackMap["__unassigned__"].items.length - 8} more</span>}
+              </div>
+            </div>
+            <div style={{ padding: "6px 14px", background: rackFilter === "unassigned" ? "#DC2626" : "#fff", color: rackFilter === "unassigned" ? "#fff" : "#DC2626", border: "1px solid #DC2626", borderRadius: 8, fontWeight: 600, fontSize: 12, whiteSpace: "nowrap" }}>{rackFilter === "unassigned" ? "✕ Clear Filter" : "Filter & Fix →"}</div>
+          </div>}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: "#0C2E24" }}>🗄 Racks Affected <span style={{ fontWeight: 400, color: "#888", fontSize: 12 }}>({rackList.length} racks, click to filter)</span></div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#0C2E24" }}>🗄 Racks Affected <span style={{ fontWeight: 400, color: "#888", fontSize: 12 }}>({rackList.filter(function(r){return r!=="__unassigned__";}).length} racks, click to filter)</span></div>
             <button onClick={function(){setRackExpanded(!rackExpanded);}} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#0D6B5B", fontWeight: 600 }}>{rackExpanded ? "Collapse ▲" : "Show All ▼"}</button>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {(rackExpanded ? rackList : rackList.slice(0, 15)).map(function(rk) {
+            {(rackExpanded ? rackList : rackList.slice(0, 15)).filter(function(rk){return rk !== "__unassigned__";}).map(function(rk) {
               var info = rackMap[rk];
-              var rackLabel = rk === "__unassigned__" ? "No Rack" : rk;
-              var filterVal = rk === "__unassigned__" ? "unassigned" : info.rack;
+              var filterVal = info.rack;
               var isActive = rackFilter === filterVal;
-              return <div key={rk} onClick={function(){setRackFilter(isActive ? null : filterVal);}} style={{ position: "relative", padding: "6px 12px", borderRadius: 8, cursor: "pointer", transition: "all 0.15s", border: isActive ? "2px solid #0D6B5B" : "1px solid #D4D0C8", background: isActive ? "#D1FAE5" : "#FAFAF7", transform: isActive ? "scale(1.04)" : "none" }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: isActive ? "#065F46" : "#0C2E24" }}>🗄 {rackLabel}</div>
+              var hasNewBatch = info.items.some(function(m){return m.isNew;});
+              return <div key={rk} onClick={function(){setRackFilter(isActive ? null : filterVal);}} style={{ position: "relative", padding: "6px 12px", borderRadius: 8, cursor: "pointer", transition: "all 0.15s", border: isActive ? "2px solid #0D6B5B" : hasNewBatch ? "1px solid #93C5FD" : "1px solid #D4D0C8", background: isActive ? "#D1FAE5" : hasNewBatch ? "#EFF6FF" : "#FAFAF7", transform: isActive ? "scale(1.04)" : "none" }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: isActive ? "#065F46" : "#0C2E24" }}>🗄 {rk} {hasNewBatch && <span style={{ fontSize: 9, background: "#DBEAFE", color: "#1E40AF", borderRadius: 3, padding: "0 4px", fontWeight: 600, verticalAlign: "middle" }}>+NEW BATCH</span>}</div>
                 <div style={{ fontSize: 11, color: "#888" }}>{info.items.length} item{info.items.length > 1 ? "s" : ""} &nbsp;•&nbsp; +{info.items.reduce(function(s,i){return s+i.qty;},0)} units</div>
                 {isActive && <div style={{ marginTop: 6, borderTop: "1px solid #C6F6D5", paddingTop: 6 }}>
                   {info.items.map(function(med, mi) {
@@ -8541,14 +8559,14 @@ function CsvPurchImportPage({ inv, saveInv, bills, purch, savePurch, mob, user, 
                       <span style={{ color: "#0D6B5B", fontWeight: 600, minWidth: 35 }}>+{med.qty}</span>
                       <span style={{ flex: 1 }}>{med.name}</span>
                       {med.batch && <span style={{ fontFamily: "monospace", fontSize: 10, color: "#888" }}>{med.batch}</span>}
-                      {med.isNew && <span style={{ background: "#DBEAFE", color: "#1E40AF", borderRadius: 3, padding: "0 4px", fontSize: 9, fontWeight: 600 }}>NEW</span>}
+                      {med.isNew && <span style={{ background: "#DBEAFE", color: "#1E40AF", borderRadius: 3, padding: "0 4px", fontSize: 9, fontWeight: 600 }}>NEW BATCH</span>}
                       {med.wasSold && <span style={{ background: "#FCE7F3", color: "#9D174D", borderRadius: 3, padding: "0 4px", fontSize: 9, fontWeight: 600 }}>SOLD</span>}
                     </div>;
                   })}
                 </div>}
               </div>;
             })}
-            {!rackExpanded && rackList.length > 15 && <div style={{ padding: "6px 12px", borderRadius: 8, background: "#F3F4F6", color: "#888", fontSize: 12, display: "flex", alignItems: "center" }}>+{rackList.length - 15} more…</div>}
+            {!rackExpanded && rackList.filter(function(r){return r!=="__unassigned__";}).length > 15 && <div style={{ padding: "6px 12px", borderRadius: 8, background: "#F3F4F6", color: "#888", fontSize: 12, display: "flex", alignItems: "center" }}>+{rackList.filter(function(r){return r!=="__unassigned__";}).length - 15} more…</div>}
           </div>
         </div>}
 
@@ -8658,17 +8676,21 @@ function CsvPurchImportPage({ inv, saveInv, bills, purch, savePurch, mob, user, 
                             {checked ? <input type="number" min="0" step="1" value={qVal} onChange={function(e){var v=Math.max(0,parseFloat(e.target.value)||0); setAddQty(function(prev){var n=Object.assign({},prev);n[k]=v;return n;});}} onClick={function(e){e.stopPropagation();}} style={{ width: 60, padding: "3px 6px", border: qDiff?"2px solid #D97706":"1px solid #D1D5DB", borderRadius: 5, fontSize: 12, textAlign: "center", background: qDiff?"#FFFBEB":"#fff", fontWeight: 600 }} /> : <span style={{ color: "#9CA3AF", fontSize: 11 }}>—</span>}
                           </td>
                           <td style={{ padding: "7px 8px", textAlign: "center" }}>
-                            {checked ? <select value={rackVal} onChange={function(e){setRackAssign(function(prev){var n=Object.assign({},prev);n[k]=e.target.value;return n;});}} style={{ padding: "3px 4px", border: "1px solid #D1D5DB", borderRadius: 5, fontSize: 11, background: "#fff", maxWidth: 90 }}>
-                              <option value="">No rack</option>
-                              {it.invRack && <option value={it.invRack}>🗄 {it.invRack} (existing)</option>}
+                            {checked ? <div>
+                              <select value={rackVal} onChange={function(e){setRackAssign(function(prev){var n=Object.assign({},prev);n[k]=e.target.value;return n;});}} style={{ padding: "3px 4px", border: !rackVal ? "2px solid #DC2626" : "1px solid #D1D5DB", borderRadius: 5, fontSize: 11, background: !rackVal ? "#FEF2F2" : "#fff", maxWidth: 100, fontWeight: !rackVal ? 700 : 400, color: !rackVal ? "#DC2626" : "#111" }}>
+                              <option value="">{!rackVal ? "⚠️ Assign Rack!" : "No rack"}</option>
+                              {it.invRack && <option value={it.invRack}>🗄 {it.invRack} {it.rackAutoSource === "same-name" ? "(same med)" : "(existing)"}</option>}
                               {ALL_RACKS.filter(function(r){return r !== it.invRack;}).slice(0,200).map(function(r){return <option key={r} value={r}>{r}</option>;})}
-                            </select> : <span style={{ color: "#9CA3AF", fontSize: 11 }}>—</span>}
+                            </select>
+                            {rackVal && it.rackAutoSource === "same-name" && it.invBatchMatch !== "exact" && <div style={{ fontSize: 9, color: "#059669", marginTop: 2 }}>Auto: same medicine</div>}
+                            </div> : <span style={{ color: "#9CA3AF", fontSize: 11 }}>—</span>}
                           </td>
                           <td style={{ padding: "7px 8px", textAlign: "center", fontSize: 11 }}>
                             {it.invBatchMatch === "exact" ? <span style={{ background: "#D1FAE5", color: "#065F46", borderRadius: 4, padding: "2px 7px", fontWeight: 600 }}>✅ {it.invMatch && it.invMatch.length > 20 ? it.invMatch.slice(0,20)+"…" : it.invMatch}</span>
-                              : it.invBatchMatch === "name" ? <span style={{ background: "#FEF3C7", color: "#92400E", borderRadius: 4, padding: "2px 7px", fontWeight: 600 }}>🔶 Name</span>
-                              : <span style={{ background: "#DBEAFE", color: "#1E40AF", borderRadius: 4, padding: "2px 7px", fontWeight: 600 }}>🆕 New</span>}
+                              : it.invBatchMatch === "name" ? <span style={{ background: "#FEF3C7", color: "#92400E", borderRadius: 4, padding: "2px 7px", fontWeight: 600 }}>🔶 Diff Batch → Same Rack</span>
+                              : <span style={{ background: "#DBEAFE", color: "#1E40AF", borderRadius: 4, padding: "2px 7px", fontWeight: 600 }}>🆕 New{it.invRack ? " → " + it.invRack : ""}</span>}
                             {it.invStock !== null && <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>{it.invStock} in stock{it.invRack ? " • 🗄"+it.invRack : ""}</div>}
+                            {it.invBatchMatch === "none" && it.invRack && <div style={{ fontSize: 9, color: "#059669", marginTop: 1 }}>Rack from same medicine</div>}
                           </td>
                           {salesData && <td style={{ padding: "7px 8px", textAlign: "center", fontSize: 11 }}>
                             {it.wasSold ? <div>
