@@ -260,7 +260,7 @@ function parseStockInput(val, packQty) {
 // ══════════════════════════════════════════════
 // AUDIT TRAIL — logs who changed what and when
 // ══════════════════════════════════════════════
-function logAudit(action, details, user, snapshot) {
+function logAudit(action, details, user) {
   if (!db) return;
   var entry = {
     id: "aud" + Date.now().toString(36) + Math.random().toString(36).slice(2,5),
@@ -270,8 +270,6 @@ function logAudit(action, details, user, snapshot) {
     ts: new Date().toISOString(),
     tsDisplay: new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: true })
   };
-  // Store before-snapshot for revertable actions (INV_EDIT, INV_DELETE, STOCK_MERGE)
-  if (snapshot) entry.snapshot = snapshot;
   var path = getOutletPath ? getOutletPath("auditTrail/" + entry.id) : "auditTrail/" + entry.id;
   db.ref(path).set(entry);
 }
@@ -2287,7 +2285,7 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
       if (doMerge) {
         var addStock = fm._stockStr !== undefined ? parseStockInput(fm._stockStr, fm.packQty || dup.packQty) : (fm.stock || 0);
         saveInv(inv.map(function(m) { return m.id === dup.id ? Object.assign({}, m, { stock: (m.stock || 0) + addStock, mrp: fm.mrp || m.mrp, ptr: fm.ptr || m.ptr }) : m; }));
-        logAudit("STOCK_MERGE", "Merged stock into " + dup.name + " Batch:" + dup.batch + " added " + addStock, typeof user !== "undefined" ? user : null, { item: dup });
+        logAudit("STOCK_MERGE", "Merged stock into " + dup.name + " Batch:" + dup.batch + " added " + addStock, typeof user !== "undefined" ? user : null);
         setSf(false); setEd(null); setFm(blank); return;
       }
       return;
@@ -2305,38 +2303,13 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
         if (oldMed.stock !== stockVal) changes.push("Stock:" + oldMed.stock + "→" + stockVal);
         if (oldMed.name !== fmClean.name) changes.push("Name:" + oldMed.name + "→" + fmClean.name);
       }
-      if (changes.length) logAudit("INV_EDIT", fmClean.name + " " + changes.join(", "), typeof user !== "undefined" ? user : null, { item: oldMed });
+      if (changes.length) logAudit("INV_EDIT", fmClean.name + " " + changes.join(", "), typeof user !== "undefined" ? user : null);
     } else {
       saveInv([...inv, { ...fmClean, id: mkId(), addedFrom: "manual", uid: mkUID() }]);
       logAudit("INV_ADD", "Added " + fmClean.name + " Batch:" + fmClean.batch + " Stock:" + stockVal, typeof user !== "undefined" ? user : null);
     }
     setSf(false); setEd(null); setFm(blank); };
-  const doDelete = (id) => { var m = inv.find(function(x) { return x.id === id; }); askConfirm("Delete this medicine?\n" + (m ? m.name + " Batch:" + m.batch : ""), () => { saveInv(inv.filter((x) => x.id !== id)); if (m) logAudit("INV_DELETE", "Deleted " + m.name + " Batch:" + m.batch + " Stock:" + m.stock, typeof user !== "undefined" ? user : null, { item: m }); }); };
-
-  const [zeroRackMsg, setZeroRackMsg] = useState("");
-
-  // Delete rack-assigned items with zero stock from inventory (propagates to Stock, Racks, Expiry everywhere)
-  const deleteZeroStockRackItems = () => {
-    var targets = inv.filter(function(m) { return !!m.rack && (m.stock || 0) <= 0; });
-    if (targets.length === 0) {
-      setZeroRackMsg("✅ No zero-stock rack-assigned items found.");
-      setTimeout(function() { setZeroRackMsg(""); }, 4000);
-      return;
-    }
-    askConfirm(
-      "Delete " + targets.length + " rack-assigned item(s) with zero stock?\n\n" +
-      targets.map(function(m) { return "• " + m.name + " [Rack: " + m.rack + "] Batch: " + m.batch; }).join("\n") +
-      "\n\nItems with NO rack assigned will NOT be touched.\nThis will remove them from Inventory, Stock and Racks permanently.",
-      function() {
-        targets.forEach(function(m) {
-          db.ref(getOutletPath("inventory/" + m.id)).remove();
-        });
-        logAudit("INV_DELETE", "Deleted " + targets.length + " zero-stock rack item(s): " + targets.map(function(m) { return m.name + " [" + m.rack + "]"; }).join(", "));
-        setZeroRackMsg("🗑 Deleted " + targets.length + " zero-stock rack-assigned item(s) from inventory and stock.");
-        setTimeout(function() { setZeroRackMsg(""); }, 5000);
-      }
-    );
-  };
+  const doDelete = (id) => { var m = inv.find(function(x) { return x.id === id; }); askConfirm("Delete this medicine?\n" + (m ? m.name + " Batch:" + m.batch : ""), () => { saveInv(inv.filter((x) => x.id !== id)); if (m) logAudit("INV_DELETE", "Deleted " + m.name + " Batch:" + m.batch + " Stock:" + m.stock, typeof user !== "undefined" ? user : null); }); };
 
   const [invExpand, setInvExpand] = useState(null);
   var getSalesHistory = function(medId) {
@@ -2353,17 +2326,10 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
   return (
     <div><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
       <h2 style={{ ...hds, marginBottom: 0 }}>Inventory ({inv.length})</h2>
-      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
         <ColToggle cols={INV_COLS.filter((c) => c.key !== "ptr" || isO)} visible={colVis} setVisible={setColVis} />
-        {(function(){ var cnt = inv.filter(function(m){ return !!m.rack && (m.stock||0) <= 0; }).length; return cnt > 0 ? (
-          <button onClick={deleteZeroStockRackItems} style={{ padding: "6px 12px", background: "#FEF2F2", color: "#DC2626", border: "1px solid #FCA5A5", borderRadius: 8, fontWeight: 700, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }} title="Only deletes rack-assigned medicines with zero stock. Unassigned medicines are untouched.">
-            🗑 Zero-Stock Rack Items ({cnt})
-          </button>
-        ) : null; })()}
         <button onClick={() => setShowBulk(!showBulk)} style={{ ...bts(false), fontSize: 12 }}>CSV Import</button>
-        <button onClick={() => { setFm(blank); setEd(null); setSf(!sf); }} style={bts(true)}>+ Add</button>
-      </div></div>
-      {zeroRackMsg && <div style={{ marginBottom: 10, padding: "8px 14px", background: zeroRackMsg.startsWith("✅") ? "#F0FDF4" : "#FEF2F2", border: "1px solid " + (zeroRackMsg.startsWith("✅") ? "#BBF7D0" : "#FCA5A5"), borderRadius: 8, fontSize: 12, fontWeight: 600, color: zeroRackMsg.startsWith("✅") ? "#065F46" : "#DC2626" }}>{zeroRackMsg}</div>}
+        <button onClick={() => { setFm(blank); setEd(null); setSf(!sf); }} style={bts(true)}>+ Add</button></div></div>
       {showBulk && <div style={{ ...cds, border: "2px solid #2563EB" }}>
         <b style={{ color: "#2563EB" }}>Bulk CSV Import</b>
         <p style={{ fontSize: 12, color: "#888", margin: "8px 0" }}>1. Download template  2. Fill in medicines  3. Upload</p>
@@ -2410,7 +2376,7 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
               </div>
               <div style={{ textAlign: "right" }}>
                 <div style={{ fontWeight: 800, fontSize: 16, color: "#0D6B5B" }}>{fStock(m.stock, m.packQty)}</div>
-                <div style={{ fontSize: 12, color: "#555" }}>MRP: <input type="number" step="0.01" defaultValue={m.mrp} onBlur={function(e) { var v = parseFloat(e.target.value) || 0; if (v !== m.mrp) { logAudit("INV_EDIT", m.name + " MRP:" + m.mrp + "→" + v, null, { item: Object.assign({}, m) }); saveInv(inv.map(function(x) { return x.id === m.id ? Object.assign({}, x, { mrp: v }) : x; })); } }} style={{ width: 60, border: "1px solid #eee", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "right", background: "#FAFAF7" }} /></div>
+                <div style={{ fontSize: 12, color: "#555" }}>MRP: <input type="number" step="0.01" defaultValue={m.mrp} onBlur={function(e) { var v = parseFloat(e.target.value) || 0; if (v !== m.mrp) { logAudit("INV_EDIT", m.name + " MRP:" + m.mrp + "→" + v); saveInv(inv.map(function(x) { return x.id === m.id ? Object.assign({}, x, { mrp: v }) : x; })); } }} style={{ width: 60, border: "1px solid #eee", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "right", background: "#FAFAF7" }} /></div>
               </div>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6, fontSize: 11, color: "#888" }}>
@@ -2461,7 +2427,7 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
           {sh("name") && <td style={{ ...tds, fontWeight: 500, whiteSpace: "nowrap" }}>{m.name}</td>}
           {sh("batch") && <td style={{ ...tds, fontFamily: "monospace", fontSize: 11 }}>{m.batch}</td>}
           {sh("exp") && <td style={tds}>{m.expiry || "-"}</td>}
-          {sh("mrp") && <td style={{ ...tds, fontWeight: 600 }}><input type="number" step="0.01" defaultValue={m.mrp} onBlur={function(e) { var v = parseFloat(e.target.value) || 0; if (v !== m.mrp) { logAudit("INV_EDIT", m.name + " MRP:" + m.mrp + "→" + v, null, { item: Object.assign({}, m) }); saveInv(inv.map(function(x) { return x.id === m.id ? Object.assign({}, x, { mrp: v }) : x; })); } }} style={{ width: 65, border: "1px solid #eee", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "right", background: "#FAFAF7" }} /></td>}
+          {sh("mrp") && <td style={{ ...tds, fontWeight: 600 }}><input type="number" step="0.01" defaultValue={m.mrp} onBlur={function(e) { var v = parseFloat(e.target.value) || 0; if (v !== m.mrp) { logAudit("INV_EDIT", m.name + " MRP:" + m.mrp + "→" + v); saveInv(inv.map(function(x) { return x.id === m.id ? Object.assign({}, x, { mrp: v }) : x; })); } }} style={{ width: 65, border: "1px solid #eee", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "right", background: "#FAFAF7" }} /></td>}
           {isO && sh("ptr") && <td style={{ ...tds, color: "#B45309" }}>Rs.{f2(m.ptr)}</td>}
           {sh("stock") && <td style={tds}><span style={{ fontWeight: 700, color: m.stock < 3 ? "#DC2626" : m.stock < 5 ? "#D97706" : "#065F46" }}>{fStock(m.stock, m.packQty)}</span></td>}
           {sh("rack") && <td style={tds}>{m.rack || "-"}</td>}
@@ -2915,7 +2881,7 @@ function StockPage({ inv, saveInv, isO, mob }) {
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 }}>
               <span style={{ fontWeight: 800, fontSize: 16, color: sc }}>{fStock(m.stock, m.packQty)}</span>
-              <span style={{ fontSize: 12 }}>MRP: <input type="number" step="0.01" defaultValue={m.mrp} onBlur={function(e) { var v = parseFloat(e.target.value) || 0; if (v !== m.mrp) { logAudit("INV_EDIT", m.name + " MRP:" + m.mrp + "→" + v, null, { item: Object.assign({}, m) }); saveInv(inv.map(function(x) { return x.id === m.id ? Object.assign({}, x, { mrp: v }) : x; })); } }} style={{ width: 60, border: "1px solid #eee", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "right", background: "#FAFAF7" }} /></span>
+              <span style={{ fontSize: 12 }}>MRP: <input type="number" step="0.01" defaultValue={m.mrp} onBlur={function(e) { var v = parseFloat(e.target.value) || 0; if (v !== m.mrp) { logAudit("INV_EDIT", m.name + " MRP:" + m.mrp + "→" + v); saveInv(inv.map(function(x) { return x.id === m.id ? Object.assign({}, x, { mrp: v }) : x; })); } }} style={{ width: 60, border: "1px solid #eee", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "right", background: "#FAFAF7" }} /></span>
             </div>
           </div>;
         })}
@@ -2939,7 +2905,7 @@ function StockPage({ inv, saveInv, isO, mob }) {
             {sh("name") && <td style={{ ...tds, fontWeight: 500, whiteSpace: "nowrap" }}>{m.name}</td>}
             {sh("batch") && <td style={{ ...tds, fontFamily: "monospace", fontSize: 11 }}>{m.batch}</td>}
             {sh("exp") && <td style={{ ...tds, color: isE ? "#DC2626" : isES ? "#B45309" : "inherit" }}>{m.expiry || "-"}</td>}
-            {sh("mrp") && <td style={{ ...tds, fontWeight: 600 }}><input type="number" step="0.01" defaultValue={m.mrp} onBlur={function(e) { var v = parseFloat(e.target.value) || 0; if (v !== m.mrp) { logAudit("INV_EDIT", m.name + " MRP:" + m.mrp + "→" + v, null, { item: Object.assign({}, m) }); saveInv(inv.map(function(x) { return x.id === m.id ? Object.assign({}, x, { mrp: v }) : x; })); } }} style={{ width: 65, border: "1px solid #eee", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "right", background: "#FAFAF7" }} /></td>}
+            {sh("mrp") && <td style={{ ...tds, fontWeight: 600 }}><input type="number" step="0.01" defaultValue={m.mrp} onBlur={function(e) { var v = parseFloat(e.target.value) || 0; if (v !== m.mrp) { logAudit("INV_EDIT", m.name + " MRP:" + m.mrp + "→" + v); saveInv(inv.map(function(x) { return x.id === m.id ? Object.assign({}, x, { mrp: v }) : x; })); } }} style={{ width: 65, border: "1px solid #eee", borderRadius: 4, padding: "2px 4px", fontSize: 12, textAlign: "right", background: "#FAFAF7" }} /></td>}
             {isO && sh("ptr") && <td style={{ ...tds, color: "#B45309" }}>Rs.{f2(m.ptr)}</td>}
             {sh("stock") && <td style={{ ...tds, fontWeight: 700, color: sc }}>{fStock(m.stock, m.packQty)}</td>}
             {sh("status") && <td style={tds}><Tag bg={sb} fg={sc}>{st}</Tag></td>}
@@ -4429,7 +4395,7 @@ function ProfitPage({ bills, inv, mob, purch, saveBills, showBill, setPage }) {
   );
 }
 // ══════════════════════════════════════════════
-function RackPage({ inv, saveInv, mob, askConfirm }) {
+function RackPage({ inv, saveInv, mob, purch }) {
   const [selected, setSelected] = useState([]);
   const [dragMed, setDragMed] = useState(null);
   const [filterRack, setFilterRack] = useState("");
@@ -4439,6 +4405,14 @@ function RackPage({ inv, saveInv, mob, askConfirm }) {
   const [editRackVal, setEditRackVal] = useState("");
   const [editStockVal, setEditStockVal] = useState("");
   const [editPackQtyVal, setEditPackQtyVal] = useState("");
+
+  // Purchase invoice rack assignment
+  const [showPurchAssign, setShowPurchAssign] = useState(false);
+  const [selectedPurchId, setSelectedPurchId] = useState(null);
+  const [purchRackMap, setPurchRackMap] = useState({}); // key: itemIdx => rack string
+  const [purchSelected, setPurchSelected] = useState({}); // key: itemIdx => bool
+  const [purchAssignMsg, setPurchAssignMsg] = useState("");
+  const [purchSearch, setPurchSearch] = useState("");
 
   // Add new medicine form state
   const [showAddNew, setShowAddNew] = useState(false);
@@ -4530,7 +4504,7 @@ function RackPage({ inv, saveInv, mob, askConfirm }) {
       return Object.assign({}, m, changes);
     });
     saveInv(next);
-    if (med) logAudit("INV_EDIT", med.name + " Rack→" + fixedRack + (editExpiryVal !== (med.expiry || "") ? " Expiry→" + editExpiryVal : ""), null, { item: med });
+    if (med) logAudit("INV_EDIT", med.name + " Rack→" + fixedRack + (editExpiryVal !== (med.expiry || "") ? " Expiry→" + editExpiryVal : ""));
     setEditingMed(null);
     setEditRackVal("");
     setEditStockVal("");
@@ -4569,52 +4543,6 @@ function RackPage({ inv, saveInv, mob, askConfirm }) {
   };
 
   const [fixRackMsg, setFixRackMsg] = useState("");
-  const [zeroStockMsg, setZeroStockMsg] = useState("");
-
-  // Remove zero-stock rack-assigned items from inventory entirely (direct Firebase delete)
-  var clearZeroStockFromRacks = function() {
-    var zeroRacked = inv.filter(function(m) { return !!m.rack && (m.stock || 0) <= 0; });
-    if (zeroRacked.length === 0) {
-      setZeroStockMsg("✅ No zero-stock items found in any rack.");
-      setTimeout(function() { setZeroStockMsg(""); }, 4000);
-      return;
-    }
-    zeroRacked.forEach(function(m) {
-      db.ref(getOutletPath("inventory/" + m.id)).remove();
-    });
-    logAudit("INV_DELETE", "Removed " + zeroRacked.length + " zero-stock rack item(s): " + zeroRacked.map(function(m) { return m.name + " [" + m.rack + "]"; }).join(", "));
-    setZeroStockMsg("🗑 Removed " + zeroRacked.length + " zero-stock item(s) from inventory and racks.");
-    setTimeout(function() { setZeroStockMsg(""); }, 5000);
-  };
-
-  // Names from the "Cleared rack assignment" audit log entry — used to target exactly those 497 items
-  var RACK_CLEARED_NAMES = new Set(["ab-flo capsule 15","absolut 3g capsule 10","acivir dt 800mg tab","aldactone 100 tablet","alerid-d tablet 10","alex lozenges","allegra 120mg tab","allegra 120mg tablet","allercet-dc tablet 10","amaryl 3 mg tablet 30","amaryl m 1mg tablet 20","amaryl mv 1 tablet sr","amlip-2.5 tablet 10","amlong 2.5mg","amlong 5mg tab (c","amlong smg tab","amlong-a tablet 15","amlopres 2.5mg tab","amlopres 5mg","amlopres-at 50 tablet 15","amlopres-at tablet 30","arbitel mt 50mg tab","aten 25 tablet","aten 50mg tab","atocor 20 tablet","atorlip 40 tablet","atorva 20 tablet 15","atorva 20mg tab","atorva 40mg tab","atorva smg tab","autrin","avil 25 tablet 15","avil 25mg tab","avil 50 tablet 15","avomine tablet","azoran 25 tablet","azoran 25 tablet 25","azoran 50 tablet","azoran 50mg tab","aztor 10mg tab","aztor asp 75 capsule","aztor asp 75mg caps","bandy plus 6 tablet 1","bandy tablet 1","betacap 10 tablet 10","betacard 50mg tab","bifilac active capsule 10","bifilac caps","bilanix forte tab","bilashine 20mg tab","bilasure m tab","bio d3 caps","bone c plus capsule 15","briv 50mg tablet","brufen 200 tablet 15","brufen 400mg tab (20 s)","buscogast tab","buscogast tablet 10","calcimax forte+ tablet 30","calpol t tab","caripill caps","caripill tab","cataspa tablet","cernos soft gelatin capsule","cetzine 10 mg tablet 15","cetzine tablet","cilacar 10mg tab","cilacar m 10/50mg tab","cilacar t tablet 14","cilacar t tablet 15","cloba 10mg tab","clonotril 0 smg tab","clonotril 0.25mg tab","clopilet-a 75 capsule","clopivas 75mg tab","clopivas ap 150 tablet 15","clopivas ap 75 tablet","concor 5 tablet","concor am 5 tablet 10","concor cor 2.5mg tab","concor t 2.5mg tab","cremalax 10 mg tablet 6","ctd 12.5mg tab","d rise 60k sofgels (box)","daflon 500 mg tablet 10","darolac sachet (each 2gm)","dazit 5 mg tablet 15","defcort 6 tablet 10","deplatt a 75 tablet","deriphyllin m tablet","deriphyllin retard 150mg","deviry 10 mg tablet 10","deviry 10mg tablet","diamicron xr mex 00/1000 m","diamicron xr mex 60/500mg tab","diapride m1 tablet pr","dicalis tab","dicalis tablet 10","diclomol tablet","diclomol tablet 10","dolopar 650 tablet","dolopar 650 tablet 15","dolopar 650mg tab","dolopar tab","domstal 10mg tablet 10","domstal tab","doxt-sl capsule 10","doxy-1 l-dr forte capsule 10","dronis 30 tablet","dulcoflex adult suppository 5","dulcoflex suppository 5","dulcoflex tab","duzela 20 capsule 10","dytor 20 tablet","ebast 20 tablet","econorm 765 mg powder","econorm sachets (2 s pack)","enterogermina caps","epitri 0.5","epitril 0.25mg tab","epitril 0.5mg tab","esoz d 40 capsule sr","evion lc tablet","famocid 40 tablet","famocid 40mg (sun)","feburic 20 tablet 15","febutaz 40 tablet 15","febutaz 40mg tab","ferium xt tablet 10","flagyl 200 tablet 15","flagyl 400 tablet 20","flexabenz plus tab","flexabenz plus tablet 10","flexon mr tablet","flexon tablet","fludac 20mg","folitrax 2.5","folitrax-10 tablet 10","forxiga 10 mg tablet 14","gabantin 100 capsule","gabantin 100 capsule 10","gabantin 300mg caps","gabawin-25 tablet 10","galvus 50mg tablet 15","ganaton total caps","gemcal xt tab","gemcal-ds capsule 15","gemer 1 tablet 15","gemer forte 2 tab","gemer p2 tablet 10","geminor 1mg tab","geminor m 0.5mg tab","germer ds 2","gibtulio met 12.5 mg/1000 mg tablet 10","gibtulio met 12.5/1000mg tab","glimepiride 1mg tablet","glimestar-m 2 tablet pr","glimisave m1 tab","glimy 1mg tab (15 s)","glizid xr 30 tablet 10","gluconorm sr 500 mg tablet 15","glucored forte tab","glucored forte tablet 10","gluxit 10 tablet 10","glycinorm 40mg tab","glyciphage 500mg tab","glyciphage pg2 tab","glyciphage tab","glyciphage-g 2 tablet pr","glycomet 500 tablet","glycomet 500mg","glycomet 500mg tab","glycomet gp1 tab","glycomet gp2 forte","glycomet sr 500mg tab","glycomet tab","glycomet-250 tablet","glycomet-500 s.r. tablet 20","glycomet-gp 0.5 tablet 10","glycomet-gp 1 tablet 15","glycomet-gp 4 forte tablet 10","gp 2mg tab","happi d caps","hcqs 200mg tab","histafree m tab","homochek capsule","imodium caps","imodium capsule 4","imodium capsules","inderal 10 tablet 15","inderal 10mg tab","inderal la 20mg","inderal la 20mg tab","indocap 25mg caps","ivepred 8 tablet","ivoral forte tablet 1","janumet 50mg/500mg tablet 15","januvia 100mg tablet","jardiance 10 mg tablet 10","jardiance 10mg tab","jointace dn tablet","jointace dn tablet 15","jointace-dn super tablet 15","ketorol-dt tablet 15","lasix 40 mg tablet 15","laurica k veg capsule 10","letoval tablet","levigress 500 tablet","levigress-500 tablet 15","levoflox 250 mg","levosiz-m tablet","livogen-z captab 15","ln bloc 10 tablet 15","ln bloc 5 tablet 15","ln bloc 5mg tab","lnbloc 10 tablet","lonazep 1mg tab","lorinol 10 tablet","lumia 60k capsule 8","manforce 100 tablet 4","manforce 100mg tablet 4","matilda forte caps","maxgalin er 150mg tab","maxgalin er 75 tablet 10","meconerv 1500mcg tablet","meconerv tab","medrol 4 mg tablet 10","medrol 4mg tablet","meftal-500 tablet 10","meftal-spas ds tablet 10","meftal-spas tablet 10","megalis 10mg tab","megalis-20 tablet 4","meganeuron od plus caps","meganeuron pg capsule 10","melmet 500mg tab","melmet-500 sr tablet 20","menopace","meprate 10mg tab","met xl 12.5 mg tab","met xl 25mg tab","met xl 50 tablet","metocard xl 50","metocard xl 50mg (10 s)","metocard xl 50mg tab (15 s)","metolar xr 25mg caps","metolar xr-50 capsule 15","metosartan 25 tablet 10","metosartan 50 tablet","metosartan ch 50 tablet 10","metrogyl 200mg tablet","metrogyl 400mg tab (20 s)","mgd3 tablet 10","minipress xl 2.5mg tab","mirtaz 15 tablet","mirtaz 15 tablet 10","mirtaz 30mg tab","mobizox tablet","mondeslor tablet","monotrate sr 30mg","montair fx tablet 15","montair-lc tablet 15","montek lc tablet 15","monticope tablet","moxovas 0.2 tablet 10","nebicard sm tab","nebistar 2.5 tablet","nebistar 5 tablet","nervijen np tab (new)","nervijen plus caps","nervup od capsule 15","neurobion forte tablet","neurobion plus tab","new follihair tablet 15","new nervijen plus capsule 10","nexito 5 tablet","nexito 5mg tab (10 s)","nexpro fast 40 tablet 10","nexpro rd 20mg caps","nexpro-40 tablet 15","nicardia retard 10","nicardia retard 10mg tab","niftas 100mg tab","niftas 50mg tab","nindanib 100mg capsule","nitrolong 2.6mg tab","norflox tz rf tab","normaxin tablet","normoz ds tablet 10","novastat cv 10 capsule","novastat tg 10mg tab","nucoxia 60mg tab","nucoxia 90 mg tab","nucoxia 90 tablet 15","nucoxia mr 4 tablet 10","nucoxia mr tab","oflox 400mg tab","oflox-200 tablet 10","olmesar 40mg tab","olmesar ch 40 tab","olmezest 20 tablet 10","olmezest 20mg tab","olmezest 40mg tab","olmezest am 20 tablet 10","olmezest am 40 tablet","omnacortil 40mg tab","omnacortil 5mg tab","omnacortil-10 tablet 10","omnacortil-30 tablet 10","omnacortil-5 tablet 10","ondem md 8mg tab","ondem-4 tablet 10","ondem-md 4 tablet 10","oxetol 150 tablet","oxetol 300mg tab","oxetol 600 tablet 10","oxetol xr 450","oxetol xr 450 tablet 10","oxra 10 mg tablet 14","oxra 10mg tab","oxramet xr 10/500mg tab","parkin 2mg tab","penegra 100 tablet 4","penegra 100mg tab","perinorm tablet","pioz 7.5 tablet","pixaflo 5mg tab","pixaflo smg tab","pramipex 0.25 tablet","pramipex er 1.5 tablet 10","pramipex er 1.5mg tab","prodep 10 capsule 10","prodep 10mg caps","prodep 60 capsule","prodep 60 capsule 10","prodep capsule 10","qutipin 100 tablet","rabicip-20 tablet","rablet 20mg tab","rancad tablet","raricap tablet 40","razel-cv 20/75 capsule 10","razo 20 mg tablet 15","regestrone cr tablet 10","rejunex cd 3 tablet","remylin d tab","renerve plus capsule 15","renerve plus softgels","resteclin 500 capsule","riboflavin tablet","rivotril 0.5mg tab","roseday 10mg","roseday 5 tablet","roseday-20 tablet 15","roseday-f 20 tablet","rosulip 5 tablet","rosuvas 40 tablet 10","rosuvas 5 tablet 15","rozavel 10 tablet 15","rozavel 40 tablet","rozavel 5 tablet 10","rozavel a caps","rozavel ez 20","rozavel f 20 tablet 10","rozavel f tablet","rozucor 10 tablet","rozucor 10mg tab","rozucor 5mg tab","rozucor asp 20mg tablet","rozucor-5 tablet 15","serta 100 tablet","serta 100mg tab","serta-50 tablet 15","setolac mr tab","setolac-p tablet","shelcal 500 tablet","shelcal m soflets","signoflam tab","silofast 8 capsule 15","silybon 70","soliten 5mg tablet","sompraz d 40 capsule 15","sompraz d 40mg caps","sompraz l caps","sompraz l capsule 10","spenzo-0.5 tablet 10","sporlac banana 4 gm powder","sporlac-ds tablet","starvog 0.3 tablet 10","storvas 10mg tab","storvas ez 20 tablet 10","stugeron plus tablet 10","suhagra-50 tablet 4","sumo cold tablet","superia tablet 15","supracal 2000 tab","supracal os tab","supradyn daily tablet 15","susten 300 softgel capsule 10","susten sr 300 tablet 10","syndopa 275 tablet","syndopa 275 tablet 10","tayo soft 60k capsule 12","tayo total tab","tazloc 20mg tab","tazloc 40 tablet 15","tazloc am","tazloc ct 40 tablet 10","tazloc-20 tablet 10","tazloc-am tablet","tazloc-beta 50 tablet","tazloc-h 40 tablet 10","teczine","teczine 10 tablet 15","tegrital 200mg tab","telista 20 tablet 15","telista am tab protar","telista mt 50 tablet 15","telma 80-h tablet 15","telma ct 40/6.25","telma ct(40/6.25mg) tab","telma h 80mg tab","telma-am h 40 tablet 15","telma-beta 25 tablet 10","telma-ct 40/12.5 tablet 15","telma-ct 40/6.25 tablet 15","telma-ln 40 tablet 15","telmikind 40 tablet 10","telmikind amh tab","telmikind-am tablet","telmikind-amh tablet 10","telvas 20 tablet 15","telvas 40mg tab","tendocare forte tab","teniva m tab","terbinaforce 500 tablet 7","tofe 5mg tab","tonact d 10 tablet 10","trajenta 5mg tab","trazonil 25mg tab","trazonil 50 tablet","triactin 8mg tab","tryptomer 10 mg tablet 30","tryptomer 10mg tab","ultra magnesium 200 mg tablet 15","ultracet semi tab","uprise d3 60k cap8","urimax 0.4mg 20s","urimax 0.4mg caps (bottle)","urimax d tab (30 s)","valium 2mg tab","valium 5mg tab","valparin chrono 500 tablet","valprol-cr-300 tablet 15","veloz it capsule 10","veniz xr 37.5mg caps","veniz xr 75mg caps","ventab dxt 100mg tab","ventab dxt 25 tablet 10","ventab dxt 25mg tab","vertin 16 tablet 15","vilano 20 tablet 10","vogs gm 2","volibo 0.2 tablet 15","volibo 0.3 tablet 15","vomikind-md 2 tablet 10","wysolone 10mg tab","wysolone dt5 tablet 15","zentel tablet 1","zentel tabs (1 s)","zerodol th 4mg tab","zoryl mv 1/0.3mg tab","zyloric 100mg tablet"]);
-
-  // Delete exactly the 497 items from the "Cleared rack assignment" audit log
-  var deleteRackClearedItems = function() {
-    var targets = inv.filter(function(m) {
-      return RACK_CLEARED_NAMES.has((m.name || "").toLowerCase().trim()) && (m.stock || 0) <= 0;
-    });
-    if (targets.length === 0) {
-      setZeroStockMsg("✅ No matching zero-stock items from the rack-cleared list found.");
-      setTimeout(function() { setZeroStockMsg(""); }, 4000);
-      return;
-    }
-    askConfirm(
-      "Permanently delete " + targets.length + " zero-stock item(s) from the rack-cleared list?\n\n" +
-      targets.slice(0, 20).map(function(m) { return "• " + m.name + " Batch: " + m.batch; }).join("\n") +
-      (targets.length > 20 ? "\n…and " + (targets.length - 20) + " more" : "") +
-      "\n\nOnly items that were in the 'Cleared rack assignment' log AND have zero stock will be deleted.\nItems with stock > 0 will NOT be touched.",
-      function() {
-        targets.forEach(function(m) {
-          db.ref(getOutletPath("inventory/" + m.id)).remove();
-        });
-        logAudit("INV_DELETE", "Deleted " + targets.length + " rack-cleared zero-stock item(s): " + targets.map(function(m) { return m.name + " Batch:" + m.batch; }).join(", "), typeof user !== "undefined" ? user : null);
-        setZeroStockMsg("🗑 Deleted " + targets.length + " item(s) from the rack-cleared list.");
-        setTimeout(function() { setZeroStockMsg(""); }, 5000);
-      }
-    );
-  };
 
   // Normalize a rack name: remove spaces between letter prefix and number (e.g. "A 1" → "A1", "BH- 3" → "BH-3")
   var normalizeRack = function(rack) {
@@ -4707,6 +4635,7 @@ function RackPage({ inv, saveInv, mob, askConfirm }) {
           a.href = url; a.download = "Rack_Inventory_" + new Date().toISOString().slice(0,10) + ".csv";
           a.click(); URL.revokeObjectURL(url);
         }} style={{ padding: "9px 18px", background: "#fff", color: "#0D6B5B", border: "1px solid #0D6B5B", borderRadius: 10, fontWeight: 600, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>📥 Export Rack CSV</button>
+        {purch && purch.length > 0 && <button onClick={function() { setShowPurchAssign(!showPurchAssign); setSelectedPurchId(null); setPurchAssignMsg(""); }} style={{ padding: "9px 18px", background: showPurchAssign ? "#0D6B5B" : "#fff", color: showPurchAssign ? "#fff" : "#6D28D9", border: showPurchAssign ? "none" : "1px solid #6D28D9", borderRadius: 10, fontWeight: 600, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>📦 {showPurchAssign ? "Close Purchase Assign" : "Assign from Purchase"}</button>}
         <button onClick={function() { setShowAddNew(!showAddNew); setAddFm(rackBlank); setAddMsg(""); }} style={{ ...bts(true), fontSize: 13, padding: "9px 18px" }}>+ Add New Medicine</button>
       </div>
     </div>
@@ -4755,17 +4684,191 @@ function RackPage({ inv, saveInv, mob, askConfirm }) {
         </div>
       </div>}
 
+      {/* ── Purchase Invoice Rack Assignment Panel ── */}
+      {showPurchAssign && purch && purch.length > 0 && <div style={{ ...cds, background: "#F5F3FF", border: "2px solid #C7D2FE", padding: 16, marginBottom: 16 }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: "#4338CA", marginBottom: 10 }}>📦 Assign Racks from Purchase Invoices</div>
+        <div style={{ fontSize: 12, color: "#6D28D9", marginBottom: 12 }}>Select a purchase invoice, then assign racks to its items. Items already in inventory with a rack will be pre-filled.</div>
+
+        {purchAssignMsg && <div style={{ padding: "10px 14px", borderRadius: 8, marginBottom: 12, background: purchAssignMsg.startsWith("✅") ? "#F0FDF4" : "#FEF2F2", color: purchAssignMsg.startsWith("✅") ? "#166534" : "#DC2626", fontSize: 13, fontWeight: 500 }}>{purchAssignMsg}</div>}
+
+        {/* Invoice selector */}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          <select value={selectedPurchId || ""} onChange={function(e) {
+            var pid = e.target.value;
+            setSelectedPurchId(pid || null);
+            setPurchAssignMsg("");
+            setPurchSearch("");
+            if (pid) {
+              var p = purch.find(function(x){return x.id === pid;});
+              if (p && p.items) {
+                var rm = {}, sel = {};
+                p.items.forEach(function(it, idx) {
+                  var nameL = it.name.toLowerCase().trim();
+                  var batchL = (it.batch || "").trim();
+                  // Find existing rack: exact match first, then name match
+                  var match = inv.find(function(m){return m.name.toLowerCase()===nameL && m.batch===batchL && m.rack;});
+                  if (!match) match = inv.find(function(m){return m.name.toLowerCase()===nameL && m.rack;});
+                  rm[idx] = match ? match.rack : "";
+                  sel[idx] = true;
+                });
+                setPurchRackMap(rm);
+                setPurchSelected(sel);
+              }
+            }
+          }} style={{ ...inps, minWidth: 300, fontSize: 13, fontWeight: 600, padding: "8px 12px" }}>
+            <option value="">— Select Purchase Invoice —</option>
+            {purch.slice().sort(function(a,b){return (b.date||"").localeCompare(a.date||"");}).map(function(p) {
+              var noRackCount = (p.items||[]).filter(function(it){
+                var nameL = it.name.toLowerCase().trim();
+                var m = inv.find(function(x){return x.name.toLowerCase()===nameL && x.rack;});
+                return !m;
+              }).length;
+              return <option key={p.id} value={p.id}>{p.invoiceNo||"No#"} — {p.supplier||"Unknown"} — {p.date||"?"} ({(p.items||[]).length} items{noRackCount>0 ? ", "+noRackCount+" no rack" : ""})</option>;
+            })}
+          </select>
+          {selectedPurchId && <input value={purchSearch} onChange={function(e){setPurchSearch(e.target.value);}} placeholder="Search medicine..." style={{ ...inps, minWidth: 180, fontSize: 12 }} />}
+        </div>
+
+        {/* Items list with rack assignment */}
+        {selectedPurchId && (() => {
+          var p = purch.find(function(x){return x.id === selectedPurchId;});
+          if (!p || !p.items) return <div style={{ color: "#888", fontSize: 13 }}>Invoice not found or has no items.</div>;
+          var items = p.items;
+          var searchL = purchSearch.toLowerCase();
+          var filteredItems = searchL ? items.filter(function(it,idx){return it.name.toLowerCase().includes(searchL) || (it.batch||"").toLowerCase().includes(searchL) || (it.manufacturer||"").toLowerCase().includes(searchL);}) : items;
+          var noRackItems = items.filter(function(it,idx){return !purchRackMap[idx];});
+          var withRackItems = items.filter(function(it,idx){return !!purchRackMap[idx];});
+          var selectedCount = Object.keys(purchSelected).filter(function(k){return purchSelected[k] && purchRackMap[k];}).length;
+
+          return <div>
+            {/* Quick stats */}
+            <div style={{ display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+              <div style={{ padding: "8px 14px", background: "#D1FAE5", borderRadius: 8, fontSize: 12, fontWeight: 600, color: "#065F46" }}>✅ {withRackItems.length} with rack</div>
+              <div style={{ padding: "8px 14px", background: noRackItems.length > 0 ? "#FEE2E2" : "#F3F4F6", borderRadius: 8, fontSize: 12, fontWeight: 600, color: noRackItems.length > 0 ? "#DC2626" : "#888" }}>⚠️ {noRackItems.length} no rack</div>
+              <div style={{ padding: "8px 14px", background: "#EEF2FF", borderRadius: 8, fontSize: 12, fontWeight: 600, color: "#4338CA" }}>{selectedCount} selected to update</div>
+              <button onClick={function(){var s={}; items.forEach(function(_,i){s[i]=true;}); setPurchSelected(s);}} style={{ padding: "6px 12px", background: "#4338CA", color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Select All</button>
+              <button onClick={function(){setPurchSelected({});}} style={{ padding: "6px 12px", background: "#9CA3AF", color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Deselect All</button>
+              {noRackItems.length > 0 && <button onClick={function(){setPurchSearch(""); /* scroll will show no-rack items at top */}} style={{ padding: "6px 12px", background: "#DC2626", color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Show No-Rack Items</button>}
+            </div>
+
+            {/* Bulk rack assign for no-rack items */}
+            {noRackItems.length > 0 && <div style={{ padding: "10px 14px", background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: 8, marginBottom: 12 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#DC2626", marginBottom: 6 }}>⚠️ {noRackItems.length} items need rack assignment:</div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {noRackItems.slice(0, 10).map(function(it, mi) {
+                  return <span key={mi} style={{ padding: "3px 8px", background: "#FEE2E2", border: "1px solid #FCA5A5", borderRadius: 6, fontSize: 11, color: "#991B1B" }}>{it.name.length > 30 ? it.name.slice(0,30)+"…" : it.name}</span>;
+                })}
+                {noRackItems.length > 10 && <span style={{ padding: "3px 8px", background: "#FEE2E2", borderRadius: 6, fontSize: 11, color: "#991B1B" }}>+{noRackItems.length - 10} more</span>}
+              </div>
+            </div>}
+
+            {/* Items table */}
+            <div style={{ overflowX: "auto", maxHeight: 500, overflowY: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead style={{ position: "sticky", top: 0, zIndex: 2 }}>
+                <tr style={{ background: "#EDE9FE" }}>
+                  <th style={{ padding: "6px 8px", textAlign: "center", width: 36 }}>✓</th>
+                  <th style={{ padding: "6px 8px", textAlign: "left" }}>Medicine</th>
+                  <th style={{ padding: "6px 8px", textAlign: "center" }}>Batch</th>
+                  <th style={{ padding: "6px 8px", textAlign: "center" }}>MRP</th>
+                  <th style={{ padding: "6px 8px", textAlign: "center" }}>Qty</th>
+                  <th style={{ padding: "6px 8px", textAlign: "center" }}>Current Rack</th>
+                  <th style={{ padding: "6px 8px", textAlign: "center", background: "#DDD6FE" }}>Assign Rack ✏️</th>
+                  <th style={{ padding: "6px 8px", textAlign: "center" }}>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(searchL ? filteredItems : [].concat(noRackItems, withRackItems)).map(function(it) {
+                  var origIdx = items.indexOf(it);
+                  var nameL = it.name.toLowerCase().trim();
+                  var batchL = (it.batch || "").trim();
+                  var invItem = inv.find(function(m){return m.name.toLowerCase()===nameL && m.batch===batchL;});
+                  if (!invItem) invItem = inv.find(function(m){return m.name.toLowerCase()===nameL;});
+                  var currentRack = invItem ? (invItem.rack || "") : "";
+                  var assignedRack = purchRackMap[origIdx] || "";
+                  var isSelected = !!purchSelected[origIdx];
+                  var isNoRack = !assignedRack;
+                  var rackChanged = assignedRack && assignedRack !== currentRack;
+                  return <tr key={origIdx} style={{ borderBottom: "1px solid #F3F4F6", background: isNoRack ? "#FFF5F5" : isSelected ? "#F5F3FF" : "transparent" }}>
+                    <td style={{ padding: "7px 8px", textAlign: "center" }}>
+                      <input type="checkbox" checked={isSelected} onChange={function(){setPurchSelected(function(prev){var n=Object.assign({},prev); n[origIdx]=!n[origIdx]; return n;});}} style={{ width: 16, height: 16, cursor: "pointer", accentColor: "#6D28D9" }} />
+                    </td>
+                    <td style={{ padding: "7px 8px", fontWeight: 500, maxWidth: 200 }}>
+                      <div>{it.name}</div>
+                      {it.manufacturer && <div style={{ fontSize: 10, color: "#888" }}>{it.manufacturer}</div>}
+                    </td>
+                    <td style={{ padding: "7px 8px", textAlign: "center", fontFamily: "monospace", fontSize: 11 }}>{it.batch || "—"}</td>
+                    <td style={{ padding: "7px 8px", textAlign: "center" }}>₹{f2(it.mrp)}</td>
+                    <td style={{ padding: "7px 8px", textAlign: "center", fontWeight: 600 }}>{it.qty || 0}{it.freeQty ? <span style={{ fontSize: 10, color: "#059669" }}> +{it.freeQty}F</span> : ""}</td>
+                    <td style={{ padding: "7px 8px", textAlign: "center", fontSize: 11 }}>
+                      {currentRack ? <span style={{ background: "#D1FAE5", color: "#065F46", padding: "2px 7px", borderRadius: 4, fontWeight: 600 }}>🗄 {currentRack}</span> : <span style={{ color: "#DC2626", fontWeight: 600 }}>None</span>}
+                    </td>
+                    <td style={{ padding: "7px 8px", textAlign: "center" }}>
+                      <select value={assignedRack} onChange={function(e){setPurchRackMap(function(prev){var n=Object.assign({},prev);n[origIdx]=e.target.value;return n;});}} style={{ padding: "4px 6px", border: isNoRack ? "2px solid #DC2626" : rackChanged ? "2px solid #6D28D9" : "1px solid #D1D5DB", borderRadius: 6, fontSize: 12, background: isNoRack ? "#FEF2F2" : rackChanged ? "#F5F3FF" : "#fff", fontWeight: isNoRack ? 700 : 400, color: isNoRack ? "#DC2626" : "#111", maxWidth: 110 }}>
+                        <option value="">{isNoRack ? "⚠️ Pick Rack!" : "No rack"}</option>
+                        {currentRack && <option value={currentRack}>🗄 {currentRack} (current)</option>}
+                        {ALL_RACKS.filter(function(r){return r !== currentRack;}).slice(0,200).map(function(r){return <option key={r} value={r}>{r}</option>;})}
+                      </select>
+                    </td>
+                    <td style={{ padding: "7px 8px", textAlign: "center", fontSize: 11 }}>
+                      {invItem ? (invItem.batch === batchL
+                        ? <span style={{ background: "#D1FAE5", color: "#065F46", padding: "2px 7px", borderRadius: 4, fontWeight: 600 }}>✅ In Inv</span>
+                        : <span style={{ background: "#FEF3C7", color: "#92400E", padding: "2px 7px", borderRadius: 4, fontWeight: 600 }}>🔶 Diff Batch</span>)
+                        : <span style={{ background: "#DBEAFE", color: "#1E40AF", padding: "2px 7px", borderRadius: 4, fontWeight: 600 }}>🆕 New</span>}
+                    </td>
+                  </tr>;
+                })}
+              </tbody>
+            </table>
+            </div>
+
+            {/* Apply button */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 14, flexWrap: "wrap", gap: 10 }}>
+              <div style={{ fontSize: 12, color: "#374151" }}><b>{selectedCount}</b> item(s) with racks selected for update</div>
+              <button onClick={function() {
+                if (selectedCount === 0) { setPurchAssignMsg("❌ No items selected with racks assigned."); return; }
+                var updated = 0;
+                var updInv = inv.map(function(m) { return Object.assign({}, m); });
+                items.forEach(function(it, idx) {
+                  if (!purchSelected[idx]) return;
+                  var rack = purchRackMap[idx];
+                  if (!rack) return;
+                  var nameL = it.name.toLowerCase().trim();
+                  var batchL = (it.batch || "").trim();
+                  // Find exact batch match first
+                  var exIdx = updInv.findIndex(function(m){return m.name.toLowerCase()===nameL && m.batch===batchL;});
+                  if (exIdx >= 0) {
+                    updInv[exIdx] = Object.assign({}, updInv[exIdx], { rack: rack });
+                    updated++;
+                  } else {
+                    // Find any name match without rack and update, or find all name matches and update
+                    var nameMatches = [];
+                    updInv.forEach(function(m, mi) { if (m.name.toLowerCase() === nameL) nameMatches.push(mi); });
+                    if (nameMatches.length > 0) {
+                      nameMatches.forEach(function(mi) { if (!updInv[mi].rack) { updInv[mi] = Object.assign({}, updInv[mi], { rack: rack }); updated++; } });
+                    }
+                  }
+                });
+                if (updated > 0) {
+                  saveInv(updInv);
+                  setPurchAssignMsg("✅ Updated rack for " + updated + " inventory item(s)");
+                } else {
+                  setPurchAssignMsg("⚠️ No inventory items matched. Items may need to be added to inventory first (use Import CSV Purchases page).");
+                }
+              }} disabled={selectedCount === 0} style={{ padding: "10px 24px", background: selectedCount === 0 ? "#9CA3AF" : "#4338CA", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 13, cursor: selectedCount === 0 ? "not-allowed" : "pointer" }}>
+                🗄 Update Racks for {selectedCount} Item(s)
+              </button>
+            </div>
+          </div>;
+        })()}
+      </div>}
+
       <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
         <button onClick={function() { setShowAll(!showAll); }} style={bts(!showAll)}>{showAll ? "Show Used Racks Only" : "Show All Racks"}</button>
         {showAll && <input value={filterRack} onChange={function(e) { setFilterRack(e.target.value); }} placeholder="Filter racks (e.g. A1, BH-5)" style={{ ...inps, maxWidth: 200 }} />}
         {showAll && <span style={{ fontSize: 11, color: "#888" }}>Showing max 50. Type to filter.</span>}
         <button onClick={fixAllRacks} style={{ ...bts(false), padding: "6px 14px", fontSize: 12, background: "#EEF2FF", color: "#4338CA", border: "1px solid #C7D2FE", fontWeight: 600 }} title="Remove spaces in rack names (e.g. 'A 1' → 'A1') and register any new rack names">🔧 Fix Rack Names</button>
-        <button onClick={clearZeroStockFromRacks} style={{ ...bts(false), padding: "6px 14px", fontSize: 12, background: "#FEF2F2", color: "#DC2626", border: "1px solid #FCA5A5", fontWeight: 600 }} title="Delete zero-stock rack-assigned items from inventory (unassigned medicines untouched)">🧹 Clear Zero-Stock from Racks</button>
-        {(function(){ var cnt = inv.filter(function(m){ return RACK_CLEARED_NAMES.has((m.name||"").toLowerCase().trim()) && (m.stock||0) <= 0; }).length; return cnt > 0 ? (
-          <button onClick={deleteRackClearedItems} style={{ ...bts(false), padding: "6px 14px", fontSize: 12, background: "#FEF2F2", color: "#991B1B", border: "2px solid #DC2626", fontWeight: 700, cursor: "pointer" }} title="Delete the 497 items whose racks were bulk-cleared, that still have zero stock">🗑 Delete Rack-Cleared Items ({cnt})</button>
-        ) : null; })()}
         {fixRackMsg && <span style={{ fontSize: 11, color: "#059669", fontWeight: 500, background: "#F0FDF4", padding: "4px 10px", borderRadius: 6, border: "1px solid #BBF7D0" }}>{fixRackMsg}</span>}
-        {zeroStockMsg && <span style={{ fontSize: 11, fontWeight: 500, padding: "4px 10px", borderRadius: 6, background: zeroStockMsg.startsWith("✅") ? "#F0FDF4" : "#FEF2F2", color: zeroStockMsg.startsWith("✅") ? "#059669" : "#DC2626", border: "1px solid " + (zeroStockMsg.startsWith("✅") ? "#BBF7D0" : "#FCA5A5") }}>{zeroStockMsg}</span>}
         {dupMsg && <span style={{ fontSize: 11, color: "#6D28D9", fontWeight: 500, background: "#F5F3FF", padding: "4px 10px", borderRadius: 6, border: "1px solid #DDD6FE" }}>{dupMsg}</span>}
       </div>
 
@@ -7296,8 +7399,6 @@ function AuditTrailPage({ mob }) {
   var [logs, setLogs] = useState([]);
   var [filter, setFilter] = useState("all");
   var [loading, setLoading] = useState(true);
-  var [revertMsg, setRevertMsg] = useState("");
-  var [reverting, setReverting] = useState(null);
 
   useEffect(function() {
     var unsub = fbListen("auditTrail", function(data) {
@@ -7312,98 +7413,39 @@ function AuditTrailPage({ mob }) {
   var filtered = filter === "all" ? logs : logs.filter(function(l) { return l.action.indexOf(filter) >= 0; });
 
   var actionColors = {
-    INV_ADD:     { bg: "#D1FAE5", fg: "#065F46", label: "Added" },
-    INV_EDIT:    { bg: "#DBEAFE", fg: "#1E40AF", label: "Edited" },
-    INV_DELETE:  { bg: "#FEE2E2", fg: "#991B1B", label: "Deleted" },
+    INV_ADD: { bg: "#D1FAE5", fg: "#065F46", label: "Added" },
+    INV_EDIT: { bg: "#DBEAFE", fg: "#1E40AF", label: "Edited" },
+    INV_DELETE: { bg: "#FEE2E2", fg: "#991B1B", label: "Deleted" },
     STOCK_MERGE: { bg: "#FEF3C7", fg: "#92400E", label: "Merged" },
-    BILL_EDIT:   { bg: "#EDE9FE", fg: "#5B21B6", label: "Bill Edit" },
+    BILL_EDIT: { bg: "#EDE9FE", fg: "#5B21B6", label: "Bill Edit" },
     BILL_DELETE: { bg: "#FEE2E2", fg: "#991B1B", label: "Bill Del" },
     BILL_RETURN: { bg: "#FCE7F3", fg: "#9D174D", label: "Return" },
-    PURCH_ADD:   { bg: "#D1FAE5", fg: "#065F46", label: "Purchase" },
-    PURCH_DELETE:{ bg: "#FEE2E2", fg: "#991B1B", label: "Purch Del" },
-  };
-
-  // Actions that can be reverted and how
-  var canRevert = function(l) {
-    return !!l.snapshot && !!l.snapshot.item && (
-      l.action === "INV_DELETE" ||
-      l.action === "INV_EDIT" ||
-      l.action === "STOCK_MERGE"
-    );
-  };
-
-  var doRevert = function(l) {
-    setReverting(l.id);
-    var item = l.snapshot.item;
-    if (l.action === "INV_DELETE") {
-      // Restore deleted item back to inventory
-      db.ref(getOutletPath("inventory/" + item.id)).set(item).then(function() {
-        logAudit("INV_EDIT", "REVERT: Restored deleted item " + item.name + " Batch:" + item.batch);
-        setRevertMsg("✅ Restored \"" + item.name + "\" back to inventory.");
-        setReverting(null);
-        setTimeout(function() { setRevertMsg(""); }, 5000);
-      });
-    } else if (l.action === "INV_EDIT" || l.action === "STOCK_MERGE") {
-      // Restore item to its before-edit state
-      db.ref(getOutletPath("inventory/" + item.id)).set(item).then(function() {
-        logAudit("INV_EDIT", "REVERT: Restored " + item.name + " to previous state (before: " + l.details + ")");
-        setRevertMsg("✅ Reverted \"" + item.name + "\" to its previous state.");
-        setReverting(null);
-        setTimeout(function() { setRevertMsg(""); }, 5000);
-      }).catch(function() {
-        setRevertMsg("❌ Revert failed — item may no longer exist in inventory.");
-        setReverting(null);
-        setTimeout(function() { setRevertMsg(""); }, 5000);
-      });
-    }
+    PURCH_ADD: { bg: "#D1FAE5", fg: "#065F46", label: "Purchase" },
+    PURCH_DELETE: { bg: "#FEE2E2", fg: "#991B1B", label: "Purch Del" },
   };
 
   return (
     <div>
       <h2 style={hds}>Change Log (Audit Trail)</h2>
-      <p style={{ fontSize: 12, color: "#888", marginBottom: 14 }}>Every inventory change, bill edit, and deletion is logged here with timestamp and user. Inventory changes can be reverted.</p>
-
-      {revertMsg && <div style={{ marginBottom: 12, padding: "10px 16px", background: revertMsg.startsWith("✅") ? "#F0FDF4" : "#FEF2F2", border: "1px solid " + (revertMsg.startsWith("✅") ? "#6EE7B7" : "#FCA5A5"), borderRadius: 8, fontSize: 13, fontWeight: 600, color: revertMsg.startsWith("✅") ? "#065F46" : "#DC2626" }}>{revertMsg}</div>}
-
+      <p style={{ fontSize: 12, color: "#888", marginBottom: 14 }}>Every inventory change, bill edit, and deletion is logged here with timestamp and user.</p>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
         {[["all","All"],["INV","Inventory"],["BILL","Bills"],["PURCH","Purchases"],["STOCK","Stock Merge"]].map(function(f) {
           return <button key={f[0]} onClick={function() { setFilter(f[0]); }} style={{ padding: "6px 14px", borderRadius: 8, border: filter === f[0] ? "2px solid #0D6B5B" : "1px solid #ddd", background: filter === f[0] ? "#D1FAE5" : "#fff", cursor: "pointer", fontSize: 12, fontWeight: filter === f[0] ? 700 : 400 }}>{f[1]}</button>;
         })}
       </div>
-
       {loading ? <div style={{ padding: 20, textAlign: "center", color: "#888" }}>Loading audit trail...</div> :
-       filtered.length === 0 ? <div style={{ padding: 20, textAlign: "center", color: "#888" }}>No audit entries yet.</div> :
+       filtered.length === 0 ? <div style={{ padding: 20, textAlign: "center", color: "#888" }}>No audit entries yet. Changes will appear here automatically.</div> :
        <div style={{ ...cds, padding: 0, overflow: "hidden" }}><div style={{ overflowX: "auto" }}>
          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 400 }}>
-           <thead><tr>
-             <th style={ths}>When</th>
-             <th style={ths}>Type</th>
-             <th style={ths}>Details</th>
-             <th style={ths}>User</th>
-             <th style={ths}>Revert</th>
-           </tr></thead>
+           <thead><tr><th style={ths}>When</th><th style={ths}>Type</th><th style={ths}>Details</th><th style={ths}>User</th></tr></thead>
            <tbody>
              {filtered.slice(0, 200).map(function(l) {
                var ac = actionColors[l.action] || { bg: "#F3F4F6", fg: "#374151", label: l.action };
-               var revertable = canRevert(l);
-               var isReverting = reverting === l.id;
-               return <tr key={l.id} style={{ borderBottom: "1px solid #F3F4F6" }}>
+               return <tr key={l.id}>
                  <td style={{ ...tds, whiteSpace: "nowrap", fontSize: 11 }}>{l.tsDisplay || fDT(l.ts)}</td>
                  <td style={tds}><span style={{ background: ac.bg, color: ac.fg, padding: "2px 10px", borderRadius: 14, fontSize: 10.5, fontWeight: 600, whiteSpace: "nowrap" }}>{ac.label}</span></td>
                  <td style={{ ...tds, fontSize: 12, maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis" }}>{l.details}</td>
                  <td style={{ ...tds, fontSize: 11, color: "#888" }}>{l.user}</td>
-                 <td style={{ ...tds, textAlign: "center" }}>
-                   {revertable
-                     ? <button
-                         onClick={function() { doRevert(l); }}
-                         disabled={isReverting}
-                         style={{ padding: "3px 10px", background: isReverting ? "#9CA3AF" : "#FEF3C7", color: isReverting ? "#fff" : "#92400E", border: "1px solid " + (isReverting ? "#9CA3AF" : "#FCD34D"), borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: isReverting ? "not-allowed" : "pointer", whiteSpace: "nowrap" }}
-                         title={"Restore: " + (l.snapshot.item ? l.snapshot.item.name : "")}
-                       >
-                         {isReverting ? "⏳ Reverting…" : "↩ Revert"}
-                       </button>
-                     : <span style={{ color: "#D1D5DB", fontSize: 11 }}>—</span>}
-                 </td>
                </tr>;
              })}
            </tbody>
@@ -7846,7 +7888,7 @@ function App() {
           {page === "purch" && isO && <PurchPage purch={purch} addPurchase={addPurchase} deletePurchase={deletePurchase} mob={mob} askConfirm={askConfirm} inv={inv} saveInv={saveInv} bills={bills} saveBills={saveBills} />}
           {page === "returns" && isO && <ReturnsPage purch={purch} inv={inv} saveInv={saveInv} savePurch={savePurch} mob={mob} askConfirm={askConfirm} bills={bills} saveBills={saveBills} />}
           {page === "inv" && <InvPage inv={inv} saveInv={saveInv} isO={isO} mob={mob} askConfirm={askConfirm} bills={bills} showBill={showBill} />}
-          {page === "rack" && <RackPage inv={inv} saveInv={saveInv} mob={mob} askConfirm={askConfirm} />}
+          {page === "rack" && <RackPage inv={inv} saveInv={saveInv} mob={mob} purch={purch} />}
           {page === "audit" && isO && <AuditPage inv={inv} mob={mob} />}
           {page === "bill" && <BillPage inv={inv} saveInv={saveInv} addBill={addBill} mob={mob} showBill={showBill} user={user} />}
           {page === "profit" && isO && <ProfitPage bills={bills} inv={inv} mob={mob} purch={purch} saveBills={saveBills} showBill={showBill} setPage={setPage} />}
