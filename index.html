@@ -145,6 +145,7 @@ const ALL_PAGES = [
   { id: "backup",    label: "Backup",          icon: "💾" },
   { id: "changelog", label: "Change Log",      icon: "📜" },
   { id: "bankSync",  label: "Bank Sync",       icon: "🏦" },
+  { id: "csvImport", label: "Import CSV Bills", icon: "📥" },
 ];
 
 // ── OTP helpers (6-digit, stored in Firebase with 10min expiry) ───────────
@@ -7548,6 +7549,7 @@ function App() {
           {page === "backup" && isO && <BackupPage inv={inv} bills={bills} purch={purch} saveAll={saveAll} askConfirm={askConfirm} saveInv={saveInv} saveBills={saveBills} />}
           {page === "changelog" && isO && <AuditTrailPage mob={mob} />}
           {page === "bankSync" && isO && <BankSyncPage bills={bills} mob={mob} />}
+          {page === "csvImport" && isO && <CsvImportPage inv={inv} saveInv={saveInv} bills={bills} saveBills={saveBills} mob={mob} user={user} askConfirm={askConfirm} />}
         </div></div></div>
   );
 }
@@ -7555,6 +7557,398 @@ function App() {
 // ══════════════════════════════════════════════
 // BANK SYNC PAGE — match bank statement vs online bills
 // ══════════════════════════════════════════════
+// ══════════════════════════════════════════════
+// CSV IMPORT BILLS PAGE
+// Import historical bills from CSV without auto-affecting inventory.
+// Per item: user decides whether to deduct stock or not.
+// ══════════════════════════════════════════════
+function CsvImportPage({ inv, saveInv, bills, saveBills, mob, user, askConfirm }) {
+  const [csvBills, setCsvBills] = React.useState(null); // parsed bills from CSV [{billNo, date, patient, contact, items:[]}]
+  const [invToggles, setInvToggles] = React.useState({}); // key: billNo+"|"+itemIdx => bool (should reduce inventory)
+  const [deductQty, setDeductQty] = React.useState({});  // key: billNo+"|"+itemIdx => number (how many to deduct)
+  const [importing, setImporting] = React.useState(false);
+  const [done, setDone] = React.useState(null); // { imported, skipped, invUpdated }
+  const [expandedBill, setExpandedBill] = React.useState(null);
+  const [allToggles, setAllToggles] = React.useState(false);
+  const [parseError, setParseError] = React.useState(null);
+  const fileRef = React.useRef(null);
+
+  // Parse CSV text into bill objects
+  function parseCsv(text) {
+    const lines = text.trim().split(/\r?\n/);
+    if (lines.length < 2) throw new Error("CSV is empty or has no data rows.");
+    const header = lines[0].split(",").map(h => h.trim().replace(/^"|"$/g, ""));
+    const idx = (name) => header.findIndex(h => h.toLowerCase() === name.toLowerCase());
+    const iBillNo = idx("Bill No."), iBilledOn = idx("Billed On"), iEntry = idx("Entry By");
+    const iCustomer = idx("Retailer/Customer Name"), iContact = idx("Contact No");
+    const iItem = idx("Item Name"), iBatch = idx("Batch No."), iExpiry = idx("Expiry");
+    const iQty = idx("Qty Sold"), iMRP = idx("MRP"), iDiscPct = idx("Discount %"), iDiscAmt = idx("Discount Amount"), iGST = idx("IGST/SGST/CGST%");
+
+    const billMap = {};
+    for (let r = 1; r < lines.length; r++) {
+      if (!lines[r].trim()) continue;
+      // Handle quoted commas
+      const cols = [];
+      let cur = "", inQ = false;
+      for (let c = 0; c < lines[r].length; c++) {
+        const ch = lines[r][c];
+        if (ch === '"') { inQ = !inQ; continue; }
+        if (ch === ',' && !inQ) { cols.push(cur.trim()); cur = ""; continue; }
+        cur += ch;
+      }
+      cols.push(cur.trim());
+      const g = (i) => (cols[i] || "").trim();
+      const billNo = g(iBillNo); if (!billNo) continue;
+      if (!billMap[billNo]) {
+        // Parse date from "11-May-2026|11:12 AM"
+        let dateStr = g(iBilledOn);
+        let parsedDate = new Date();
+        try {
+          const [datePart, timePart] = dateStr.split("|");
+          parsedDate = new Date(datePart + " " + (timePart || "12:00 PM"));
+          if (isNaN(parsedDate)) parsedDate = new Date();
+        } catch(e) {}
+        billMap[billNo] = {
+          billNo: billNo,
+          date: parsedDate.toISOString(),
+          dateIST: dateStr,
+          patient: g(iCustomer) || "Unknown",
+          patientContact: g(iContact) || "",
+          entryBy: g(iEntry) || "",
+          paymentMode: "Cash",
+          items: [],
+          source: "csv_import"
+        };
+      }
+      const qty = parseFloat(g(iQty)) || 0;
+      const mrp = parseFloat(g(iMRP)) || 0;
+      const discPct = parseFloat(g(iDiscPct)) || 0;
+      const discAmt = parseFloat(g(iDiscAmt)) || 0;
+      const gstRate = parseFloat(g(iGST)) || 5;
+      const itemName = g(iItem);
+      if (!itemName) continue;
+      // Try to find in inventory by name or batch
+      const batch = g(iBatch);
+      const invMatch = inv.find(m =>
+        m.batch === batch ||
+        m.name.toLowerCase() === itemName.toLowerCase() ||
+        itemName.toLowerCase().includes(m.name.toLowerCase().slice(0, 10))
+      );
+      billMap[billNo].items.push({
+        name: itemName,
+        batch: batch,
+        expiry: g(iExpiry),
+        qty: qty,
+        mrp: mrp,
+        discount: discPct,
+        discountRs: discAmt,
+        gstRate: gstRate,
+        amount: mrp * qty - discAmt,
+        unitPrice: mrp,
+        mid: invMatch ? invMatch.id : null,
+        invMatchName: invMatch ? invMatch.name : null,
+        invStock: invMatch ? invMatch.stock : null,
+      });
+    }
+    const result = Object.values(billMap);
+    if (result.length === 0) throw new Error("No valid bills found in CSV.");
+    return result;
+  }
+
+  function handleFile(e) {
+    const file = e.target.files[0]; if (!file) return;
+    setParseError(null); setCsvBills(null); setDone(null); setInvToggles({});
+    const reader = new FileReader();
+    reader.onload = function(ev) {
+      try {
+        const parsed = parseCsv(ev.target.result);
+        setCsvBills(parsed);
+        // Default: all toggles OFF (don't touch inventory), deductQty = CSV qty
+        const init = {};
+        const initQty = {};
+        parsed.forEach(b => b.items.forEach((it, i) => {
+          init[b.billNo + "|" + i] = false;
+          initQty[b.billNo + "|" + i] = it.qty;
+        }));
+        setInvToggles(init);
+        setDeductQty(initQty);
+        setExpandedBill(parsed[0]?.billNo || null);
+      } catch(err) { setParseError(err.message); }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  }
+
+  function toggleItem(billNo, itemIdx, itemQty) {
+    const key = billNo + "|" + itemIdx;
+    setInvToggles(prev => {
+      const nowOn = !prev[key];
+      // When turning ON, pre-fill deductQty with CSV qty if it's currently 0 or blank
+      if (nowOn) {
+        setDeductQty(q => ({ ...q, [key]: q[key] > 0 ? q[key] : itemQty }));
+      }
+      return { ...prev, [key]: nowOn };
+    });
+  }
+
+  function setItemDeductQty(billNo, itemIdx, val) {
+    const key = billNo + "|" + itemIdx;
+    const num = Math.max(0, parseFloat(val) || 0);
+    setDeductQty(prev => ({ ...prev, [key]: num }));
+  }
+
+  function toggleAllInBill(billNo, items, val) {
+    setInvToggles(prev => {
+      const next = { ...prev };
+      items.forEach((_, i) => { next[billNo + "|" + i] = val; });
+      return next;
+    });
+    if (val) {
+      setDeductQty(prev => {
+        const next = { ...prev };
+        items.forEach((it, i) => {
+          const key = billNo + "|" + i;
+          next[key] = next[key] > 0 ? next[key] : it.qty;
+        });
+        return next;
+      });
+    }
+  }
+
+  function toggleAll(val) {
+    setAllToggles(val);
+    setInvToggles(prev => {
+      const next = { ...prev };
+      Object.keys(next).forEach(k => { next[k] = val; });
+      return next;
+    });
+    if (val && csvBills) {
+      setDeductQty(prev => {
+        const next = { ...prev };
+        csvBills.forEach(b => b.items.forEach((it, i) => {
+          const key = b.billNo + "|" + i;
+          next[key] = next[key] > 0 ? next[key] : it.qty;
+        }));
+        return next;
+      });
+    }
+  }
+
+  function doImport() {
+    if (!csvBills || csvBills.length === 0) return;
+    const existingNos = new Set(bills.map(b => b.billNo));
+    let imported = 0, skipped = 0, invUpdated = 0;
+    const newBills = [...bills];
+    let updInv = [...inv];
+
+    csvBills.forEach(b => {
+      if (existingNos.has(b.billNo)) { skipped++; return; }
+      // Compute totals
+      const totalMRP = b.items.reduce((s, it) => s + it.unitPrice * it.qty, 0);
+      const totalDiscount = b.items.reduce((s, it) => s + (it.discountRs || 0), 0);
+      const tGST = b.items.reduce((s, it) => { const a = it.amount; return s + (a - a / (1 + it.gstRate / 100)); }, 0);
+      const netAmount = Math.max(0, Math.round((totalMRP - totalDiscount) * 100) / 100);
+      const fullBill = {
+        ...b,
+        totalMRP, totalDiscount, netAmount,
+        billDiscount: 0,
+        cgst: tGST / 2, sgst: tGST / 2,
+        createdBy: user ? (user.name || user.email) : "csv_import",
+        importedAt: new Date().toISOString(),
+        noInvUpdate: true // flag: imported without auto stock deduction
+      };
+      newBills.push(fullBill);
+      imported++;
+
+      // Apply inventory deductions only for checked items
+      b.items.forEach((it, i) => {
+        const key = b.billNo + "|" + i;
+        const shouldDeduct = invToggles[key];
+        if (shouldDeduct && it.mid) {
+          const deduct = deductQty[key] > 0 ? deductQty[key] : it.qty;
+          const idx = updInv.findIndex(m => m.id === it.mid);
+          if (idx >= 0) {
+            updInv = updInv.map((m, mi) => mi === idx ? { ...m, stock: Math.max(0, Math.round((m.stock - deduct) * 10000) / 10000) } : m);
+            invUpdated++;
+          }
+        }
+      });
+    });
+
+    saveBills(newBills);
+    if (invUpdated > 0) saveInv(updInv);
+    setDone({ imported, skipped, invUpdated });
+    setCsvBills(null);
+    logAudit("CSV_IMPORT", "Imported " + imported + " bills from CSV. Inv lines updated: " + invUpdated + ". Skipped (existing): " + skipped, user);
+  }
+
+  const totalItems = csvBills ? csvBills.reduce((s, b) => s + b.items.length, 0) : 0;
+  const checkedCount = Object.values(invToggles).filter(Boolean).length;
+  const totalDeductUnits = csvBills ? csvBills.reduce((s, b) => b.items.reduce((ss, it, i) => {
+    const key = b.billNo + "|" + i;
+    return invToggles[key] ? ss + (deductQty[key] > 0 ? deductQty[key] : it.qty) : ss;
+  }, s), 0) : 0;
+
+  const cs = { card: { background: "#fff", borderRadius: 12, padding: 16, marginBottom: 14, border: "1px solid #E5E2DB", boxShadow: "0 1px 4px rgba(0,0,0,.05)" } };
+
+  return (
+    <div>
+      <h2 style={{ margin: "0 0 4px 0", fontSize: 20, fontWeight: 700, color: "#0C2E24", fontFamily: "'Playfair Display',serif" }}>📥 Import CSV Bills</h2>
+      <p style={{ margin: "0 0 16px 0", fontSize: 13, color: "#666" }}>Import historical bills from Batchwise Sales Report CSV. Bills are added without touching inventory — then you choose which items should reduce stock.</p>
+
+      {/* Upload area */}
+      <div style={cs.card}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <button onClick={() => fileRef.current && fileRef.current.click()} style={{ padding: "10px 20px", background: "#0D6B5B", color: "#fff", border: "none", borderRadius: 8, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>
+            📂 Choose CSV File
+          </button>
+          <input ref={fileRef} type="file" accept=".csv,text/csv" style={{ display: "none" }} onChange={handleFile} />
+          <span style={{ fontSize: 12, color: "#888" }}>Batchwise Sales Report format (Bill No., Billed On, Item Name, Batch No., Qty Sold, MRP, Discount%, ...)</span>
+        </div>
+        {parseError && <div style={{ marginTop: 10, padding: 10, background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: 8, color: "#DC2626", fontSize: 13 }}>⚠️ {parseError}</div>}
+      </div>
+
+      {/* Done message */}
+      {done && <div style={{ ...cs.card, background: "#F0FDF4", border: "1px solid #6EE7B7" }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: "#065F46", marginBottom: 4 }}>✅ Import Complete</div>
+        <div style={{ fontSize: 13, color: "#047857" }}>
+          <b>{done.imported}</b> bill(s) imported &nbsp;•&nbsp; <b>{done.invUpdated}</b> inventory line(s) reduced &nbsp;•&nbsp; <b>{done.skipped}</b> skipped (already existed)
+        </div>
+        <div style={{ fontSize: 12, color: "#6B7280", marginTop: 6 }}>Go to Bills History to review the imported bills.</div>
+      </div>}
+
+      {/* Parsed bills */}
+      {csvBills && csvBills.length > 0 && <div>
+        {/* Summary bar */}
+        <div style={{ ...cs.card, background: "#F0FDF4", border: "1px solid #6EE7B7", display: "flex", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
+          <div style={{ fontSize: 13, color: "#065F46", fontWeight: 600 }}>
+            📋 {csvBills.length} bills &nbsp;•&nbsp; {totalItems} items &nbsp;•&nbsp; {checkedCount} inv deductions selected &nbsp;•&nbsp; {totalDeductUnits} units to reduce
+          </div>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+            <button onClick={() => toggleAll(true)} style={{ padding: "5px 12px", background: "#059669", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✓ Check All</button>
+            <button onClick={() => toggleAll(false)} style={{ padding: "5px 12px", background: "#9CA3AF", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✗ Uncheck All</button>
+          </div>
+        </div>
+
+        {/* Info box */}
+        <div style={{ padding: "10px 14px", background: "#FFF7ED", border: "1px solid #FCD34D", borderRadius: 8, marginBottom: 14, fontSize: 12, color: "#92400E" }}>
+          <b>How to use:</b> By default, <b>no inventory is affected</b>. For each medicine in each bill, check the box ✅ if you want that item's stock to be reduced. Leave unchecked if the stock was already updated during 11–18 May.
+        </div>
+
+        {/* Bill list */}
+        {csvBills.map(b => {
+          const isExp = expandedBill === b.billNo;
+          const billTotal = b.items.reduce((s, it) => s + (it.amount || 0), 0);
+          const billChecked = b.items.filter((_, i) => invToggles[b.billNo + "|" + i]).length;
+          const alreadyExists = bills.some(x => x.billNo === b.billNo);
+          return (
+            <div key={b.billNo} style={{ ...cs.card, border: alreadyExists ? "1px solid #FCA5A5" : "1px solid #D1FAE5", padding: 0, overflow: "hidden" }}>
+              {/* Bill header row */}
+              <div onClick={() => setExpandedBill(isExp ? null : b.billNo)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", cursor: "pointer", background: alreadyExists ? "#FFF5F5" : "#F9FAFB", borderBottom: isExp ? "1px solid #E5E2DB" : "none" }}>
+                <span style={{ fontFamily: "monospace", fontWeight: 700, color: alreadyExists ? "#DC2626" : "#0D6B5B", fontSize: 13, minWidth: 80 }}>{b.billNo}</span>
+                <span style={{ fontSize: 12, color: "#555", flex: 1 }}>{b.patient} {b.patientContact ? "· " + b.patientContact : ""}</span>
+                <span style={{ fontSize: 11, color: "#888" }}>{b.dateIST.split("|")[0]}</span>
+                <span style={{ fontSize: 12, fontWeight: 600, color: "#0D6B5B" }}>₹{f2(billTotal)}</span>
+                <span style={{ fontSize: 11, color: "#059669", background: "#D1FAE5", padding: "2px 7px", borderRadius: 10 }}>{b.items.length} items</span>
+                {billChecked > 0 && <span style={{ fontSize: 11, color: "#D97706", background: "#FEF3C7", padding: "2px 7px", borderRadius: 10 }}>{billChecked} inv</span>}
+                {alreadyExists && <span style={{ fontSize: 11, color: "#DC2626", background: "#FEE2E2", padding: "2px 7px", borderRadius: 10 }}>Already exists</span>}
+                <span style={{ fontSize: 16, color: "#888" }}>{isExp ? "▲" : "▼"}</span>
+              </div>
+
+              {/* Expanded items */}
+              {isExp && <div style={{ padding: "10px 14px" }}>
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 8 }}>
+                  <span style={{ fontSize: 11, color: "#888", alignSelf: "center" }}>Reduce inventory for all items in this bill:</span>
+                  <button onClick={() => toggleAllInBill(b.billNo, b.items, true)} style={{ padding: "3px 10px", background: "#059669", color: "#fff", border: "none", borderRadius: 5, fontSize: 11, cursor: "pointer" }}>All ✓</button>
+                  <button onClick={() => toggleAllInBill(b.billNo, b.items, false)} style={{ padding: "3px 10px", background: "#9CA3AF", color: "#fff", border: "none", borderRadius: 5, fontSize: 11, cursor: "pointer" }}>None ✗</button>
+                </div>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ background: "#F3F4F6" }}>
+                      <th style={{ padding: "6px 8px", textAlign: "center", width: 36, borderRadius: "6px 0 0 0" }}>Reduce Inv?</th>
+                      <th style={{ padding: "6px 8px", textAlign: "left" }}>Medicine</th>
+                      <th style={{ padding: "6px 8px", textAlign: "center" }}>Batch</th>
+                      <th style={{ padding: "6px 8px", textAlign: "center" }}>CSV Qty</th>
+                      <th style={{ padding: "6px 8px", textAlign: "center", color: "#D97706" }}>Deduct Qty ✏️</th>
+                      <th style={{ padding: "6px 8px", textAlign: "right" }}>MRP</th>
+                      <th style={{ padding: "6px 8px", textAlign: "right" }}>Amount</th>
+                      <th style={{ padding: "6px 8px", textAlign: "left" }}>Inv Match</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {b.items.map((it, i) => {
+                      const checked = !!invToggles[b.billNo + "|" + i];
+                      const hasMatch = !!it.mid;
+                      const dqKey = b.billNo + "|" + i;
+                      const dqVal = deductQty[dqKey] !== undefined ? deductQty[dqKey] : it.qty;
+                      const dqDiffers = checked && Math.abs(dqVal - it.qty) > 0.001;
+                      return (
+                        <tr key={i} style={{ borderBottom: "1px solid #F3F4F6", background: checked ? "#F0FDF4" : "transparent" }}>
+                          <td style={{ padding: "7px 8px", textAlign: "center" }}>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => toggleItem(b.billNo, i, it.qty)}
+                              disabled={!hasMatch}
+                              title={!hasMatch ? "No inventory match found — cannot deduct" : "Check to reduce inventory stock for this item"}
+                              style={{ width: 16, height: 16, cursor: hasMatch ? "pointer" : "not-allowed", accentColor: "#059669" }}
+                            />
+                          </td>
+                          <td style={{ padding: "7px 8px", fontWeight: 500 }}>{it.name}</td>
+                          <td style={{ padding: "7px 8px", textAlign: "center", fontFamily: "monospace", color: "#555", fontSize: 11 }}>{it.batch}</td>
+                          <td style={{ padding: "7px 8px", textAlign: "center", fontWeight: 600, color: "#374151" }}>{it.qty}</td>
+                          <td style={{ padding: "7px 8px", textAlign: "center" }}>
+                            {checked && hasMatch ? (
+                              <div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "center" }}>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="1"
+                                  value={dqVal}
+                                  onChange={e => setItemDeductQty(b.billNo, i, e.target.value)}
+                                  onClick={e => e.stopPropagation()}
+                                  style={{ width: 60, padding: "3px 6px", border: dqDiffers ? "2px solid #D97706" : "1px solid #D1D5DB", borderRadius: 5, fontSize: 12, textAlign: "center", background: dqDiffers ? "#FFFBEB" : "#fff", fontWeight: 600, color: dqDiffers ? "#D97706" : "#111" }}
+                                  title="Edit how many units to deduct from inventory"
+                                />
+                                {dqDiffers && <span title={"CSV qty was " + it.qty} style={{ fontSize: 10, color: "#D97706", whiteSpace: "nowrap" }}>≠{it.qty}</span>}
+                              </div>
+                            ) : (
+                              <span style={{ color: "#9CA3AF", fontSize: 11 }}>{hasMatch ? "not reducing" : "—"}</span>
+                            )}
+                          </td>
+                          <td style={{ padding: "7px 8px", textAlign: "right" }}>₹{f2(it.mrp)}</td>
+                          <td style={{ padding: "7px 8px", textAlign: "right", fontWeight: 600, color: "#0D6B5B" }}>₹{f2(it.amount)}</td>
+                          <td style={{ padding: "7px 8px", fontSize: 11 }}>
+                            {hasMatch
+                              ? <span style={{ color: "#059669" }}>✅ {it.invMatchName} <span style={{ color: "#888" }}>({fStock(it.invStock, 0)} in stock{checked ? ", will deduct " + dqVal : ""})</span></span>
+                              : <span style={{ color: "#DC2626" }}>❌ Not found in inventory</span>
+                            }
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>}
+            </div>
+          );
+        })}
+
+        {/* Import button */}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 12, marginTop: 16 }}>
+          <button onClick={() => { setCsvBills(null); setDone(null); setInvToggles({}); }} style={{ padding: "10px 20px", background: "#9CA3AF", color: "#fff", border: "none", borderRadius: 8, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>Cancel</button>
+          <button onClick={() => askConfirm(
+            "Import " + csvBills.length + " bills? " + checkedCount + " inventory lines will be reduced.\n\nBills that already exist in the system will be skipped.",
+            doImport
+          )} style={{ padding: "10px 24px", background: "#0D6B5B", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 14, cursor: "pointer" }}>
+            ✅ Import {csvBills.filter(b => !bills.some(x => x.billNo === b.billNo)).length} Bill(s) into System
+          </button>
+        </div>
+      </div>}
+    </div>
+  );
+}
+
 function BankSyncPage({ bills, mob }) {
   // ── State ────────────────────────────────────────────────────────────────
   const [rangeType, setRangeType] = React.useState("month");
