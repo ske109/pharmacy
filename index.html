@@ -4429,7 +4429,7 @@ function ProfitPage({ bills, inv, mob, purch, saveBills, showBill, setPage }) {
   );
 }
 // ══════════════════════════════════════════════
-function RackPage({ inv, saveInv, mob }) {
+function RackPage({ inv, saveInv, mob, askConfirm }) {
   const [selected, setSelected] = useState([]);
   const [dragMed, setDragMed] = useState(null);
   const [filterRack, setFilterRack] = useState("");
@@ -7846,7 +7846,7 @@ function App() {
           {page === "purch" && isO && <PurchPage purch={purch} addPurchase={addPurchase} deletePurchase={deletePurchase} mob={mob} askConfirm={askConfirm} inv={inv} saveInv={saveInv} bills={bills} saveBills={saveBills} />}
           {page === "returns" && isO && <ReturnsPage purch={purch} inv={inv} saveInv={saveInv} savePurch={savePurch} mob={mob} askConfirm={askConfirm} bills={bills} saveBills={saveBills} />}
           {page === "inv" && <InvPage inv={inv} saveInv={saveInv} isO={isO} mob={mob} askConfirm={askConfirm} bills={bills} showBill={showBill} />}
-          {page === "rack" && <RackPage inv={inv} saveInv={saveInv} mob={mob} />}
+          {page === "rack" && <RackPage inv={inv} saveInv={saveInv} mob={mob} askConfirm={askConfirm} />}
           {page === "audit" && isO && <AuditPage inv={inv} mob={mob} />}
           {page === "bill" && <BillPage inv={inv} saveInv={saveInv} addBill={addBill} mob={mob} showBill={showBill} user={user} />}
           {page === "profit" && isO && <ProfitPage bills={bills} inv={inv} mob={mob} purch={purch} saveBills={saveBills} showBill={showBill} setPage={setPage} />}
