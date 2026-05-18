@@ -7584,6 +7584,7 @@ function CsvImportPage({ inv, saveInv, bills, saveBills, mob, user, askConfirm }
     const iItem = idx("Item Name"), iBatch = idx("Batch No."), iExpiry = idx("Expiry");
     const iQty = idx("Qty Sold"), iMRP = idx("MRP"), iDiscPct = idx("Discount %"), iGST = idx("IGST/SGST/CGST%");
     const iNetAmt = idx("Net Amount"), iTotalProfit = idx("Total Profit"), iMarginPct = idx("Margin Percent");
+    const iPurchDate = idx("Purchase Date"), iSupplierInv = idx("Supplier/Invoice"), iBatchMatch = idx("Batch Matching");
 
     // Parse qty field: handles plain numbers and loose-tablet format "strips:tablets" e.g. "0:05" = 5 loose tablets
     function parseQtyField(raw) {
@@ -7675,6 +7676,9 @@ function CsvImportPage({ inv, saveInv, bills, saveBills, mob, user, askConfirm }
         invMatchName: invMatch ? invMatch.name : null,
         invStock: invMatch ? invMatch.stock : null,
         invRack: invMatch ? (invMatch.rack || "") : null,
+        purchDate: iPurchDate >= 0 ? g(iPurchDate) : "",
+        supplierInv: iSupplierInv >= 0 ? g(iSupplierInv) : "",
+        batchMatch: iBatchMatch >= 0 ? g(iBatchMatch) : "",
       });
     }
     const result = Object.values(billMap);
@@ -7862,6 +7866,23 @@ function CsvImportPage({ inv, saveInv, bills, saveBills, mob, user, askConfirm }
           <b>How to use:</b> By default, <b>no inventory is affected</b>. For each medicine in each bill, check the box ✅ if you want that item's stock to be reduced. Leave unchecked if the stock was already updated during 11–18 May.
         </div>
 
+        {/* Purchase Match Summary */}
+        {(() => { const allItems = csvBills.flatMap(b => b.items); const bm = allItems.filter(it => it.batchMatch === "Batch Match").length; const nm = allItems.filter(it => it.batchMatch === "Name Match (Diff Batch)").length; const nf = allItems.filter(it => !it.batchMatch || it.batchMatch === "Not Found").length; return (bm > 0 || nm > 0) ? (
+        <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: 140, padding: "10px 14px", background: "#F0FDF4", border: "1px solid #6EE7B7", borderRadius: 8, textAlign: "center" }}>
+            <div style={{ fontSize: 22, fontWeight: 700, color: "#065F46" }}>{bm}</div>
+            <div style={{ fontSize: 11, color: "#059669", fontWeight: 600 }}>✅ Batch Match</div>
+          </div>
+          <div style={{ flex: 1, minWidth: 140, padding: "10px 14px", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, textAlign: "center" }}>
+            <div style={{ fontSize: 22, fontWeight: 700, color: "#92400E" }}>{nm}</div>
+            <div style={{ fontSize: 11, color: "#D97706", fontWeight: 600 }}>🔶 Name Match (Diff Batch)</div>
+          </div>
+          <div style={{ flex: 1, minWidth: 140, padding: "10px 14px", background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: 8, textAlign: "center" }}>
+            <div style={{ fontSize: 22, fontWeight: 700, color: "#DC2626" }}>{nf}</div>
+            <div style={{ fontSize: 11, color: "#DC2626", fontWeight: 600 }}>❌ Not in Purchases</div>
+          </div>
+        </div>) : null; })()}
+
         {/* Bill list */}
         {csvBills.map(b => {
           const isExp = expandedBill === b.billNo;
@@ -7901,6 +7922,9 @@ function CsvImportPage({ inv, saveInv, bills, saveBills, mob, user, askConfirm }
                       <th style={{ padding: "6px 8px", textAlign: "right" }}>Amount</th>
                       <th style={{ padding: "6px 8px", textAlign: "center" }}>Rack</th>
                       <th style={{ padding: "6px 8px", textAlign: "left" }}>Inv Match</th>
+                      <th style={{ padding: "6px 8px", textAlign: "center" }}>Purch Date</th>
+                      <th style={{ padding: "6px 8px", textAlign: "left" }}>Supplier/Invoice</th>
+                      <th style={{ padding: "6px 8px", textAlign: "center" }}>Batch Match</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -7959,6 +7983,13 @@ function CsvImportPage({ inv, saveInv, bills, saveBills, mob, user, askConfirm }
                               ? <span style={{ color: "#059669" }}>✅ {it.invMatchName} <span style={{ color: "#888" }}>({fStock(it.invStock, 0)} in stock{checked ? ", will deduct " + dqVal : ""})</span></span>
                               : <span style={{ color: "#DC2626" }}>❌ Not found in inventory</span>
                             }
+                          </td>
+                          <td style={{ padding: "7px 8px", textAlign: "center", fontSize: 11, color: "#555" }}>{it.purchDate || "—"}</td>
+                          <td style={{ padding: "7px 8px", fontSize: 11, color: "#555", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={it.supplierInv || ""}>{it.supplierInv || "—"}</td>
+                          <td style={{ padding: "7px 8px", textAlign: "center", fontSize: 11 }}>
+                            {it.batchMatch === "Batch Match" ? <span style={{ background: "#D1FAE5", color: "#065F46", borderRadius: 4, padding: "2px 7px", fontWeight: 600 }}>✅ Batch</span>
+                              : it.batchMatch === "Name Match (Diff Batch)" ? <span style={{ background: "#FEF3C7", color: "#92400E", borderRadius: 4, padding: "2px 7px", fontWeight: 600 }}>🔶 Name</span>
+                              : <span style={{ background: "#FEE2E2", color: "#DC2626", borderRadius: 4, padding: "2px 7px", fontWeight: 600 }}>❌ None</span>}
                           </td>
                         </tr>
                       );
