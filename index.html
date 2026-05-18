@@ -2311,6 +2311,31 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
     setSf(false); setEd(null); setFm(blank); };
   const doDelete = (id) => { var m = inv.find(function(x) { return x.id === id; }); askConfirm("Delete this medicine?\n" + (m ? m.name + " Batch:" + m.batch : ""), () => { saveInv(inv.filter((x) => x.id !== id)); if (m) logAudit("INV_DELETE", "Deleted " + m.name + " Batch:" + m.batch + " Stock:" + m.stock, typeof user !== "undefined" ? user : null); }); };
 
+  const [zeroRackMsg, setZeroRackMsg] = useState("");
+
+  // Delete all rack-assigned items with zero stock from inventory (and therefore stock page)
+  const deleteZeroStockRackItems = () => {
+    var targets = inv.filter(function(m) { return !!m.rack && (m.stock || 0) <= 0; });
+    if (targets.length === 0) {
+      setZeroRackMsg("✅ No zero-stock rack items found.");
+      setTimeout(function() { setZeroRackMsg(""); }, 4000);
+      return;
+    }
+    askConfirm(
+      "Delete " + targets.length + " rack-assigned item(s) with zero stock?\n\n" +
+      targets.map(function(m) { return "• " + m.name + " [" + m.rack + "] Batch:" + m.batch; }).join("\n") +
+      "\n\nThis will remove them from Inventory, Stock, and Racks permanently.",
+      function() {
+        targets.forEach(function(m) {
+          db.ref(getOutletPath("inventory/" + m.id)).remove();
+        });
+        logAudit("INV_DELETE", "Deleted " + targets.length + " zero-stock rack item(s): " + targets.map(function(m) { return m.name + " [" + m.rack + "]"; }).join(", "));
+        setZeroRackMsg("🗑 Deleted " + targets.length + " zero-stock item(s) from inventory, stock and racks.");
+        setTimeout(function() { setZeroRackMsg(""); }, 5000);
+      }
+    );
+  };
+
   const [invExpand, setInvExpand] = useState(null);
   var getSalesHistory = function(medId) {
     if (!bills) return [];
@@ -2326,10 +2351,17 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
   return (
     <div><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
       <h2 style={{ ...hds, marginBottom: 0 }}>Inventory ({inv.length})</h2>
-      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
         <ColToggle cols={INV_COLS.filter((c) => c.key !== "ptr" || isO)} visible={colVis} setVisible={setColVis} />
+        {(() => { var cnt = inv.filter(function(m){ return !!m.rack && (m.stock||0) <= 0; }).length; return cnt > 0 ? (
+          <button onClick={deleteZeroStockRackItems} style={{ ...bts(false), fontSize: 12, background: "#FEF2F2", color: "#DC2626", border: "1px solid #FCA5A5", fontWeight: 600 }} title="Delete all rack-assigned items with zero stock from inventory and stock">
+            🗑 Delete Zero-Stock ({cnt})
+          </button>
+        ) : null; })()}
         <button onClick={() => setShowBulk(!showBulk)} style={{ ...bts(false), fontSize: 12 }}>CSV Import</button>
-        <button onClick={() => { setFm(blank); setEd(null); setSf(!sf); }} style={bts(true)}>+ Add</button></div></div>
+        <button onClick={() => { setFm(blank); setEd(null); setSf(!sf); }} style={bts(true)}>+ Add</button>
+      </div></div>
+      {zeroRackMsg && <div style={{ marginBottom: 10, padding: "8px 14px", background: zeroRackMsg.startsWith("✅") ? "#F0FDF4" : "#FEF2F2", border: "1px solid " + (zeroRackMsg.startsWith("✅") ? "#BBF7D0" : "#FCA5A5"), borderRadius: 8, fontSize: 12, fontWeight: 600, color: zeroRackMsg.startsWith("✅") ? "#065F46" : "#DC2626" }}>{zeroRackMsg}</div>}
       {showBulk && <div style={{ ...cds, border: "2px solid #2563EB" }}>
         <b style={{ color: "#2563EB" }}>Bulk CSV Import</b>
         <p style={{ fontSize: 12, color: "#888", margin: "8px 0" }}>1. Download template  2. Fill in medicines  3. Upload</p>
@@ -4535,26 +4567,6 @@ function RackPage({ inv, saveInv, mob }) {
   };
 
   const [fixRackMsg, setFixRackMsg] = useState("");
-  const [zeroStockMsg, setZeroStockMsg] = useState("");
-
-  // Remove zero-stock items from their assigned racks (clears rack field only, keeps inventory record)
-  var clearZeroStockFromRacks = function() {
-    var zeroRacked = inv.filter(function(m) { return !!m.rack && (m.stock || 0) <= 0; });
-    if (zeroRacked.length === 0) {
-      setZeroStockMsg("✅ No zero-stock items found in any rack.");
-      setTimeout(function() { setZeroStockMsg(""); }, 4000);
-      return;
-    }
-    var zeroIds = new Set(zeroRacked.map(function(m) { return m.id; }));
-    var next = inv.map(function(m) {
-      if (!zeroIds.has(m.id)) return m;
-      return Object.assign({}, m, { rack: "" });
-    });
-    saveInv(next);
-    logAudit("INV_EDIT", "Cleared rack assignment for " + zeroRacked.length + " zero-stock item(s): " + zeroRacked.map(function(m) { return m.name + " [" + m.rack + "]"; }).join(", "));
-    setZeroStockMsg("✅ Removed " + zeroRacked.length + " zero-stock item(s) from their racks.");
-    setTimeout(function() { setZeroStockMsg(""); }, 5000);
-  };
 
   // Normalize a rack name: remove spaces between letter prefix and number (e.g. "A 1" → "A1", "BH- 3" → "BH-3")
   var normalizeRack = function(rack) {
@@ -4700,9 +4712,7 @@ function RackPage({ inv, saveInv, mob }) {
         {showAll && <input value={filterRack} onChange={function(e) { setFilterRack(e.target.value); }} placeholder="Filter racks (e.g. A1, BH-5)" style={{ ...inps, maxWidth: 200 }} />}
         {showAll && <span style={{ fontSize: 11, color: "#888" }}>Showing max 50. Type to filter.</span>}
         <button onClick={fixAllRacks} style={{ ...bts(false), padding: "6px 14px", fontSize: 12, background: "#EEF2FF", color: "#4338CA", border: "1px solid #C7D2FE", fontWeight: 600 }} title="Remove spaces in rack names (e.g. 'A 1' → 'A1') and register any new rack names">🔧 Fix Rack Names</button>
-        <button onClick={clearZeroStockFromRacks} style={{ ...bts(false), padding: "6px 14px", fontSize: 12, background: "#FEF2F2", color: "#DC2626", border: "1px solid #FCA5A5", fontWeight: 600 }} title="Remove zero-stock items from their assigned racks (only affects rack-assigned items)">🧹 Clear Zero-Stock from Racks</button>
         {fixRackMsg && <span style={{ fontSize: 11, color: "#059669", fontWeight: 500, background: "#F0FDF4", padding: "4px 10px", borderRadius: 6, border: "1px solid #BBF7D0" }}>{fixRackMsg}</span>}
-        {zeroStockMsg && <span style={{ fontSize: 11, color: zeroStockMsg.startsWith("✅ No") ? "#059669" : "#DC2626", fontWeight: 500, background: zeroStockMsg.startsWith("✅ No") ? "#F0FDF4" : "#FEF2F2", padding: "4px 10px", borderRadius: 6, border: zeroStockMsg.startsWith("✅ No") ? "1px solid #BBF7D0" : "1px solid #FCA5A5" }}>{zeroStockMsg}</span>}
         {dupMsg && <span style={{ fontSize: 11, color: "#6D28D9", fontWeight: 500, background: "#F5F3FF", padding: "4px 10px", borderRadius: 6, border: "1px solid #DDD6FE" }}>{dupMsg}</span>}
       </div>
 
