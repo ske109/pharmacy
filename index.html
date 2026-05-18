@@ -4609,7 +4609,25 @@ function RackPage({ inv, saveInv, mob }) {
   return (
     <div><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
       <h2 style={{ ...hds, marginBottom: 0 }}>Rack Management</h2>
-      <button onClick={function() { setShowAddNew(!showAddNew); setAddFm(rackBlank); setAddMsg(""); }} style={{ ...bts(true), fontSize: 13, padding: "9px 18px" }}>+ Add New Medicine</button>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button onClick={function() {
+          var rackItems = inv.filter(function(m) { return !!m.rack; });
+          if (!rackItems.length) { alert("No items assigned to racks."); return; }
+          var headers = ["Rack","Medicine Name","Manufacturer","Batch","Expiry","Pack","MRP","PTR","Stock","GST%","Distributor","PackQty","HSN"];
+          var csvRows = [headers.join(",")];
+          rackItems.sort(function(a,b) { return (a.rack||"").localeCompare(b.rack||"") || (a.name||"").localeCompare(b.name||""); });
+          rackItems.forEach(function(m) {
+            var row = [m.rack||"", '"'+(m.name||"").replace(/"/g,'""')+'"', '"'+(m.manufacturer||"").replace(/"/g,'""')+'"', m.batch||"", m.expiry||"", m.pack||"", m.mrp||0, m.ptr||0, m.stock||0, m.gstRate||0, '"'+(m.distributor||"").replace(/"/g,'""')+'"', m.packQty||0, m.hsn||""];
+            csvRows.push(row.join(","));
+          });
+          var blob = new Blob([csvRows.join("\n")], { type: "text/csv" });
+          var url = URL.createObjectURL(blob);
+          var a = document.createElement("a");
+          a.href = url; a.download = "Rack_Inventory_" + new Date().toISOString().slice(0,10) + ".csv";
+          a.click(); URL.revokeObjectURL(url);
+        }} style={{ padding: "9px 18px", background: "#fff", color: "#0D6B5B", border: "1px solid #0D6B5B", borderRadius: 10, fontWeight: 600, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>📥 Export Rack CSV</button>
+        <button onClick={function() { setShowAddNew(!showAddNew); setAddFm(rackBlank); setAddMsg(""); }} style={{ ...bts(true), fontSize: 13, padding: "9px 18px" }}>+ Add New Medicine</button>
+      </div>
     </div>
 
       {/* ── Add New Medicine Modal ── */}
@@ -7722,6 +7740,7 @@ function CsvImportPage({ inv, saveInv, bills, saveBills, mob, user, askConfirm }
   const [expandedBill, setExpandedBill] = React.useState(null);
   const [allToggles, setAllToggles] = React.useState(false);
   const [parseError, setParseError] = React.useState(null);
+  const [matchFilter, setMatchFilter] = React.useState(null); // null = show all, "batch" | "name" | "notfound"
   const fileRef = React.useRef(null);
 
   // Parse CSV text into bill objects
@@ -8019,23 +8038,39 @@ function CsvImportPage({ inv, saveInv, bills, saveBills, mob, user, askConfirm }
 
         {/* Purchase Match Summary */}
         {(() => { const allItems = csvBills.flatMap(b => b.items); const bm = allItems.filter(it => it.batchMatch === "Batch Match").length; const nm = allItems.filter(it => it.batchMatch === "Name Match (Diff Batch)").length; const nf = allItems.filter(it => !it.batchMatch || it.batchMatch === "Not Found").length; return (bm > 0 || nm > 0) ? (
-        <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
-          <div style={{ flex: 1, minWidth: 140, padding: "10px 14px", background: "#F0FDF4", border: "1px solid #6EE7B7", borderRadius: 8, textAlign: "center" }}>
+        <div>
+        <div style={{ display: "flex", gap: 10, marginBottom: matchFilter ? 8 : 14, flexWrap: "wrap" }}>
+          <div onClick={() => setMatchFilter(matchFilter === "batch" ? null : "batch")} style={{ flex: 1, minWidth: 140, padding: "10px 14px", background: matchFilter === "batch" ? "#D1FAE5" : "#F0FDF4", border: matchFilter === "batch" ? "2px solid #059669" : "1px solid #6EE7B7", borderRadius: 8, textAlign: "center", cursor: "pointer", transition: "all 0.15s", transform: matchFilter === "batch" ? "scale(1.03)" : "none" }}>
             <div style={{ fontSize: 22, fontWeight: 700, color: "#065F46" }}>{bm}</div>
             <div style={{ fontSize: 11, color: "#059669", fontWeight: 600 }}>✅ Batch Match</div>
           </div>
-          <div style={{ flex: 1, minWidth: 140, padding: "10px 14px", background: "#FFFBEB", border: "1px solid #FCD34D", borderRadius: 8, textAlign: "center" }}>
+          <div onClick={() => setMatchFilter(matchFilter === "name" ? null : "name")} style={{ flex: 1, minWidth: 140, padding: "10px 14px", background: matchFilter === "name" ? "#FEF3C7" : "#FFFBEB", border: matchFilter === "name" ? "2px solid #D97706" : "1px solid #FCD34D", borderRadius: 8, textAlign: "center", cursor: "pointer", transition: "all 0.15s", transform: matchFilter === "name" ? "scale(1.03)" : "none" }}>
             <div style={{ fontSize: 22, fontWeight: 700, color: "#92400E" }}>{nm}</div>
             <div style={{ fontSize: 11, color: "#D97706", fontWeight: 600 }}>🔶 Name Match (Diff Batch)</div>
           </div>
-          <div style={{ flex: 1, minWidth: 140, padding: "10px 14px", background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: 8, textAlign: "center" }}>
+          <div onClick={() => setMatchFilter(matchFilter === "notfound" ? null : "notfound")} style={{ flex: 1, minWidth: 140, padding: "10px 14px", background: matchFilter === "notfound" ? "#FEE2E2" : "#FEF2F2", border: matchFilter === "notfound" ? "2px solid #DC2626" : "1px solid #FCA5A5", borderRadius: 8, textAlign: "center", cursor: "pointer", transition: "all 0.15s", transform: matchFilter === "notfound" ? "scale(1.03)" : "none" }}>
             <div style={{ fontSize: 22, fontWeight: 700, color: "#DC2626" }}>{nf}</div>
             <div style={{ fontSize: 11, color: "#DC2626", fontWeight: 600 }}>❌ Not in Purchases</div>
           </div>
+        </div>
+        {matchFilter && <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, padding: "8px 14px", background: matchFilter === "batch" ? "#D1FAE5" : matchFilter === "name" ? "#FEF3C7" : "#FEE2E2", borderRadius: 8 }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: matchFilter === "batch" ? "#065F46" : matchFilter === "name" ? "#92400E" : "#DC2626" }}>
+            Filtering: {matchFilter === "batch" ? "✅ Batch Match items only" : matchFilter === "name" ? "🔶 Name Match (Diff Batch) items only" : "❌ Not in Purchases items only"}
+          </span>
+          <button onClick={() => setMatchFilter(null)} style={{ marginLeft: "auto", padding: "3px 12px", background: "#fff", border: "1px solid #D1D5DB", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer", color: "#555" }}>✕ Clear Filter</button>
+        </div>}
         </div>) : null; })()}
 
         {/* Bill list */}
         {csvBills.map(b => {
+          const matchItemFilter = function(it) {
+            if (!matchFilter) return true;
+            if (matchFilter === "batch") return it.batchMatch === "Batch Match";
+            if (matchFilter === "name") return it.batchMatch === "Name Match (Diff Batch)";
+            return !it.batchMatch || it.batchMatch === "Not Found";
+          };
+          const filteredItems = b.items.filter(matchItemFilter);
+          if (matchFilter && filteredItems.length === 0) return null;
           const isExp = expandedBill === b.billNo;
           const billTotal = b.items.reduce((s, it) => s + (it.amount || 0), 0);
           const billChecked = b.items.filter((_, i) => invToggles[b.billNo + "|" + i]).length;
@@ -8048,7 +8083,7 @@ function CsvImportPage({ inv, saveInv, bills, saveBills, mob, user, askConfirm }
                 <span style={{ fontSize: 12, color: "#555", flex: 1 }}>{b.patient} {b.patientContact ? "· " + b.patientContact : ""}</span>
                 <span style={{ fontSize: 11, color: "#888" }}>{b.dateIST.split("|")[0]}</span>
                 <span style={{ fontSize: 12, fontWeight: 600, color: "#0D6B5B" }}>₹{f2(billTotal)}</span>
-                <span style={{ fontSize: 11, color: "#059669", background: "#D1FAE5", padding: "2px 7px", borderRadius: 10 }}>{b.items.length} items</span>
+                <span style={{ fontSize: 11, color: "#059669", background: "#D1FAE5", padding: "2px 7px", borderRadius: 10 }}>{matchFilter ? filteredItems.length + "/" + b.items.length : b.items.length} items</span>
                 {billChecked > 0 && <span style={{ fontSize: 11, color: "#D97706", background: "#FEF3C7", padding: "2px 7px", borderRadius: 10 }}>{billChecked} inv</span>}
                 {alreadyExists && <span style={{ fontSize: 11, color: "#DC2626", background: "#FEE2E2", padding: "2px 7px", borderRadius: 10 }}>Already exists</span>}
                 <span style={{ fontSize: 16, color: "#888" }}>{isExp ? "▲" : "▼"}</span>
@@ -8080,6 +8115,7 @@ function CsvImportPage({ inv, saveInv, bills, saveBills, mob, user, askConfirm }
                   </thead>
                   <tbody>
                     {b.items.map((it, i) => {
+                      if (!matchItemFilter(it)) return null;
                       const checked = !!invToggles[b.billNo + "|" + i];
                       const hasMatch = !!it.mid;
                       const dqKey = b.billNo + "|" + i;
