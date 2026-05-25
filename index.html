@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>A to Z Pharmacy v2.2.0</title>
+<title>A to Z Pharmacy v2.5.1</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💊</text></svg>">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
 
@@ -50,7 +50,7 @@ input,select,button,textarea{font-family:inherit;-webkit-appearance:none}
 }
 </style>
 
-<meta name="app-version" content="2.3.0">
+<meta name="app-version" content="2.5.1">
 <meta name="app-changes" content="["Removed Claude API dependency for image/PDF bill reading [security/privacy]", "Added local Tesseract.js OCR with canvas preprocessing for purchase bill images", "Enhanced parsing with fallback line-by-line item extraction", "Cleaner worker without hardcoded API keys or Claude proxy route", "Improved error handling and user feedback for OCR quality", "v2.2.0: Advanced multi-pass image processing with deskew, adaptive thresholding, Sauvola binarization, OTSU thresholding, unsharp mask sharpening, multi-PSM Tesseract passes, and 3-strategy invoice parser (Vardhman columnar, flexible numeric-anchor, token-based)"]">
 <script>window.APP_VERSION = {"version": "2.3.0", "changes": ["Replaced EmailJS with Cloudflare Worker + Resend for reliable OTP delivery (no Gmail scope issues)", "Added /send-otp-email route to Cloudflare Worker", "3000 free emails/month via Resend vs 200 via EmailJS", "Proper error handling — shows actual failure reason instead of silent swallow", "OTP always logged to console as fallback"], "date": "2026-05-10", "type": "production"};</script>
 
@@ -378,7 +378,6 @@ function parseCSV(t) { const res = []; let row = [], f = "", q = false; for (let
 function normalizeInvoiceText(text) {
   return String(text || "")
     .replace(/\n/g, "\n")
-    .replace(/[|]/g, "I")
     .replace(/[“”]/g, '"')
     .replace(/[‘’]/g, "'")
     .replace(/[ 	]+/g, " ")
@@ -386,13 +385,13 @@ function normalizeInvoiceText(text) {
     .trim();
 }
 
-// ── OCR.space API — replaces Tesseract.js for pharmacy bill reading ──────────
-// Sends image or PDF to Cloudflare Worker → OCR.space API → returns clean text.
-// Free tier: 500 requests/day. Engine 2 is best for numbers & special chars.
+// ── Azure Document Intelligence (primary) + OCR.space (fallback) ─────────────
+// Sends to Cloudflare Worker → Azure Document Intelligence → returns rich result.
+// Falls back to OCR.space automatically if Azure is not configured or fails.
+// Returns { text, tables, confidence, provider }
 async function extractImageBillText(file, onProgress) {
-  if (onProgress) onProgress({ status: "recognizing text", progress: 0.1 });
+  if (onProgress) onProgress({ status: "uploading", progress: 0.1 });
 
-  // Convert file to base64
   const base64 = await new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result); // data:image/...;base64,...
@@ -400,7 +399,7 @@ async function extractImageBillText(file, onProgress) {
     reader.readAsDataURL(file);
   });
 
-  if (onProgress) onProgress({ status: "recognizing text", progress: 0.3 });
+  if (onProgress) onProgress({ status: "processing", progress: 0.3 });
 
   const resp = await fetch(PROXY_URL + "/ocr", {
     method: "POST",
@@ -408,23 +407,28 @@ async function extractImageBillText(file, onProgress) {
     body: JSON.stringify({
       base64: base64,
       filename: file.name,
-      filetype: file.type,
+      filetype: file.type || "image/jpeg",
     }),
   });
 
-  if (onProgress) onProgress({ status: "recognizing text", progress: 0.8 });
+  if (onProgress) onProgress({ status: "processing", progress: 0.8 });
 
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({}));
-    throw new Error(err.error || "OCR.space request failed (" + resp.status + ")");
+    throw new Error(err.error || "OCR request failed (" + resp.status + ")");
   }
 
   const data = await resp.json();
   if (!data.ok) throw new Error(data.error || "OCR failed");
 
-  if (onProgress) onProgress({ status: "recognizing text", progress: 1.0 });
+  if (onProgress) onProgress({ status: "done", progress: 1.0, provider: data.provider });
 
-  return normalizeInvoiceText(data.text || "");
+  return {
+    text:       normalizeInvoiceText(data.text || ""),
+    tables:     data.tables || [],
+    confidence: data.confidence || 0,
+    provider:   data.provider || "unknown",
+  };
 }
 
 // ── Spatial table reconstruction from Tesseract word bboxes ─────────────────
@@ -647,20 +651,20 @@ function parseInvoiceTable(text) {
   }
 
   // ── 2. Find pipe-table header row ───────────────────────────────────────
-  // Lines use | or I (since normalizeInvoiceText converts | → I)
+  // Lines use | as Azure preserves real pipe chars
   var headerIdx = -1;
   var colMap = {};
 
   for (var i = 0; i < lines.length; i++) {
     var l = lines[i];
-    var pipes = (l.match(/[|I]/g) || []).length;
+    var pipes = (l.match(/[|]/g) || []).length;
     if (pipes < 5) continue;
     var lower = l.toLowerCase();
     if ((lower.includes("description") || lower.includes("particular"))
-        && (lower.includes("mrp") || lower.includes("batch") || lower.includes("qty"))) {
+        && (lower.includes("mrp") || lower.includes("batch") || lower.includes("qty") || lower.includes("billed") || lower.includes("rack"))) {
 
       // Split on pipe/I separators
-      var cols = l.split(/\s*[|I]\s*/)
+      var cols = l.split(/\s*[|]\s*/)
                   .map(function(c){ return c.trim().toLowerCase(); })
                   .filter(Boolean);
 
@@ -668,21 +672,22 @@ function parseInvoiceTable(text) {
         // Use first match for each semantic field
         if (/^rack$/.test(col))                                   colMap.rack  = colMap.rack  ?? idx;
         if (/desc|particular|item\s*name|medicine/.test(col))    colMap.name  = colMap.name  ?? idx;
-        if (/^qty$|^qty\s*billed$|^billed$/.test(col))           colMap.qty   = colMap.qty   ?? idx;
+        if (/^qty$|^qty[\s_]*billed$|^billed$|^qty[\s_]*bill/.test(col)) colMap.qty = colMap.qty ?? idx;
         if (/^free/.test(col) && !/value/.test(col))             colMap.free  = colMap.free  ?? idx;
         if (/^pack/.test(col))                                    colMap.pack  = colMap.pack  ?? idx;
         if (/batch/.test(col))                                    colMap.batch = colMap.batch ?? idx;
         if (/^exp/.test(col))                                     colMap.exp   = colMap.exp   ?? idx;
-        if (/new\s*mrp/.test(col))                                colMap.newMrp  = colMap.newMrp  ?? idx;
+        if (/new[\s_]*mrp|mrp[\s_]*new/.test(col))               colMap.newMrp  = colMap.newMrp  ?? idx;
         if (/old\s*mrp/.test(col))                                colMap.oldMrp  = colMap.oldMrp  ?? idx;
         if (/^mrp$/.test(col))                                    colMap.mrp     = colMap.mrp     ?? idx;
-        if (/trade\s*price|ptr|rate/.test(col))                   colMap.trade   = colMap.trade   ?? idx;
+        if (/trade[\s_]*price|^ptr$|^rate$|^net[\s_]*rate$/.test(col)) colMap.trade = colMap.trade ?? idx;
         if (/disc\s*%/.test(col))                                 colMap.disc    = colMap.disc    ?? idx;
         if (/^gst\s*%$|^gst$|^cgst/.test(col))                  colMap.gst     = colMap.gst     ?? idx;
         if (/hsn/.test(col))                                      colMap.hsn     = colMap.hsn     ?? idx;
         if (/net\s*value/.test(col))                              colMap.net     = colMap.net     ?? idx;
         if (/taxable\s*value/.test(col))                          colMap.taxable = colMap.taxable ?? idx;
         if (/scm\s*disc/.test(col))                               colMap.scmDisc = colMap.scmDisc ?? idx;
+        if (/^scm$/.test(col))                                      colMap.scm     = colMap.scm     ?? idx;
       });
 
       if (colMap.name !== undefined && Object.keys(colMap).length >= 4) {
@@ -707,14 +712,14 @@ function parseInvoiceTable(text) {
     for (var di = headerIdx + 1; di < lines.length; di++) {
       var l = lines[di];
       // Skip separator rows (--- or ===)
-      if (/^[\|I\-\s=]+$/.test(l)) continue;
+      if (/^[|\-\s=]+$/.test(l)) continue;
       // Stop at HTML or footer
       if (/^<|^Out\s*Stock|Taxable\s*Sale|Tot\s*Items/i.test(l)) break;
       // Must have enough pipe separators to be a data row
-      if ((l.match(/[|I]/g) || []).length < 4) continue;
+      if ((l.match(/[|]/g) || []).length < 4) continue;
 
       // Split row into cells — handle leading/trailing pipes
-      var cells = l.split(/\s*[|I]\s*/).map(function(c){ return c.trim(); });
+      var cells = l.split(/\s*[|]\s*/).map(function(c){ return c.trim(); });
       // Remove empty first/last cell from leading/trailing separator
       if (cells[0] === "") cells.shift();
       if (cells[cells.length-1] === "") cells.pop();
@@ -1898,19 +1903,27 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm, inv, s
           alert("PDF parsed but no items detected. Try a cleaner PDF or CSV.");
         }
       } else {
-        setImgStatus("Sending to OCR.space...");
-        const text = await extractImageBillText(file, (m) => {
+        setImgStatus("Sending to Azure OCR...");
+        const ocrResult = await extractImageBillText(file, (m) => {
           if (m && m.progress !== undefined) {
             const pct = Math.round(m.progress * 100);
-            setImgStatus("OCR.space reading bill... " + pct + "%");
+            const provLabel = m.provider ? " via " + m.provider : "";
+            setImgStatus("Reading bill" + provLabel + "... " + pct + "%");
           }
         });
-        setImgStatus("Parsing table structure...");
-        const parsed = parseImageBillToItems(text);
+        const providerLabel = ocrResult.provider === "azure" ? "Azure Document Intelligence"
+          : ocrResult.provider === "ocrspace" ? "OCR.space (fallback)"
+          : ocrResult.provider || "OCR";
+        const confLabel = ocrResult.confidence ? " (" + Math.round(ocrResult.confidence * 100) + "% confidence)" : "";
+        setImgStatus("Parsing with " + providerLabel + confLabel + "...");
+        const parsed = parseImageBillToItems(ocrResult.text);
         if (parsed.items && parsed.items.length > 0) {
-          setRev({ ...parsed, srcType: "image", srcFile: file.name, rawText: text });
+          setRev({ ...parsed, srcType: "image", srcFile: file.name, rawText: ocrResult.text, ocrProvider: ocrResult.provider, ocrConfidence: ocrResult.confidence });
         } else {
-          alert("OCR ran but no medicine rows found.\n\nTips:\n• Use a clear, well-lit photo\n• Make sure BREVO_API_KEY and OCR_SPACE_KEY are set in Cloudflare Worker secrets\n• Try CSV export instead");
+          const tip = ocrResult.provider === "azure"
+            ? "Azure ran but no rows found — try prebuilt-layout model or a clearer photo."
+            : "OCR ran but no medicine rows found.\n\nTips:\n• Use a clear, well-lit photo\n• Add AZURE_DI_ENDPOINT + AZURE_DI_KEY to Cloudflare Worker secrets for best results\n• Try CSV export instead";
+          alert(tip);
         }
       }
     } catch (err) {
@@ -2119,7 +2132,7 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm, inv, s
             })}
           </div>}
         </div>}
-        {tab === "image" && <div style={{ border: "2px dashed #bbb", borderRadius: 10, padding: 36, textAlign: "center", cursor: "pointer", background: "#FAFAF7" }} onClick={() => !imgP && imgR.current && imgR.current.click()}><input ref={imgR} type="file" accept="image/*,.pdf,application/pdf" onChange={doImg} style={{ display: "none" }} />{imgP ? <div><div style={{ fontSize: 36 }}>🔄</div><div style={{ fontSize: 14, fontWeight: 600, color: "#0D6B5B", marginTop: 8 }}>{imgStatus || "Processing..."}</div><div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>OCR.space — do not close this page</div></div> : <div><div style={{ fontSize: 36 }}>📸</div><div style={{ fontSize: 14, fontWeight: 600, color: "#555", marginTop: 8 }}>Upload Invoice (Photo or PDF)</div></div>}</div>}
+        {tab === "image" && <div style={{ border: "2px dashed #bbb", borderRadius: 10, padding: 36, textAlign: "center", cursor: "pointer", background: "#FAFAF7" }} onClick={() => !imgP && imgR.current && imgR.current.click()}><input ref={imgR} type="file" accept="image/*,.pdf,application/pdf" onChange={doImg} style={{ display: "none" }} />{imgP ? <div><div style={{ fontSize: 36 }}>🔄</div><div style={{ fontSize: 14, fontWeight: 600, color: "#0D6B5B", marginTop: 8 }}>{imgStatus || "Processing..."}</div><div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>Azure Document Intelligence — do not close this page</div></div> : <div><div style={{ fontSize: 36 }}>📸</div><div style={{ fontSize: 14, fontWeight: 600, color: "#555", marginTop: 8 }}>Upload Invoice (Photo or PDF)</div><div style={{ fontSize: 11, color: "#aaa", marginTop: 4 }}>Powered by Azure Document Intelligence</div></div>}</div>}
         {tab === "aiExtract" && <div style={{ borderRadius: 10, overflow: "hidden", border: "1px solid #ddd", background: "#fff" }}>
           <div style={{ padding: "10px 14px", background: "#F0FDF4", borderBottom: "1px solid #ddd", fontSize: 12 }}>
             <span style={{ fontWeight: 700, color: "#0D6B5B" }}>🤖 AI Data Extraction</span>
@@ -2499,130 +2512,53 @@ function BillPage({ inv, saveInv, addBill, mob, showBill, user }) {
   const res = sq.length >= 1 ? inv.filter((m) => { const s = sq.toLowerCase(); return (m.name.toLowerCase().includes(s) || m.batch.toLowerCase().includes(s) || (m.uid || "") === sq.toUpperCase() || (m.uid || "").toLowerCase().includes(s)) && m.stock > 0; }).sort(function(a, b) { var da = getDaysToExpiry(a); var db = getDaysToExpiry(b); return da - db; }).slice(0, 12) : [];
   const addIt = (med) => { const ex = items.findIndex((i) => i.mid === med.id && !i.loose); if (ex >= 0) setItems((p) => p.map((i, idx) => idx === ex ? { ...i, qty: i.qty + 1 } : i)); else setItems((p) => [...p, { mid: med.id, name: med.name, manufacturer: med.manufacturer || "", pack: med.pack || "", batch: med.batch, expiry: med.expiry, mrp: med.mrp, ptr: med.ptr || 0, gstRate: med.gstRate || 5, qty: 1, discount: 0, loose: false, packQty: med.packQty || 0, unitPrice: med.mrp, unitPtr: med.ptr || 0, uid: med.uid || "", rack: med.rack || "", purchaseBillNo: med.purchaseBillNo || "", purchaseDistributor: med.purchaseDistributor || med.distributor || "", purchaseDate: med.purchaseDate || "", unitCost: med.unitCost || 0, purchDiscPct: med.purchDiscPct || 0, purchSchemePct: med.purchSchemePct || 0, purchFreeRatio: med.purchFreeRatio || 1 }]); setSq(""); setSo(false); };
 
-  // Camera scan - reads medicine strip/box image using local Tesseract.js v5 OCR (no API needed)
+  // Camera scan — reads medicine strip/box image using Azure Document Intelligence
   const doScan = async (e) => {
     const file = e.target.files[0]; if (!file) return;
     setScanning(true); setScanResult(null);
     try {
-      // Ensure Tesseract.js v5 is loaded (lazy, cached)
-      const ok = await ensureTesseract();
-      if (!ok) { setScanResult({ type: "err", msg: "OCR engine failed to load. Check internet connection." }); setScanning(false); e.target.value = ""; return; }
+      // Convert to base64 for Azure OCR via Cloudflare Worker
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
 
-      // ── Advanced canvas preprocessing ──────────────────────────────────────
-      // Medicine strips/boxes: small text, coloured backgrounds, curved surfaces.
-      // Steps: upscale → greyscale → adaptive contrast stretch → sharpen → binarise
-      const preprocessMedicineImage = async (imgFile) => {
-        const url = URL.createObjectURL(imgFile);
-        try {
-          const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
-          // Upscale small images; cap at 2400px wide to keep Tesseract fast
-          const TARGET_W = Math.min(2400, Math.max(1200, img.width * 2));
-          const scale = TARGET_W / img.width;
-          const w = Math.round(img.width * scale);
-          const h = Math.round(img.height * scale);
-          const c = document.createElement("canvas"); c.width = w; c.height = h;
-          const ctx = c.getContext("2d", { willReadFrequently: true });
-          // White background (handles transparent PNGs)
-          ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, w, h);
-          // Bicubic-equivalent: draw at 2× then shrink forces browser to interpolate
-          ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
-          ctx.drawImage(img, 0, 0, w, h);
-          const id = ctx.getImageData(0, 0, w, h); const d = id.data; const len = d.length;
+      setScanResult({ type: "info", msg: "Reading strip with Azure OCR..." });
 
-          // Pass 1: RGB → luminance (greyscale)
-          const grey = new Float32Array(w * h);
-          for (let i = 0; i < len; i += 4) {
-            grey[i >> 2] = d[i] * 0.2126 + d[i+1] * 0.7152 + d[i+2] * 0.0722;
-          }
+      const resp = await fetch(PROXY_URL + "/ocr", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ base64, filename: file.name, filetype: file.type || "image/jpeg" }),
+      });
 
-          // Pass 2: Compute local min/max in 64×64 tiles for adaptive contrast stretch
-          const TW = 64, TH = 64;
-          const localMin = new Float32Array(w * h);
-          const localMax = new Float32Array(w * h);
-          for (let py = 0; py < h; py++) {
-            for (let px = 0; px < w; px++) {
-              const x0 = Math.max(0, px - TW), x1 = Math.min(w - 1, px + TW);
-              const y0 = Math.max(0, py - TH), y1 = Math.min(h - 1, py + TH);
-              let mn = 255, mx = 0;
-              // Sample every 4th pixel in tile for speed
-              for (let ty = y0; ty <= y1; ty += 4) {
-                for (let tx = x0; tx <= x1; tx += 4) {
-                  const v = grey[ty * w + tx];
-                  if (v < mn) mn = v; if (v > mx) mx = v;
-                }
-              }
-              localMin[py * w + px] = mn; localMax[py * w + px] = mx;
-            }
-          }
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err.error || "OCR request failed (" + resp.status + ")");
+      }
+      const ocrData = await resp.json();
+      if (!ocrData.ok) throw new Error(ocrData.error || "OCR failed");
 
-          // Pass 3: Adaptive normalise + sharpen kernel [0,-1,0,-1,5,-1,0,-1,0]
-          const sharp = new Float32Array(w * h);
-          for (let py = 0; py < h; py++) {
-            for (let px = 0; px < w; px++) {
-              const idx = py * w + px;
-              const mn = localMin[idx], mx = localMax[idx];
-              const range = mx - mn || 1;
-              const norm = (grey[idx] - mn) / range * 255;
-              // Inline 3×3 sharpen
-              const get = (x, y) => { const g = grey[Math.min(h-1,Math.max(0,y)) * w + Math.min(w-1,Math.max(0,x))]; const mn2 = localMin[Math.min(h-1,Math.max(0,y)) * w + Math.min(w-1,Math.max(0,x))], mx2 = localMax[Math.min(h-1,Math.max(0,y)) * w + Math.min(w-1,Math.max(0,x))]; return (g - mn2) / (mx2 - mn2 || 1) * 255; };
-              const sharpened = 5 * norm - get(px-1,py) - get(px+1,py) - get(px,py-1) - get(px,py+1);
-              sharp[idx] = Math.min(255, Math.max(0, sharpened));
-            }
-          }
-
-          // Pass 4: Otsu global threshold for clean black-on-white binary
-          const hist = new Int32Array(256);
-          for (let i = 0; i < sharp.length; i++) hist[Math.round(sharp[i])]++;
-          const N = sharp.length; let total = 0;
-          for (let i = 0; i < 256; i++) total += i * hist[i];
-          let sumB = 0, wB = 0, best = 0, thresh = 128;
-          for (let t = 0; t < 256; t++) {
-            wB += hist[t]; if (!wB) continue;
-            const wF = N - wB; if (!wF) break;
-            sumB += t * hist[t];
-            const mB = sumB / wB, mF = (total - sumB) / wF;
-            const bcv = wB * wF * (mB - mF) * (mB - mF);
-            if (bcv > best) { best = bcv; thresh = t; }
-          }
-
-          // Write final binary image back
-          for (let i = 0; i < sharp.length; i++) {
-            const v = sharp[i] < thresh ? 0 : 255;
-            d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v; d[i * 4 + 3] = 255;
-          }
-          ctx.putImageData(id, 0, 0);
-          return c;
-        } finally { URL.revokeObjectURL(url); }
-      };
-
-      const canvas = await preprocessMedicineImage(file);
-
-      // ── Tesseract.js v5 — dual PSM pass for best medicine strip coverage ───
-      // PSM 6 = uniform block of text (good for strips with small label text)
-      // PSM 11 = sparse text (good for boxes where text is scattered)
-      const runOCR = async (psm) => {
-        const result = await Tesseract.recognize(canvas, "eng", {
-          tessedit_pageseg_mode: psm,
-          tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,:/-+%() ",
-          preserve_interword_spaces: "1",
-        });
-        return normalizeInvoiceText((result && result.data && result.data.text) || "");
-      };
-
-      // Run both PSM modes in parallel, pick the longer (more content) result
-      const [text6, text11] = await Promise.all([runOCR(6), runOCR(11)]);
-      const rawText = text6.length >= text11.length ? text6 : text11;
+      const rawText = normalizeInvoiceText(ocrData.text || "");
+      console.log("[doScan] Azure OCR result:", rawText.slice(0, 300));
 
       // ── Smart pharmacy-aware field extraction ──────────────────────────────
       const lines = rawText.split("\n").map(l => l.trim()).filter(Boolean);
       const joined = lines.join(" ");
 
-      // Name: longest line in top-third that looks like a medicine name (has letters + digits/mg/ml)
+      // Name: prefer branded line (top quarter), fall back to INN+dosage line
+      // Brand names (MEFTAL-SPAS, INSUPEN etc) often have no dosage on same line
+      const topLines = lines.slice(0, Math.max(3, Math.ceil(lines.length / 4)));
+      const brandLine = topLines.find(l => l.length > 3 && /[A-Z]{3,}/i.test(l) && !/^(mfg|batch|b\.no|exp|use|keep|store|rx|\d)/i.test(l)) || "";
       const nameLines = lines.slice(0, Math.ceil(lines.length / 2)).filter(l =>
         l.length > 4 && /[a-z]/i.test(l) &&
         (/\d+\s*mg|\d+\s*ml|\d+\s*mcg|\d+\s*iu|\d+\s*g\b/i.test(l) || /tab|cap|inj|syp|gel|cream|drop|spray/i.test(l))
       );
-      const name = nameLines.sort((a, b) => b.length - a.length)[0] ||
+      const dosageLine = nameLines.sort((a, b) => b.length - a.length)[0] || "";
+      // Use brand if it looks like a proper name (short, all-caps brand), else use dosage line
+      const name = (brandLine && brandLine.length <= 40 ? brandLine : dosageLine) ||
+        dosageLine || brandLine ||
         lines.filter(l => l.length > 4 && /[a-z]/i.test(l))[0] || "";
 
       // Manufacturer: line with known pharma keywords
@@ -2659,33 +2595,37 @@ function BillPage({ inv, saveInv, addBill, mob, showBill, user }) {
 
       const parsed = { name: name.slice(0, 80), manufacturer: manufacturer.slice(0, 60), batch, expiry, pack, mrp };
 
-      // ── Match against inventory ────────────────────────────────────────────
-      const medName = parsed.name.toLowerCase();
-      const words = medName.split(/\s+/).filter(w => w.length > 3);
-      const match = inv.find((m) => {
-        if (m.stock <= 0) return false;
-        const mn = m.name.toLowerCase();
-        if (mn === medName) return true;
+      // ── Match against inventory — partial name, any word, no special chars ──
+      // Strip hyphens, dots, special chars from OCR name for fuzzy matching
+      const cleanOcrName = parsed.name.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+      // All meaningful words (3+ letters, skip numbers)
+      const ocrWords = cleanOcrName.split(/\s+/).filter(w => w.length >= 3 && isNaN(w));
+
+      const matches = inv.filter((m) => {
+        const mn = m.name.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+        // Batch exact match (highest confidence)
         if (parsed.batch && m.batch && m.batch === parsed.batch) return true;
-        // Full name containment
-        if (mn.includes(medName) || medName.includes(mn)) return true;
-        // Word-level: any 2+ meaningful words from OCR appear in inventory name
-        const hits = words.filter(w => mn.includes(w));
-        return hits.length >= 2;
+        // ANY single meaningful word from OCR name appears in inventory name
+        if (ocrWords.length > 0 && ocrWords.some(w => mn.includes(w))) return true;
+        return false;
       });
 
-      if (match) {
-        addIt(match);
-        setScanResult({ type: "ok", msg: "✅ Found: " + match.name + " (Stock: " + fStock(match.stock, match.packQty) + ")" });
+      if (matches.length === 1) {
+        // Exactly one match — add directly
+        addIt(matches[0]);
+        setScanResult({ type: "ok", msg: "Added: " + matches[0].name, matches: [] });
+      } else if (matches.length > 1) {
+        // Multiple matches — show pick list
+        setScanResult({ type: "pick", msg: "Found " + matches.length + " matches — tap to add:", matches });
       } else {
+        // No match — pre-fill search with cleaned name so user can search manually
         const preview = [
           parsed.name && "Name: " + parsed.name,
-          parsed.batch && "Batch: " + parsed.batch,
           parsed.expiry && "Exp: " + parsed.expiry,
           parsed.mrp && "MRP: ₹" + parsed.mrp
         ].filter(Boolean).join(" | ");
-        setScanResult({ type: "info", msg: (preview || "Could not extract details") + " — not in inventory." });
-        if (parsed.name) setSq(parsed.name);
+        setScanResult({ type: "info", msg: (preview || "Could not extract details") + " — not in inventory.", matches: [] });
+        if (parsed.name) { setSq(cleanOcrName); setSo(true); }
       }
     } catch (err) {
       console.error("doScan error:", err);
@@ -2776,10 +2716,18 @@ function BillPage({ inv, saveInv, addBill, mob, showBill, user }) {
             <button onClick={doBarcodeScan} disabled={barcodeScanning} style={{ ...bts(false), padding: "12px 16px", fontSize: 13, opacity: barcodeScanning ? 0.6 : 1, background: "#EDE9FE", color: "#5B21B6" }}>{barcodeScanning ? "Scanning..." : "▦ Barcode"}</button>
           </div>
         </div>
-        {scanning && <div style={{ marginTop: 10, padding: 12, background: "#EFF6FF", borderRadius: 8, fontSize: 13, color: "#1E40AF", display: "flex", alignItems: "center", gap: 8 }}><span style={{ display: "inline-block", width: 16, height: 16, border: "2px solid #1E40AF", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.7s linear infinite" }}></span> Reading medicine strip (local OCR)...</div>}
-        {scanResult && <div style={{ marginTop: 10, padding: 12, borderRadius: 8, fontSize: 12.5, background: scanResult.type === "ok" ? "#D1FAE5" : scanResult.type === "err" ? "#FEE2E2" : "#FEF3C7", color: scanResult.type === "ok" ? "#065F46" : scanResult.type === "err" ? "#991B1B" : "#92400E" }}>
-          {scanResult.type === "ok" && "✅ "}{scanResult.type === "err" && "❌ "}{scanResult.type === "info" && "ℹ️ "}{scanResult.msg}
-          <button onClick={() => setScanResult(null)} style={{ marginLeft: 8, background: "none", border: "none", cursor: "pointer", fontSize: 14, opacity: 0.6 }}>x</button>
+        {scanning && <div style={{ marginTop: 10, padding: 12, background: "#EFF6FF", borderRadius: 8, fontSize: 13, color: "#1E40AF", display: "flex", alignItems: "center", gap: 8 }}><span style={{ display: "inline-block", width: 16, height: 16, border: "2px solid #1E40AF", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.7s linear infinite" }}></span> Reading strip with Azure OCR...</div>}
+        {scanResult && <div style={{ marginTop: 10, borderRadius: 8, overflow: "hidden", border: "1px solid", borderColor: scanResult.type === "ok" ? "#6EE7B7" : scanResult.type === "err" ? "#FCA5A5" : scanResult.type === "pick" ? "#93C5FD" : "#FCD34D" }}>
+          <div style={{ padding: "10px 12px", fontSize: 12.5, background: scanResult.type === "ok" ? "#D1FAE5" : scanResult.type === "err" ? "#FEE2E2" : scanResult.type === "pick" ? "#EFF6FF" : "#FEF3C7", color: scanResult.type === "ok" ? "#065F46" : scanResult.type === "err" ? "#991B1B" : scanResult.type === "pick" ? "#1E40AF" : "#92400E", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span>{scanResult.type === "ok" && "✅ "}{scanResult.type === "err" && "❌ "}{scanResult.type === "pick" && "🔍 "}{scanResult.type === "info" && "ℹ️ "}{scanResult.msg}</span>
+            <button onClick={() => setScanResult(null)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, opacity: 0.5, flexShrink: 0 }}>✕</button>
+          </div>
+          {scanResult.type === "pick" && scanResult.matches && scanResult.matches.length > 0 && <div style={{ background: "#fff", padding: "6px 8px", display: "flex", flexDirection: "column", gap: 4 }}>
+            {scanResult.matches.map((m) => <button key={m.id} onClick={() => { addIt(m); setScanResult(null); }} style={{ textAlign: "left", padding: "8px 12px", border: "1px solid #E5E7EB", borderRadius: 6, background: "#FAFAFA", cursor: "pointer", fontSize: 12.5, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontWeight: 600, color: "#111" }}>{m.name}</span>
+              <span style={{ fontSize: 11, color: "#6B7280", marginLeft: 8, flexShrink: 0 }}>Stock: {fStock(m.stock, m.packQty)} · ₹{m.mrp}</span>
+            </button>)}
+          </div>}
         </div>}
         {items.length > 0 && <div>
           <div style={{ overflowX: "auto", marginTop: 14 }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: mob ? 0 : 750 }}><thead><tr>
