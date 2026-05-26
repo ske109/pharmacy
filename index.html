@@ -372,7 +372,7 @@ function fbListen(path, callback) {
 }
 
 // ══════════════════════════════════════════════
-// CSV PARSER
+// CSV PARSER 
 // ══════════════════════════════════════════════
 function parseCSV(t) { const res = []; let row = [], f = "", q = false; for (let i = 0; i < t.length; i++) { const c = t[i]; if (c === "\"") { q = !q; continue; } if (c === "," && !q) { row.push(f.trim()); f = ""; continue; } if ((c === "\n" || c === "\r") && !q) { if (f || row.length) { row.push(f.trim()); res.push(row); row = []; f = ""; } continue; } f += c; } if (f || row.length) { row.push(f.trim()); res.push(row); } return res; }
 
