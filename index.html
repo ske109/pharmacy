@@ -52,7 +52,7 @@ input,select,button,textarea{font-family:inherit;-webkit-appearance:none}
 
 <meta name="app-version" content="2.5.1">
 <meta name="app-changes" content="["Removed Claude API dependency for image/PDF bill reading [security/privacy]", "Added local Tesseract.js OCR with canvas preprocessing for purchase bill images", "Enhanced parsing with fallback line-by-line item extraction", "Cleaner worker without hardcoded API keys or Claude proxy route", "Improved error handling and user feedback for OCR quality", "v2.2.0: Advanced multi-pass image processing with deskew, adaptive thresholding, Sauvola binarization, OTSU thresholding, unsharp mask sharpening, multi-PSM Tesseract passes, and 3-strategy invoice parser (Vardhman columnar, flexible numeric-anchor, token-based)"]">
-<script>window.APP_VERSION = {"version": "2.7.0", "changes": ["Prescription Reader now runs a full hybrid pipeline: GPT-4o Vision decode → Comprehend Medical + Azure Health entity linking → inventory match", "Every decoded drug is validated against RxNorm and UMLS medical databases", "Fused confidence score blends all engines, with a hallucination guard for confident-but-wrong reads", "Medicine strip scanning gains AWS Textract as an additional OCR fallback", "Worker routes /rx-ocr and /strip-ocr upgraded; AWS + Azure-Language engines added (all optional)"], "date": "2026-05-26", "type": "production"};</script>
+<script>window.APP_VERSION = {"version": "2.3.0", "changes": ["Replaced EmailJS with Cloudflare Worker + Resend for reliable OTP delivery (no Gmail scope issues)", "Added /send-otp-email route to Cloudflare Worker", "3000 free emails/month via Resend vs 200 via EmailJS", "Proper error handling — shows actual failure reason instead of silent swallow", "OTP always logged to console as fallback"], "date": "2026-05-10", "type": "production"};</script>
 
 <!-- OTP emails sent via Cloudflare Worker + Brevo (300 free/day, ANY recipient, no domain needed) -->
 <!-- Setup: 1) Sign up at brevo.com  2) Get API key  3) Add as BREVO_API_KEY secret in your Cloudflare Worker -->
@@ -129,7 +129,6 @@ const ALL_PAGES = [
   { id: "rack",      label: "Racks",           icon: "🗄" },
   { id: "audit",     label: "Audit",           icon: "📝" },
   { id: "bill",      label: "New Bill",        icon: "🧾" },
-  { id: "rx",        label: "Prescription",    icon: "💉" },
   { id: "profit",    label: "Profit Margin",   icon: "💹" },
   { id: "stock",     label: "Stock",           icon: "📋" },
   { id: "expiry",    label: "Expiry",          icon: "⏰" },
@@ -430,199 +429,6 @@ async function extractImageBillText(file, onProgress) {
     confidence: data.confidence || 0,
     provider:   data.provider || "unknown",
   };
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// MEDICINE STRIP READING + HANDWRITTEN PRESCRIPTION DECODING
-// ─ Strips         → Google Document AI  (Cloudflare Worker /strip-ocr)
-// ─ Prescriptions  → GPT-4o Vision       (Cloudflare Worker /rx-ocr)
-// ════════════════════════════════════════════════════════════════════════════
-
-// Read a file as a base64 data-URL
-function fileToDataURL(file) {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(r.result);
-    r.onerror = reject;
-    r.readAsDataURL(file);
-  });
-}
-
-// ── STRIP: send a strip/blister image to Google Document AI ────────────────
-// Returns { text, entities, confidence, provider }
-async function readMedicineStrip(file, onProgress) {
-  if (onProgress) onProgress("Uploading strip image…");
-  const dataUrl = await fileToDataURL(file);
-  if (onProgress) onProgress("Reading strip with Google Document AI…");
-  const resp = await fetch(PROXY_URL + "/strip-ocr", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ base64: dataUrl, filename: file.name, filetype: file.type || "image/jpeg" }),
-  });
-  if (!resp.ok) {
-    const e = await resp.json().catch(() => ({}));
-    throw new Error(e.error || "Strip OCR failed (" + resp.status + ")");
-  }
-  const data = await resp.json();
-  if (!data.ok) throw new Error(data.error || "Strip OCR failed");
-  return {
-    text:       normalizeInvoiceText(data.text || ""),
-    entities:   data.entities || [],
-    confidence: data.confidence || 0,
-    provider:   data.provider || "google-docai",
-  };
-}
-
-// ── STRIP: pharmacy-aware field extraction from raw OCR text ───────────────
-// Entity-aware: Document AI custom parsers may return typed entities; if so we
-// trust them first, then fall back to regex over the raw text block.
-function extractStripFields(rawText, entities) {
-  const lines  = (rawText || "").split("\n").map(l => l.trim()).filter(Boolean);
-  const joined = lines.join(" ");
-  const ent = {};
-  (entities || []).forEach(e => {
-    const t = (e.type || "").toLowerCase();
-    if (e.value && !ent[t]) ent[t] = e.value;
-  });
-
-  // Name — branded all-caps line near the top, else longest line with a dosage
-  const topLines  = lines.slice(0, Math.max(3, Math.ceil(lines.length / 4)));
-  const brandLine = topLines.find(l => l.length > 3 && /[A-Z]{3,}/.test(l) &&
-    !/^(mfg|batch|b\.?no|exp|use|keep|store|rx|\d)/i.test(l)) || "";
-  const dosageLine = lines
-    .filter(l => l.length > 4 && /[a-z]/i.test(l) &&
-      (/\d+\s*(mg|ml|mcg|iu|g)\b/i.test(l) || /tab|cap|inj|syp|gel|cream|drop|spray/i.test(l)))
-    .sort((a, b) => b.length - a.length)[0] || "";
-  const name = (ent["medicine"] || ent["drug_name"] || ent["name"] ||
-    (brandLine && brandLine.length <= 40 ? brandLine : dosageLine) || dosageLine || brandLine ||
-    lines.find(l => l.length > 4 && /[a-z]/i.test(l)) || "").slice(0, 80);
-
-  const mfgLine = lines.find(l => /ltd|pvt|pharma|lab|laborator|healthcare|biotech|lifescience|cipla|sun pharma|zydus|lupin|torrent|glenmark|abbott|pfizer|novartis|sanofi|dr\.?\s*reddy|mankind|alkem|cadila|intas|emcure/i.test(l)) || "";
-  const manufacturer = (ent["manufacturer"] || mfgLine.replace(/^[^a-zA-Z]*/, "")).slice(0, 60).trim();
-
-  const batchM = joined.match(/(?:batch|b\.?\s*no|lot\s*no?|b\/n)[.:\s#-]*([A-Z0-9]{3,15})/i);
-  const batch  = ent["batch"] || (batchM ? batchM[1].trim() : "");
-
-  const expiryM = joined.match(/(?:exp(?:iry|\.)?|use\s*before|expiry\s*date|exp\s*date)[.:\s]*(\d{1,2}[\/\-.]\d{2,4}(?:[\/\-.]\d{2,4})?)/i)
-    || joined.match(/(\d{2}[\/\-]\d{4})/);
-  let expiry = ent["expiry"] || (expiryM ? expiryM[1].trim() : "");
-  if (expiry && /[\/\-.]/.test(expiry)) {
-    const p = expiry.split(/[\/\-.]/);
-    if (p.length === 2)      expiry = (p[1].length === 4 ? p[1] : "20" + p[1]) + "-" + p[0].padStart(2, "0");
-    else if (p.length === 3) expiry = (p[2].length === 4 ? p[2] : "20" + p[2]) + "-" + p[1].padStart(2, "0");
-  }
-
-  const packM = joined.match(/(\d+)\s*(tablets?|tabs?|capsules?|caps?|ml|strips?|units?|vials?|ampoules?)/i);
-  const pack  = ent["pack"] || (packM ? packM[1] + " " + packM[2] : "");
-
-  const mrpM = joined.match(/(?:m\.?r\.?p\.?|rs\.?|₹)[.\s:]*(\d+(?:\.\d{1,2})?)/i)
-    || joined.match(/(\d{2,4}\.\d{2})(?!\s*%)/);
-  const mrp = ent["mrp"] ? parseFloat(ent["mrp"]) || 0 : (mrpM ? parseFloat(mrpM[1]) : 0);
-
-  const hsnM = joined.match(/hsn[.:\s]*([0-9]{4,8})/i);
-  const hsn  = ent["hsn"] || (hsnM ? hsnM[1] : "");
-
-  return { name, manufacturer, batch, expiry, pack, mrp, hsn };
-}
-
-// ── PRESCRIPTION: send a handwritten Rx image to the hybrid pipeline ───────
-// inventoryNames is passed so GPT-4o snaps its guesses to medicines in stock.
-// Returns { rx, pipeline } — pipeline lists which OCR/entity-link engines ran.
-async function decodePrescription(file, inventoryNames, onProgress) {
-  if (onProgress) onProgress("Uploading prescription…");
-  const dataUrl = await fileToDataURL(file);
-  if (onProgress) onProgress("Decoding handwriting with GPT-4o Vision…");
-  const resp = await fetch(PROXY_URL + "/rx-ocr", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      base64: dataUrl,
-      filename: file.name,
-      filetype: file.type || "image/jpeg",
-      inventory: (inventoryNames || []).slice(0, 400),
-    }),
-  });
-  if (!resp.ok) {
-    const e = await resp.json().catch(() => ({}));
-    throw new Error(e.error || "Prescription decoding failed (" + resp.status + ")");
-  }
-  const data = await resp.json();
-  if (!data.ok) throw new Error(data.error || "Prescription decoding failed");
-  return { rx: data.rx || { medicines: [] }, pipeline: data.pipeline || {} };
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// CONFIDENCE-FUSION FORMULA — "best out of all engines"
-// ────────────────────────────────────────────────────────────────────────────
-// Every engine contributes one independent signal; the final score is their
-// weighted blend plus a bonus when engines agree:
-//
-//   When medical entity linking ran (Comprehend Medical / Azure Health):
-//     C = 0.45·Cllm + 0.30·Centity + 0.25·Cstock  + agreementBonus
-//   When entity linking is not configured:
-//     C = 0.60·Cllm + 0.40·Cstock                  + agreementBonus
-//
-//   Cllm     = GPT-4o's self-reported certainty for that line
-//   Centity  = best RxNorm / UMLS link score (0 if no linker recognised it)
-//   Cstock   = best fuzzy-match score against the pharmacy's own stock
-//   agreementBonus = +0.10 if 3 signals concur, +0.05 if 2 concur
-//
-//   Hallucination guard: if entity linking ran but NO linker recognised the
-//   drug AND it isn't in stock, the score is capped at 0.50 — this catches a
-//   confident-but-wrong GPT-4o guess before it reaches a bill.
-// ════════════════════════════════════════════════════════════════════════════
-function _clamp01(x) { return Math.max(0, Math.min(1, x || 0)); }
-
-function fuseRxConfidence(med, stockScore, entityLinkingRan) {
-  const cLlm   = _clamp01(med.confidence);
-  const cEnt   = _clamp01(med.entityScore || 0);
-  const cStock = _clamp01(stockScore || 0);
-
-  let score, signals;
-  if (entityLinkingRan) {
-    score   = 0.45 * cLlm + 0.30 * cEnt + 0.25 * cStock;
-    signals = (cLlm >= 0.7 ? 1 : 0) + (med.recognized ? 1 : 0) + (cStock >= 0.6 ? 1 : 0);
-  } else {
-    score   = 0.60 * cLlm + 0.40 * cStock;
-    signals = (cLlm >= 0.7 ? 1 : 0) + (cStock >= 0.6 ? 1 : 0);
-  }
-  if (signals >= 3)      score += 0.10;
-  else if (signals >= 2) score += 0.05;
-
-  // Hallucination guard
-  if (entityLinkingRan && !med.recognized && cStock < 0.45) score = Math.min(score, 0.50);
-
-  return _clamp01(score);
-}
-
-// ── DRUG-DATABASE CROSS-REFERENCE — fuzzy-match a decoded name to inventory ─
-// The pharmacy's own stock acts as the drug database (à la MIMS / 1mg). If the
-// OCR says "RA Plus" but the shop stocks "Tramplus", the closest item wins.
-function _normDrug(s) {
-  return (s || "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
-}
-function _drugSimilarity(a, b) {
-  a = _normDrug(a); b = _normDrug(b);
-  if (!a || !b) return 0;
-  if (a === b) return 1;
-  if (b.includes(a) || a.includes(b)) return 0.88;
-  const ta = a.split(" "), tb = b.split(" ");
-  const hits = ta.filter(w => w.length > 2 && tb.some(x => x.includes(w) || w.includes(x))).length;
-  let score = hits / Math.max(ta.length, 1);
-  // first-letters bonus — handwriting OCR usually gets the start right
-  const ca = a.replace(/ /g, ""), cb = b.replace(/ /g, "");
-  if (ca.slice(0, 4) === cb.slice(0, 4)) score += 0.25;
-  else if (ca.slice(0, 3) === cb.slice(0, 3)) score += 0.15;
-  return Math.min(1, score);
-}
-function matchInventory(name, inv, strength) {
-  if (!name) return [];
-  const withStr = strength ? name + " " + strength : name;
-  return inv
-    .map(m => ({ m, score: Math.max(_drugSimilarity(name, m.name), _drugSimilarity(withStr, m.name)) }))
-    .filter(x => x.score >= 0.42)
-    .sort((a, b) => b.score - a.score || (b.m.stock || 0) - (a.m.stock || 0))
-    .slice(0, 6);
 }
 
 // ── Spatial table reconstruction from Tesseract word bboxes ─────────────────
@@ -2706,58 +2512,124 @@ function BillPage({ inv, saveInv, addBill, mob, showBill, user }) {
   const res = sq.length >= 1 ? inv.filter((m) => { const s = sq.toLowerCase(); return (m.name.toLowerCase().includes(s) || m.batch.toLowerCase().includes(s) || (m.uid || "") === sq.toUpperCase() || (m.uid || "").toLowerCase().includes(s)) && m.stock > 0; }).sort(function(a, b) { var da = getDaysToExpiry(a); var db = getDaysToExpiry(b); return da - db; }).slice(0, 12) : [];
   const addIt = (med) => { const ex = items.findIndex((i) => i.mid === med.id && !i.loose); if (ex >= 0) setItems((p) => p.map((i, idx) => idx === ex ? { ...i, qty: i.qty + 1 } : i)); else setItems((p) => [...p, { mid: med.id, name: med.name, manufacturer: med.manufacturer || "", pack: med.pack || "", batch: med.batch, expiry: med.expiry, mrp: med.mrp, ptr: med.ptr || 0, gstRate: med.gstRate || 5, qty: 1, discount: 0, loose: false, packQty: med.packQty || 0, unitPrice: med.mrp, unitPtr: med.ptr || 0, uid: med.uid || "", rack: med.rack || "", purchaseBillNo: med.purchaseBillNo || "", purchaseDistributor: med.purchaseDistributor || med.distributor || "", purchaseDate: med.purchaseDate || "", unitCost: med.unitCost || 0, purchDiscPct: med.purchDiscPct || 0, purchSchemePct: med.purchSchemePct || 0, purchFreeRatio: med.purchFreeRatio || 1 }]); setSq(""); setSo(false); };
 
-  // Camera scan — reads medicine strip/box image using Google Document AI
-  // (best-in-class for the metallic glare + skew of foil blister packs)
+  // Camera scan — reads medicine strip/box image using Azure Document Intelligence
   const doScan = async (e) => {
     const file = e.target.files[0]; if (!file) return;
     setScanning(true); setScanResult(null);
     try {
-      setScanResult({ type: "info", msg: "Reading strip with Google Document AI…" });
+      // Convert to base64 for Azure OCR via Cloudflare Worker
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
 
-      const ocr = await readMedicineStrip(file, (msg) => setScanResult({ type: "info", msg }));
-      console.log("[doScan] Document AI (" + ocr.provider + ") text:", (ocr.text || "").slice(0, 300));
+      setScanResult({ type: "info", msg: "Reading strip with Azure OCR..." });
 
-      const parsed = extractStripFields(ocr.text, ocr.entities);
+      const resp = await fetch(PROXY_URL + "/ocr", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ base64, filename: file.name, filetype: file.type || "image/jpeg" }),
+      });
 
-      // ── Cross-reference with inventory (the shop's drug database) ─────────
-      const cleanOcrName = _normDrug(parsed.name);
-      const ocrWords = cleanOcrName.split(/\s+/).filter(w => w.length >= 3 && isNaN(w));
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err.error || "OCR request failed (" + resp.status + ")");
+      }
+      const ocrData = await resp.json();
+      if (!ocrData.ok) throw new Error(ocrData.error || "OCR failed");
 
-      // Batch-exact wins; otherwise fuzzy-rank by similarity
-      const batchHit = parsed.batch ? inv.filter(m => m.batch && m.batch === parsed.batch) : [];
-      let matches;
-      if (batchHit.length) {
-        matches = batchHit;
-      } else {
-        const ranked = matchInventory(parsed.name, inv);
-        matches = ranked.map(r => r.m);
-        // widen with any-word overlap if fuzzy ranker found nothing
-        if (!matches.length && ocrWords.length) {
-          matches = inv.filter(m => {
-            const mn = _normDrug(m.name);
-            return ocrWords.some(w => mn.includes(w));
-          });
+      const rawText = normalizeInvoiceText(ocrData.text || "");
+      console.log("[doScan] Azure OCR result:", rawText.slice(0, 300));
+
+      // ── Smart pharmacy-aware field extraction ──────────────────────────────
+      const lines = rawText.split("\n").map(l => l.trim()).filter(Boolean);
+      const joined = lines.join(" ");
+
+      // Name: prefer branded line (top quarter), fall back to INN+dosage line
+      // Brand names (MEFTAL-SPAS, INSUPEN etc) often have no dosage on same line
+      const topLines = lines.slice(0, Math.max(3, Math.ceil(lines.length / 4)));
+      const brandLine = topLines.find(l => l.length > 3 && /[A-Z]{3,}/i.test(l) && !/^(mfg|batch|b\.no|exp|use|keep|store|rx|\d)/i.test(l)) || "";
+      const nameLines = lines.slice(0, Math.ceil(lines.length / 2)).filter(l =>
+        l.length > 4 && /[a-z]/i.test(l) &&
+        (/\d+\s*mg|\d+\s*ml|\d+\s*mcg|\d+\s*iu|\d+\s*g\b/i.test(l) || /tab|cap|inj|syp|gel|cream|drop|spray/i.test(l))
+      );
+      const dosageLine = nameLines.sort((a, b) => b.length - a.length)[0] || "";
+      // Use brand if it looks like a proper name (short, all-caps brand), else use dosage line
+      const name = (brandLine && brandLine.length <= 40 ? brandLine : dosageLine) ||
+        dosageLine || brandLine ||
+        lines.filter(l => l.length > 4 && /[a-z]/i.test(l))[0] || "";
+
+      // Manufacturer: line with known pharma keywords
+      const mfgLine = lines.find(l => /ltd|pvt|pharma|lab|laboratories|healthcare|biotech|lifescience|india|cipla|sun|zydus|lupin|torrent|glenmark|abbott|pfizer|novartis|sanofi|dr\.?\s*reddy|mankind|alkem|micro|cadila/i.test(l)) || "";
+      const manufacturer = mfgLine.replace(/^[^a-z]*/i, "").slice(0, 60).trim();
+
+      // Batch: B.No / Batch No / Lot / Mfg B
+      const batchM = joined.match(/(?:batch|b\.?\s*no|lot\s*no?|b\/n)[.:\s#-]*([A-Z0-9]{3,15})/i);
+      const batch = batchM ? batchM[1].trim() : "";
+
+      // Expiry: Exp / Use before / MFD patterns
+      const expiryM = joined.match(/(?:exp(?:iry|\.)?|use\s*before|expiry\s*date|exp\s*date)[.:\s]*(\d{1,2}[\/\-.]\d{2,4}(?:[\/\-.]\d{2,4})?)/i)
+        || joined.match(/(\d{2}[\/\-]\d{4})/);
+      let expiry = expiryM ? expiryM[1].trim() : "";
+      // Normalise to YYYY-MM
+      if (expiry) {
+        const parts = expiry.split(/[\/\-.]/);
+        if (parts.length === 2) {
+          const [a, b] = parts;
+          expiry = (b.length === 4 ? b : "20" + b) + "-" + a.padStart(2, "0");
+        } else if (parts.length === 3) {
+          expiry = (parts[2].length === 4 ? parts[2] : "20" + parts[2]) + "-" + parts[1].padStart(2, "0");
         }
       }
 
+      // Pack: 10 Tab / 15 Caps / 30ml etc.
+      const packM = joined.match(/(\d+)\s*(tablets?|tabs?|capsules?|caps?|ml|mg|strips?|units?|vials?|ampoules?)/i);
+      const pack = packM ? packM[1] + " " + packM[2] : "";
+
+      // MRP: look for ₹ / Rs / MRP followed by number
+      const mrpM = joined.match(/(?:m\.?r\.?p\.?|rs\.?|₹)[.\s:]*(\d+(?:\.\d{1,2})?)/i)
+        || joined.match(/(\d{2,4}\.\d{2})(?!\s*%)/);
+      const mrp = mrpM ? parseFloat(mrpM[1]) : 0;
+
+      const parsed = { name: name.slice(0, 80), manufacturer: manufacturer.slice(0, 60), batch, expiry, pack, mrp };
+
+      // ── Match against inventory — partial name, any word, no special chars ──
+      // Strip hyphens, dots, special chars from OCR name for fuzzy matching
+      const cleanOcrName = parsed.name.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+      // All meaningful words (3+ letters, skip numbers)
+      const ocrWords = cleanOcrName.split(/\s+/).filter(w => w.length >= 3 && isNaN(w));
+
+      const matches = inv.filter((m) => {
+        const mn = m.name.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+        // Batch exact match (highest confidence)
+        if (parsed.batch && m.batch && m.batch === parsed.batch) return true;
+        // ANY single meaningful word from OCR name appears in inventory name
+        if (ocrWords.length > 0 && ocrWords.some(w => mn.includes(w))) return true;
+        return false;
+      });
+
       if (matches.length === 1) {
+        // Exactly one match — add directly
         addIt(matches[0]);
         setScanResult({ type: "ok", msg: "Added: " + matches[0].name, matches: [] });
       } else if (matches.length > 1) {
-        setScanResult({ type: "pick", msg: "Found " + matches.length + " possible matches — tap to add:", matches });
+        // Multiple matches — show pick list
+        setScanResult({ type: "pick", msg: "Found " + matches.length + " matches — tap to add:", matches });
       } else {
+        // No match — pre-fill search with cleaned name so user can search manually
         const preview = [
           parsed.name && "Name: " + parsed.name,
-          parsed.batch && "Batch: " + parsed.batch,
           parsed.expiry && "Exp: " + parsed.expiry,
-          parsed.mrp && "MRP: ₹" + parsed.mrp,
+          parsed.mrp && "MRP: ₹" + parsed.mrp
         ].filter(Boolean).join(" | ");
         setScanResult({ type: "info", msg: (preview || "Could not extract details") + " — not in inventory.", matches: [] });
         if (parsed.name) { setSq(cleanOcrName); setSo(true); }
       }
     } catch (err) {
       console.error("doScan error:", err);
-      setScanResult({ type: "err", msg: "Strip OCR failed: " + (err.message || "try a clearer, well-lit image.") });
+      setScanResult({ type: "err", msg: "OCR failed. Try a clearer, well-lit image." });
     }
     setScanning(false);
     e.target.value = "";
@@ -2844,7 +2716,7 @@ function BillPage({ inv, saveInv, addBill, mob, showBill, user }) {
             <button onClick={doBarcodeScan} disabled={barcodeScanning} style={{ ...bts(false), padding: "12px 16px", fontSize: 13, opacity: barcodeScanning ? 0.6 : 1, background: "#EDE9FE", color: "#5B21B6" }}>{barcodeScanning ? "Scanning..." : "▦ Barcode"}</button>
           </div>
         </div>
-        {scanning && <div style={{ marginTop: 10, padding: 12, background: "#EFF6FF", borderRadius: 8, fontSize: 13, color: "#1E40AF", display: "flex", alignItems: "center", gap: 8 }}><span style={{ display: "inline-block", width: 16, height: 16, border: "2px solid #1E40AF", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.7s linear infinite" }}></span> Reading strip with Google Document AI…</div>}
+        {scanning && <div style={{ marginTop: 10, padding: 12, background: "#EFF6FF", borderRadius: 8, fontSize: 13, color: "#1E40AF", display: "flex", alignItems: "center", gap: 8 }}><span style={{ display: "inline-block", width: 16, height: 16, border: "2px solid #1E40AF", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.7s linear infinite" }}></span> Reading strip with Azure OCR...</div>}
         {scanResult && <div style={{ marginTop: 10, borderRadius: 8, overflow: "hidden", border: "1px solid", borderColor: scanResult.type === "ok" ? "#6EE7B7" : scanResult.type === "err" ? "#FCA5A5" : scanResult.type === "pick" ? "#93C5FD" : "#FCD34D" }}>
           <div style={{ padding: "10px 12px", fontSize: 12.5, background: scanResult.type === "ok" ? "#D1FAE5" : scanResult.type === "err" ? "#FEE2E2" : scanResult.type === "pick" ? "#EFF6FF" : "#FEF3C7", color: scanResult.type === "ok" ? "#065F46" : scanResult.type === "err" ? "#991B1B" : scanResult.type === "pick" ? "#1E40AF" : "#92400E", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <span>{scanResult.type === "ok" && "✅ "}{scanResult.type === "err" && "❌ "}{scanResult.type === "pick" && "🔍 "}{scanResult.type === "info" && "ℹ️ "}{scanResult.msg}</span>
@@ -2908,433 +2780,6 @@ function BillPage({ inv, saveInv, addBill, mob, showBill, user }) {
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: mob ? 16 : 18, fontWeight: 800, borderTop: "1px solid rgba(255,255,255,.15)", paddingTop: 10, marginTop: 8, fontFamily: "'Playfair Display',serif" }}><span>Net</span><span>Rs.{f2(net)}</span></div>
               <button onClick={gen} style={{ width: "100%", marginTop: 14, padding: 12, background: "#34D399", color: "#064E3B", border: "none", borderRadius: 7, fontSize: 14, fontWeight: 800, cursor: "pointer", fontFamily: "inherit" }}>Generate Bill</button></div></div>
         </div>}</div></div>
-  );
-}
-
-
-// ══════════════════════════════════════════════
-// PRESCRIPTION READER  (handwriting → GPT-4o Vision)
-// ══════════════════════════════════════════════
-// Verdict bands for the fused "best of all" confidence score
-function rxConf(c) {
-  if (c >= 0.8)  return { label: "Verified",  bg: "#D1FAE5", fg: "#065F46" };
-  if (c >= 0.55) return { label: "Likely",    bg: "#FEF3C7", fg: "#92400E" };
-  return { label: "Uncertain", bg: "#FEE2E2", fg: "#991B1B" };
-}
-
-function PrescriptionPage({ inv, addBill, saveInv, showBill, mob, user }) {
-  const [file, setFile]         = useState(null);
-  const [preview, setPreview]   = useState("");
-  const [decoding, setDecoding] = useState(false);
-  const [progress, setProgress] = useState("");
-  const [error, setError]       = useState("");
-  const [rx, setRx]             = useState(null);   // raw decoded result
-  const [pipeline, setPipeline] = useState(null);   // which engines ran
-  const [lines, setLines]       = useState([]);     // per-medicine working rows
-  const [pt, setPt]             = useState("");
-  const [pc, setPc]             = useState("");
-  const [docName, setDocName]   = useState("");
-  const [pm, setPm]             = useState("Cash");
-  const fileRef = useRef(null);
-  const camRef  = useRef(null);
-
-  const linkersRan = !!(pipeline && pipeline.entityLinkers && pipeline.entityLinkers.length);
-
-  // Build a working row for one decoded medicine, applying the fusion formula
-  const buildLine = (m, entityLinkingRan) => {
-    const name = m.name || "";
-    const matches = matchInventory(name, inv, m.strength);
-    const stockScore = matches.length ? matches[0].score : 0;
-    return {
-      raw: m.raw || "", name, strength: m.strength || "", form: m.form || "",
-      dosage: m.dosage || "", frequency: m.frequency || "", duration: m.duration || "",
-      instructions: m.instructions || "", llmConf: typeof m.confidence === "number" ? m.confidence : 0.5,
-      alternatives: Array.isArray(m.alternatives) ? m.alternatives : [],
-      // entity-linking signals from Comprehend Medical / Azure Health
-      rxnorm: m.rxnorm || null, umls: m.umls || null,
-      entityScore: m.entityScore || 0, recognized: !!m.recognized, enginesAgreed: m.enginesAgreed || 0,
-      // fused "best of all" confidence
-      confidence: fuseRxConfidence(
-        { confidence: m.confidence, entityScore: m.entityScore, recognized: m.recognized },
-        stockScore, entityLinkingRan
-      ),
-      matches, chosenMid: matches.length ? matches[0].m.id : "",
-      manual: !matches.length, search: "", qty: 1,
-    };
-  };
-
-  const onPick = (f) => {
-    if (!f) return;
-    setFile(f);
-    if (preview) URL.revokeObjectURL(preview);
-    setPreview(URL.createObjectURL(f));
-    setRx(null); setPipeline(null); setLines([]); setError("");
-  };
-
-  const runDecode = async () => {
-    if (!file) { setError("Upload or capture a prescription image first."); return; }
-    setDecoding(true); setError(""); setRx(null); setPipeline(null); setLines([]);
-    try {
-      const { rx: result, pipeline: pl } = await decodePrescription(file, inv.map(m => m.name), (msg) => setProgress(msg));
-      const ran = !!(pl && pl.entityLinkers && pl.entityLinkers.length);
-      setRx(result);
-      setPipeline(pl);
-      setLines((result.medicines || []).map(m => buildLine(m, ran)));
-      setPt(result.patient || "");
-      setDocName(result.doctor || "");
-    } catch (err) {
-      console.error("decodePrescription error:", err);
-      setError("Could not decode prescription: " + (err.message || "try a clearer photo."));
-    }
-    setDecoding(false); setProgress("");
-  };
-
-  const updLine = (i, patch) => setLines(prev => prev.map((l, idx) => idx === i ? { ...l, ...patch } : l));
-  const removeLine = (i) => setLines(prev => prev.filter((_, idx) => idx !== i));
-
-  // Re-match a line against inventory when its name is edited / an alternative chosen.
-  // Re-runs the fusion formula so the displayed confidence stays consistent.
-  const relink = (i, newName) => {
-    const cur = lines[i];
-    const matches = matchInventory(newName, inv, cur.strength);
-    const stockScore = matches.length ? matches[0].score : 0;
-    updLine(i, {
-      name: newName, matches,
-      chosenMid: matches.length ? matches[0].m.id : "", manual: !matches.length, search: "",
-      confidence: fuseRxConfidence(
-        { confidence: cur.llmConf, entityScore: cur.entityScore, recognized: cur.recognized },
-        stockScore, linkersRan
-      ),
-    });
-  };
-
-  const billable = lines.filter(l => l.chosenMid);
-  const billTotal = billable.reduce((s, l) => {
-    const m = inv.find(x => x.id === l.chosenMid);
-    return s + (m ? (m.mrp || 0) * Math.max(1, l.qty || 1) : 0);
-  }, 0);
-
-  const generateBill = () => {
-    if (!pt.trim()) { alert("Enter the patient name."); return; }
-    if (!billable.length) { alert("Link at least one medicine to a stock item."); return; }
-
-    const items = [];
-    for (let i = 0; i < billable.length; i++) {
-      const l = billable[i];
-      const m = inv.find(x => x.id === l.chosenMid);
-      if (!m) continue;
-      const qty = Math.max(1, l.qty || 1);
-      if (qty > Math.floor(m.stock || 0)) {
-        alert(m.name + ": only " + Math.floor(m.stock || 0) + " pack(s) in stock, but " + qty + " requested.");
-        return;
-      }
-      items.push({
-        mid: m.id, name: m.name, manufacturer: m.manufacturer || "", pack: m.pack || "",
-        batch: m.batch, expiry: m.expiry, mrp: m.mrp, ptr: m.ptr || 0, gstRate: m.gstRate || 5,
-        qty, discount: 0, discountRs: 0, loose: false, packQty: m.packQty || 0,
-        unitPrice: m.mrp, unitPtr: m.ptr || 0, unitCost: m.unitCost || 0, uid: m.uid || "",
-        rack: m.rack || "", purchaseBillNo: m.purchaseBillNo || "",
-        purchaseDistributor: m.purchaseDistributor || m.distributor || "", purchaseDate: m.purchaseDate || "",
-        sig: [l.dosage, l.frequency, l.duration, l.instructions].filter(Boolean).join(" · "),
-        amount: (m.mrp || 0) * qty,
-      });
-    }
-    const tMRP = items.reduce((s, i) => s + i.unitPrice * i.qty, 0);
-    const tGST = items.reduce((s, i) => { const a = i.amount; return s + (a - a / (1 + i.gstRate / 100)); }, 0);
-    const net  = Math.max(0, Math.round(tMRP));
-    const now  = new Date(getIST());
-    const bill = {
-      billNo: mkBill(), date: now.toISOString(),
-      dateIST: now.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true }),
-      patient: pt, patientContact: pc, patientAddress: "", doctor: docName, doctorContact: "",
-      paymentMode: pm, createdBy: user ? (user.name || user.email) : "", source: "prescription",
-      items, totalMRP: tMRP, totalDiscount: 0, billDiscount: 0, netAmount: net, cgst: tGST / 2, sgst: tGST / 2,
-    };
-    const updInv = inv.map((m) => {
-      const sold = items.filter(i => i.mid === m.id);
-      if (!sold.length) return m;
-      const t = sold.reduce((s, i) => s + i.qty, 0);
-      return { ...m, stock: Math.max(0, Math.round((m.stock - t) * 10000) / 10000) };
-    });
-    saveInv(updInv); addBill(bill); showBill(bill);
-    setFile(null); setPreview(""); setRx(null); setPipeline(null); setLines([]); setPt(""); setPc(""); setDocName(""); setPm("Cash");
-  };
-
-  return (
-    <div>
-      <h2 style={hds}>Prescription Reader</h2>
-
-      {/* Safety disclaimer */}
-      <div style={{ ...cds, borderLeft: "4px solid #D97706", background: "#FFFBEB", padding: "12px 16px", display: "flex", gap: 10 }}>
-        <span style={{ fontSize: 18 }}>⚠️</span>
-        <div style={{ fontSize: 12.5, color: "#92400E", lineHeight: 1.5 }}>
-          <b>AI-decoded — verify before dispensing.</b> GPT-4o Vision reads handwriting by inference,
-          then each drug is checked against RxNorm + UMLS and your stock. The badge shows a fused
-          confidence; always cross-check every medicine, strength and dosage against the original
-          prescription. "Uncertain" lines are flagged in red.
-        </div>
-      </div>
-
-      {/* Upload / capture */}
-      <div style={cds}>
-        <b style={{ color: "#0D6B5B", fontSize: 13 }}>1 · Prescription Image</b>
-        <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
-          <input ref={fileRef} type="file" accept="image/*" onChange={(e) => onPick(e.target.files[0])} style={{ display: "none" }} />
-          <input ref={camRef} type="file" accept="image/*" capture="environment" onChange={(e) => onPick(e.target.files[0])} style={{ display: "none" }} />
-          <button onClick={() => camRef.current && camRef.current.click()} style={{ ...bts(true) }}>📷 Capture Prescription</button>
-          <button onClick={() => fileRef.current && fileRef.current.click()} style={{ ...bts(false) }}>📁 Upload Image</button>
-        </div>
-        {preview && (
-          <div style={{ marginTop: 12, display: "flex", gap: 14, alignItems: "flex-start", flexWrap: "wrap" }}>
-            <img src={preview} alt="prescription" style={{ maxWidth: mob ? "100%" : 260, maxHeight: 220, borderRadius: 8, border: "1px solid #E5E7EB", objectFit: "contain", background: "#F9FAFB" }} />
-            <div>
-              <button onClick={runDecode} disabled={decoding} style={{ ...bts(true), padding: "12px 22px", opacity: decoding ? 0.6 : 1 }}>
-                {decoding ? "⏳ Decoding…" : "🔍 Decode Prescription"}
-              </button>
-              {decoding && progress && (
-                <div style={{ marginTop: 10, fontSize: 12.5, color: "#1E40AF", display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ display: "inline-block", width: 14, height: 14, border: "2px solid #1E40AF", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.7s linear infinite" }}></span>
-                  {progress}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-        {error && <div style={{ marginTop: 10, padding: "9px 12px", background: "#FEE2E2", border: "1px solid #FCA5A5", borderRadius: 8, color: "#991B1B", fontSize: 12.5 }}>{error}</div>}
-      </div>
-
-      {/* Decoded result */}
-      {rx && (
-        <>
-          {/* Pipeline status — which engines processed this prescription */}
-          {pipeline && (
-            <div style={{ ...cds, padding: "12px 16px", background: "#F0F9FF", borderLeft: "4px solid #0EA5E9" }}>
-              <div style={{ fontSize: 11.5, fontWeight: 700, color: "#0369A1", marginBottom: 6 }}>HYBRID PIPELINE</div>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", fontSize: 11.5 }}>
-                <span style={{ background: "#DBEAFE", color: "#1E40AF", borderRadius: 6, padding: "3px 9px", fontWeight: 600 }}>
-                  1 · Decode — GPT-4o Vision
-                </span>
-                <span style={{ color: "#94A3B8" }}>→</span>
-                <span style={{ background: linkersRan ? "#DCFCE7" : "#F1F5F9", color: linkersRan ? "#166534" : "#94A3B8", borderRadius: 6, padding: "3px 9px", fontWeight: 600 }}>
-                  2 · Entity linking — {linkersRan
-                    ? pipeline.entityLinkers.map(e => e === "comprehend-medical" ? "Comprehend Medical" : e === "azure-health" ? "Azure Health" : e).join(" + ")
-                    : "not configured"}
-                </span>
-                <span style={{ color: "#94A3B8" }}>→</span>
-                <span style={{ background: "#DCFCE7", color: "#166534", borderRadius: 6, padding: "3px 9px", fontWeight: 600 }}>
-                  3 · Drug match — your inventory
-                </span>
-                {pipeline.ocr && pipeline.ocr.indexOf("aws-textract") !== -1 && (
-                  <span style={{ background: "#FEF3C7", color: "#92400E", borderRadius: 6, padding: "3px 9px", fontWeight: 600 }}>
-                    + AWS Textract cross-check
-                  </span>
-                )}
-              </div>
-              <div style={{ fontSize: 10.5, color: "#64748B", marginTop: 6 }}>
-                {linkersRan
-                  ? "Score = 45% GPT-4o · 30% RxNorm/UMLS link · 25% stock match, +bonus when engines agree."
-                  : "Score = 60% GPT-4o · 40% stock match. Add AWS / Azure-Language keys to enable RxNorm + UMLS validation."}
-              </div>
-            </div>
-          )}
-
-          {/* Header info from the Rx */}
-          <div style={cds}>
-            <b style={{ color: "#0D6B5B", fontSize: 13 }}>2 · Patient & Doctor</b>
-            <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 8, marginTop: 10 }}>
-              <input value={pt} onChange={(e) => setPt(e.target.value)} placeholder="Patient Name *" style={inps} />
-              <input value={pc} onChange={(e) => setPc(e.target.value)} placeholder="Patient Contact" style={inps} />
-              <input value={docName} onChange={(e) => setDocName(e.target.value)} placeholder="Doctor" style={inps} />
-              <select value={pm} onChange={(e) => setPm(e.target.value)} style={{ ...inps, background: "#fff" }}>
-                {"Cash,UPI,Debit Card,Credit Card,Pending".split(",").map(m => <option key={m}>{m}</option>)}
-              </select>
-            </div>
-            {(rx.diagnosis || rx.clinic || rx.date) && (
-              <div style={{ marginTop: 8, fontSize: 11.5, color: "#888" }}>
-                {rx.clinic && <span>🏥 {rx.clinic}&nbsp;&nbsp;</span>}
-                {rx.date && <span>📅 {rx.date}&nbsp;&nbsp;</span>}
-                {rx.diagnosis && <span>🩺 {rx.diagnosis}</span>}
-              </div>
-            )}
-            {rx.warnings && (
-              <div style={{ marginTop: 8, padding: "8px 12px", background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: 8, color: "#991B1B", fontSize: 12 }}>
-                ⚠️ {rx.warnings}
-              </div>
-            )}
-          </div>
-
-          {/* Decoded medicines */}
-          <div style={cds}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
-              <b style={{ color: "#0D6B5B", fontSize: 13 }}>3 · Decoded Medicines ({lines.length})</b>
-              <span style={{ fontSize: 11, color: "#888" }}>Edit a name to re-match · pick the correct stock item below each line</span>
-            </div>
-
-            {lines.length === 0 && (
-              <div style={{ marginTop: 12, fontSize: 13, color: "#888" }}>No medicines were detected on this prescription.</div>
-            )}
-
-            <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 12 }}>
-              {lines.map((l, i) => {
-                const conf = rxConf(l.confidence);
-                const matchSearch = l.manual && l.search.length >= 1
-                  ? inv.filter(m => m.name.toLowerCase().includes(l.search.toLowerCase()) && m.stock > 0).slice(0, 8)
-                  : [];
-                const linked = l.chosenMid ? inv.find(m => m.id === l.chosenMid) : null;
-                return (
-                  <div key={i} style={{ border: "1px solid " + (l.confidence < 0.55 ? "#FCA5A5" : "#E5E7EB"), borderRadius: 10, padding: 12, background: l.confidence < 0.55 ? "#FFFBFB" : "#FCFCFB" }}>
-                    {/* Top row */}
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 10.5, color: "#A1A1AA", fontFamily: "monospace" }}>
-                          handwriting read: “{l.raw || "—"}”
-                        </div>
-                        <input
-                          value={l.name}
-                          onChange={(e) => relink(i, e.target.value)}
-                          placeholder="Medicine name"
-                          style={{ ...inps, fontWeight: 700, fontSize: 14, color: "#0C2E24", marginTop: 3, border: "1px solid #D4D0C8" }}
-                        />
-                      </div>
-                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
-                        <Tag bg={conf.bg} fg={conf.fg}>{conf.label} · {Math.round(l.confidence * 100)}%</Tag>
-                        <button onClick={() => removeLine(i)} style={{ background: "none", border: "none", color: "#DC2626", cursor: "pointer", fontSize: 11 }}>✕ remove</button>
-                      </div>
-                    </div>
-
-                    {/* Dosage detail */}
-                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
-                      {[
-                        l.strength && ["💊", l.strength],
-                        l.form && ["🧪", l.form],
-                        l.dosage && ["🔢", l.dosage],
-                        l.frequency && ["⏱", l.frequency],
-                        l.duration && ["📆", l.duration],
-                        l.instructions && ["📋", l.instructions],
-                      ].filter(Boolean).map(([ic, tx], k) => (
-                        <span key={k} style={{ fontSize: 11, background: "#F1F5F9", color: "#475569", borderRadius: 6, padding: "3px 8px" }}>{ic} {tx}</span>
-                      ))}
-                    </div>
-
-                    {/* Alternatives */}
-                    {l.alternatives.length > 0 && (
-                      <div style={{ marginTop: 8, fontSize: 11, color: "#888", display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                        Other reads:
-                        {l.alternatives.map((a, k) => (
-                          <button key={k} onClick={() => relink(i, a)} style={{ fontSize: 11, background: "#EDE9FE", color: "#5B21B6", border: "none", borderRadius: 12, padding: "3px 9px", cursor: "pointer" }}>{a}</button>
-                        ))}
-                      </div>
-                    )}
-
-                    {/* Medical entity-linking validation (Comprehend Medical / Azure Health) */}
-                    {linkersRan && (
-                      <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                        {l.recognized ? (
-                          <span style={{ fontSize: 10.5, background: "#DCFCE7", color: "#166534", borderRadius: 6, padding: "3px 9px", fontWeight: 600 }}>
-                            ✓ Verified drug · {Math.round((l.entityScore || 0) * 100)}%{l.enginesAgreed > 1 ? " (both linkers)" : ""}
-                          </span>
-                        ) : (
-                          <span style={{ fontSize: 10.5, background: "#FEE2E2", color: "#991B1B", borderRadius: 6, padding: "3px 9px", fontWeight: 600 }}>
-                            ⚠ Not found in RxNorm / UMLS — verify carefully
-                          </span>
-                        )}
-                        {l.rxnorm && (
-                          <span style={{ fontSize: 10.5, background: "#EFF6FF", color: "#1E40AF", borderRadius: 6, padding: "3px 9px" }}>
-                            RxNorm {l.rxnorm.code}: {l.rxnorm.name}
-                          </span>
-                        )}
-                        {l.umls && (
-                          <span style={{ fontSize: 10.5, background: "#F5F3FF", color: "#5B21B6", borderRadius: 6, padding: "3px 9px" }}>
-                            UMLS {l.umls}
-                          </span>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Inventory link */}
-                    <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed #E5E7EB" }}>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: "#0D6B5B", marginBottom: 5 }}>Linked stock item</div>
-                      {!l.manual ? (
-                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                          <select
-                            value={l.chosenMid}
-                            onChange={(e) => { e.target.value === "__manual__" ? updLine(i, { manual: true, chosenMid: "" }) : updLine(i, { chosenMid: e.target.value }); }}
-                            style={{ ...inps, background: "#fff", flex: 1, minWidth: 200 }}
-                          >
-                            {l.matches.map(({ m, score }) => (
-                              <option key={m.id} value={m.id}>
-                                {m.name} — stock {fStock(m.stock, m.packQty)} · ₹{f2(m.mrp)} ({Math.round(score * 100)}% match)
-                              </option>
-                            ))}
-                            <option value="__manual__">🔍 Search manually…</option>
-                          </select>
-                          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                            <span style={{ fontSize: 11, color: "#888" }}>Qty</span>
-                            <input type="number" min="1" value={l.qty} onChange={(e) => updLine(i, { qty: Math.max(1, parseInt(e.target.value) || 1) })} style={{ ...inps, width: 64, padding: "7px 8px" }} />
-                          </div>
-                        </div>
-                      ) : (
-                        <div>
-                          <input
-                            value={l.search}
-                            onChange={(e) => updLine(i, { search: e.target.value })}
-                            placeholder="Search inventory by name…"
-                            style={{ ...inps, border: "2px solid #D4D0C8" }}
-                          />
-                          {matchSearch.length > 0 && (
-                            <div style={{ marginTop: 4, border: "1px solid #E5E7EB", borderRadius: 8, overflow: "hidden" }}>
-                              {matchSearch.map(m => (
-                                <button key={m.id} onClick={() => updLine(i, { chosenMid: m.id, manual: false, matches: [{ m, score: 1 }, ...l.matches.filter(x => x.m.id !== m.id)] })}
-                                  style={{ display: "flex", justifyContent: "space-between", width: "100%", padding: "8px 12px", border: "none", borderBottom: "1px solid #f5f5f0", background: "#fff", cursor: "pointer", fontSize: 12.5, textAlign: "left" }}>
-                                  <b style={{ color: "#0C2E24" }}>{m.name}</b>
-                                  <span style={{ color: "#0D6B5B" }}>{fStock(m.stock, m.packQty)} · ₹{f2(m.mrp)}</span>
-                                </button>
-                              ))}
-                            </div>
-                          )}
-                          {l.matches.length > 0 && (
-                            <button onClick={() => updLine(i, { manual: false, chosenMid: l.matches[0].m.id })} style={{ marginTop: 5, background: "none", border: "none", color: "#0D6B5B", fontSize: 11, cursor: "pointer" }}>← back to suggested matches</button>
-                          )}
-                        </div>
-                      )}
-                      {linked ? (
-                        <div style={{ marginTop: 6, fontSize: 11.5, color: "#065F46" }}>
-                          ✓ Will bill <b>{linked.name}</b> — batch {linked.batch || "—"}{linked.expiry ? " · exp " + linked.expiry : ""}
-                        </div>
-                      ) : (
-                        <div style={{ marginTop: 6, fontSize: 11.5, color: "#B45309" }}>⚠ Not linked — this medicine will not be added to the bill.</div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Bill summary */}
-          {lines.length > 0 && (
-            <div style={{ ...cds, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
-              <div style={{ fontSize: 13, color: "#555" }}>
-                <b style={{ color: "#0C2E24" }}>{billable.length}</b> of {lines.length} medicine(s) linked to stock ·
-                estimated total <b style={{ color: "#0D6B5B" }}>₹{f2(billTotal)}</b>
-              </div>
-              <button onClick={generateBill} disabled={!billable.length} style={{ ...bts(true), padding: "12px 24px", opacity: billable.length ? 1 : 0.4 }}>
-                🧾 Create Bill from Prescription
-              </button>
-            </div>
-          )}
-        </>
-      )}
-
-      {/* Empty state */}
-      {!rx && !decoding && (
-        <div style={{ textAlign: "center", padding: "40px 20px", color: "#9CA3AF" }}>
-          <div style={{ fontSize: 38, marginBottom: 10 }}>💉</div>
-          <div style={{ fontSize: 14, fontWeight: 600, color: "#6B7280" }}>Capture or upload a handwritten prescription</div>
-          <div style={{ fontSize: 12, marginTop: 5 }}>GPT-4o Vision decodes the handwriting and matches each medicine to your stock</div>
-        </div>
-      )}
-    </div>
   );
 }
 
@@ -8404,7 +7849,6 @@ function App() {
           {page === "rack" && <RackPage inv={inv} saveInv={saveInv} mob={mob} purch={purch} />}
           {page === "audit" && isO && <AuditPage inv={inv} mob={mob} />}
           {page === "bill" && <BillPage inv={inv} saveInv={saveInv} addBill={addBill} mob={mob} showBill={showBill} user={user} />}
-          {page === "rx" && <PrescriptionPage inv={inv} addBill={addBill} saveInv={saveInv} showBill={showBill} mob={mob} user={user} />}
           {page === "profit" && isO && <ProfitPage bills={bills} inv={inv} mob={mob} purch={purch} saveBills={saveBills} showBill={showBill} setPage={setPage} />}
           {page === "stock" && <StockPage inv={inv} saveInv={saveInv} isO={isO} mob={mob} />}
           {page === "expiry" && <ExpiryPage inv={inv} mob={mob} saveInv={saveInv} />}
