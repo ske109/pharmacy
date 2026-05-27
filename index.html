@@ -1535,39 +1535,25 @@ function Login({ onLogin }) {
     if (!em || !em.includes("@")) { setErr("Enter a valid email address"); return; }
     setLoading(true); setErr(""); setInfo("");
     try {
-      // Check if user is registered (owner or in userProfiles)
-      const isOwner = OWNER_EMAILS.includes(em);
-      let profile = null;
-      if (!isOwner) {
-        profile = await loadUserProfile(em);
-        if (!profile) { setErr("This email is not registered. Contact owner to add you."); setLoading(false); return; }
-        if (profile.disabled) { setErr("Your account has been disabled. Contact owner."); setLoading(false); return; }
-      }
-      const code = genOTP();
-      console.log("[OTP DEBUG] Code for " + em + ": " + code);
-      await saveOTP(em, code);
-      var emailOk = false;
-      var emailErr = "";
-      var fallbackOk = false;
-      try {
-        await sendOTPEmail(em, code, isOwner ? "Owner" : (profile && profile.name) || em);
-        emailOk = true;
-      } catch(mailErr) {
-        emailErr = mailErr.message || "Unknown error";
-        // Try sending to admin as fallback
-        if (em.toLowerCase() !== "krishkwish@gmail.com") {
-          fallbackOk = await sendOTPFallback(em, code);
-        }
+      // Worker generates + stores the OTP server-side, checks registration,
+      // and emails the code. The browser never sees or stores the OTP.
+      const resp = await fetch(PROXY_URL + "/auth/request-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: em })
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) {
+        setErr(data.error || ("Request failed (HTTP " + resp.status + ")"));
+        setLoading(false);
+        return;
       }
       setStep("otp");
       setResendCd(60);
-      if (emailOk) {
-        setInfo("OTP sent to " + em + ". Check inbox & spam.");
-      } else if (fallbackOk) {
+      if (data.delivered === "admin") {
         setInfo("OTP sent to admin (krishkwish@gmail.com). Please ask admin for the OTP code.");
       } else {
-        setErr("Email failed: " + emailErr);
-        setInfo("Could not send OTP email. Please contact admin.");
+        setInfo("OTP sent to " + em + ". Check inbox & spam.");
       }
     } catch(e) {
       console.error("[OTP ERROR]", e);
@@ -1580,24 +1566,35 @@ function Login({ onLogin }) {
     if (!otp.trim() || otp.trim().length !== 6) { setErr("Enter the 6-digit OTP"); return; }
     setLoading(true); setErr("");
     try {
-      const result = await verifyOTP(email.trim().toLowerCase(), otp.trim());
-      if (!result.ok) { setErr(result.err); setLoading(false); return; }
-      // Successful OTP — sign in via Firebase Anonymous or load profile
       const em = email.trim().toLowerCase();
-      const isOwner = OWNER_EMAILS.includes(em);
-      let profile = isOwner ? { name: em === "krishkwish@gmail.com" ? "Krish" : "Saloni", role: "owner", pages: null } : await loadUserProfile(em);
-      if (!profile) { setErr("Profile not found. Contact owner."); setLoading(false); return; }
-      // Update last login
-      if (!isOwner) await saveUserProfile(em, { ...profile, lastLogin: new Date().toISOString() });
+      // Worker verifies the OTP server-side and returns a Firebase custom token.
+      const resp = await fetch(PROXY_URL + "/auth/verify-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: em, otp: otp.trim() })
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) {
+        setErr(data.error || "Verification failed");
+        setLoading(false);
+        return;
+      }
+      // Real Firebase sign-in — this is what makes the database rules enforceable.
+      if (!auth) { setErr("Auth not initialised. Reload the page."); setLoading(false); return; }
+      await auth.signInWithCustomToken(data.token);
+
+      const isOwner = data.role === "owner";
+      const profile = data.profile || {};
       onLogin({
-        id: em.replace(/[^a-z0-9]/gi, "_"),
+        id: data.uid,                       // uid = mangled email (matches auth.uid)
         email: em,
-        name: profile.name || em,
+        name: data.name || em,
         role: isOwner ? "owner" : "staff",
-        pages: isOwner ? null : (profile.pages || []), // null = all pages for owner
-        outlets: isOwner ? null : (profile.outlets || Object.keys(OUTLETS)), // null = all outlets for owner
+        pages: isOwner ? null : (profile.pages || []),
+        outlets: isOwner ? null : (profile.outlets || Object.keys(OUTLETS)),
       });
     } catch(e) {
+      console.error("[VERIFY ERROR]", e);
       setErr("Verification failed: " + e.message);
     }
     setLoading(false);
@@ -7635,24 +7632,38 @@ function App() {
     // Set PH from stored outlet
     PH = OUTLETS[getCurrentOutlet()] || OUTLETS.outlet2;
 
-    // OTP-based auth: no Firebase Auth session, user stored in component state.
-    // On page reload, user must log in again (security by design for pharmacy).
-    // Check if we have a recent session in localStorage (persists across tabs/restarts).
-    const saved = localStorage.getItem("atoz_session");
-    if (saved) {
-      try {
-        const u = JSON.parse(saved);
-        if (u && u.email && u.loginTs && (Date.now() - u.loginTs) < 24 * 60 * 60 * 1000) {
-          // Session still valid (8 hours)
-          setUser(u);
-        } else {
-          localStorage.removeItem("atoz_session");
+    // Real Firebase Auth: a session is valid ONLY if Firebase still has a
+    // signed-in user. The localStorage entry just carries role/profile detail;
+    // it cannot by itself grant access (the DB rules require auth anyway).
+    if (!auth) { setLoading(false); return; }
+
+    const unsub = auth.onAuthStateChanged((fbUser) => {
+      if (fbUser) {
+        const saved = localStorage.getItem("atoz_session");
+        if (saved) {
+          try {
+            const u = JSON.parse(saved);
+            // localStorage uid must match the live Firebase uid
+            if (u && u.id === fbUser.uid && u.loginTs &&
+                (Date.now() - u.loginTs) < 24 * 60 * 60 * 1000) {
+              setUser(u);
+            } else {
+              localStorage.removeItem("atoz_session");
+              auth.signOut();
+            }
+          } catch(e) {
+            localStorage.removeItem("atoz_session");
+            auth.signOut();
+          }
         }
-      } catch(e) { localStorage.removeItem("atoz_session"); }
-    }
-    setLoading(false);
-    // No Firebase Auth listener needed — OTP auth is stateless
-    const unsub = () => {};
+        // If no localStorage detail, user must log in again (rare edge case).
+      } else {
+        // No Firebase session -> not logged in.
+        localStorage.removeItem("atoz_session");
+        setUser(null);
+      }
+      setLoading(false);
+    });
     return unsub;
   }, []);
 
@@ -7724,6 +7735,7 @@ function App() {
   const logout = () => {
     localStorage.removeItem("atoz_session");
     fbSet("sessions/" + (user ? user.id : ""), null);
+    if (auth) auth.signOut();
     setUser(null);
     setPage("dash");
   };
