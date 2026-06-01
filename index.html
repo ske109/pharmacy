@@ -212,7 +212,7 @@ async function saveUserProfile(email, profile) {
 // Helper to set a specific path (not outlet-scoped)
 async function fbSetPath(path, val) {
   if (!db) return;
-  return db.ref(path).set(val);
+  return dbWrite(path, val);
 }
 
 // Legacy compat — dynamically built from Firebase now
@@ -260,18 +260,166 @@ function parseStockInput(val, packQty) {
 // ══════════════════════════════════════════════
 // AUDIT TRAIL — logs who changed what and when
 // ══════════════════════════════════════════════
-function logAudit(action, details, user) {
+// Per-feature logAudit() is SUPERSEDED by the universal write logger below
+// (dbWrite -> logChange records every write with full before->after detail).
+// Kept as a no-op so the existing logAudit() calls scattered through the app
+// don't create duplicate changelog entries.
+function logAudit(action, details, user) { return; }
+
+// ══════════════════════════════════════════════
+// UNIVERSAL WRITE LOGGING
+// Every database write funnels through dbWrite(), which reads the current
+// value, records a full before->after diff to the audit trail, then writes.
+// Reads are NEVER logged. Nothing in the app can write without being logged.
+// ══════════════════════════════════════════════
+
+// Never log: the audit trail itself (would recurse), session presence pings
+// (heartbeat noise), and OTP codes (short-lived secrets). These still WRITE.
+function _skipLog(fullPath) {
+  return /(^|\/)(auditTrail|sessions|otps)(\/|$)/.test(String(fullPath));
+}
+// "outlets/outlet2/bills/ATZ1" -> "bills/ATZ1" for readable logs
+function _logicalPath(fullPath) {
+  return String(fullPath).replace(/^outlets\/[^/]+\//, "");
+}
+// Who is acting right now (from the saved session) — no plumbing needed
+function _logUser() {
+  try { var s = JSON.parse(localStorage.getItem("atoz_session") || "null"); return s ? (s.name || s.email || "unknown") : "system"; }
+  catch (e) { return "system"; }
+}
+function _eq(a, b) {
+  try { return JSON.stringify(a === undefined ? null : a) === JSON.stringify(b === undefined ? null : b); }
+  catch (e) { return false; }
+}
+// Redact obvious secrets before they land in a long-lived log
+var _SECRET = { password: 1, passwd: 1, pwd: 1, pin: 1, otp: 1, token: 1, secret: 1, apikey: 1, api_key: 1 };
+function _redact(v) {
+  if (!v || typeof v !== "object") return v;
+  if (Array.isArray(v)) return v.map(_redact);
+  var out = {};
+  Object.keys(v).forEach(function(k) {
+    if (_SECRET[k.toLowerCase()]) out[k] = "***";
+    else if (v[k] && typeof v[k] === "object") out[k] = _redact(v[k]);
+    else out[k] = v[k];
+  });
+  return out;
+}
+// Field-level diff between two records -> [{ field, from, to }]
+function _diffFields(before, after) {
+  var out = [], keys = {};
+  Object.keys(before || {}).forEach(function(k) { keys[k] = 1; });
+  Object.keys(after || {}).forEach(function(k) { keys[k] = 1; });
+  Object.keys(keys).forEach(function(k) {
+    var a = before ? before[k] : undefined, b = after ? after[k] : undefined;
+    if (!_eq(a, b)) out.push({ field: k, from: a === undefined ? null : a, to: b === undefined ? null : b });
+  });
+  return out;
+}
+// One-line label for a record (used in the changelog summary)
+function _recLabel(root, rec) {
+  if (!rec || typeof rec !== "object") return String(rec);
+  if (rec.billNo) {
+    var items = (rec.items || []).map(function(i) { return (i.name || "?") + " x" + (i.qty || 0) + (i.loose ? " (loose)" : ""); });
+    return "Bill " + rec.billNo + " · " + (rec.patient || "-") + " · Rs." + f2(rec.netAmount) + (items.length ? " · " + items.join(", ") : "");
+  }
+  if (rec.name && (rec.batch !== undefined || rec.mrp !== undefined || rec.stock !== undefined)) {
+    return rec.name + (rec.batch ? " (Batch " + rec.batch + ")" : "");
+  }
+  if (rec.supplier !== undefined || rec.invoiceNo !== undefined) {
+    return (rec.supplier || "supplier") + " · Inv " + (rec.invoiceNo || "-") + " · " + ((rec.items || []).length) + " item(s)";
+  }
+  return rec.id || rec.name || (typeof rec === "object" ? JSON.stringify(rec).slice(0, 60) : String(rec));
+}
+function _diffSummary(label, diff) {
+  var hide = ["items", "patientAddress", "patientContact", "doctorContact"];
+  var parts = diff.filter(function(d) { return hide.indexOf(d.field) < 0; }).slice(0, 6).map(function(d) {
+    var from = d.from == null ? "∅" : (typeof d.from === "object" ? "{…}" : String(d.from));
+    var to = d.to == null ? "∅" : (typeof d.to === "object" ? "{…}" : String(d.to));
+    return d.field + " " + from + "→" + to;
+  });
+  return label + (parts.length ? " · " + parts.join(", ") : "");
+}
+// Build the structured change set + summary for one write
+function _buildChanges(logical, before, after) {
+  var root = logical.split("/")[0];
+  var isCollection = logical.indexOf("/") === -1 && after && typeof after === "object" && !Array.isArray(after);
+  var changes = [];
+  var op = after == null ? "delete" : (before == null ? "create" : "update");
+
+  if (after == null && before && typeof before === "object" && logical.indexOf("/") === -1) {
+    Object.keys(before).forEach(function(k) { changes.push({ recordId: k, kind: "removed", before: before[k], after: null }); });
+  } else if (isCollection) {
+    var b = before || {}, a = after || {}, keys = {};
+    Object.keys(b).forEach(function(k) { keys[k] = 1; });
+    Object.keys(a).forEach(function(k) { keys[k] = 1; });
+    Object.keys(keys).forEach(function(k) {
+      var hasB = Object.prototype.hasOwnProperty.call(b, k), hasA = Object.prototype.hasOwnProperty.call(a, k);
+      if (hasA && !hasB) changes.push({ recordId: k, kind: "added", before: null, after: a[k] });
+      else if (hasB && !hasA) changes.push({ recordId: k, kind: "removed", before: b[k], after: null });
+      else if (!_eq(b[k], a[k])) changes.push({ recordId: k, kind: "modified", before: b[k], after: a[k], diff: _diffFields(b[k], a[k]) });
+    });
+  } else {
+    var recId = logical.indexOf("/") >= 0 ? logical.substring(logical.indexOf("/") + 1) : root;
+    if (after == null) changes.push({ recordId: recId, kind: "removed", before: before, after: null });
+    else if (before == null) changes.push({ recordId: recId, kind: "added", before: null, after: after });
+    else changes.push({ recordId: recId, kind: "modified", before: before, after: after, diff: _diffFields(before, after) });
+  }
+
+  var summary;
+  if (changes.length === 1) {
+    var c = changes[0];
+    if (c.kind === "added") summary = "Added " + _recLabel(root, c.after);
+    else if (c.kind === "removed") summary = "Deleted " + _recLabel(root, c.before);
+    else summary = _diffSummary(_recLabel(root, c.after), c.diff || []);
+  } else {
+    var add = 0, mod = 0, rem = 0;
+    changes.forEach(function(c) { if (c.kind === "added") add++; else if (c.kind === "removed") rem++; else mod++; });
+    var bits = [];
+    if (add) bits.push("+" + add + " added");
+    if (mod) bits.push("~" + mod + " changed");
+    if (rem) bits.push("-" + rem + " removed");
+    summary = root + ": " + changes.length + " record(s) (" + bits.join(", ") + ")";
+  }
+  return { op: op, changes: changes, summary: summary, root: root };
+}
+var _ROOT_PREFIX = { inventory: "INV", bills: "BILL", purchases: "PURCH", returns: "RETURN", billReturns: "BILL_RETURN", racks: "RACK", customers: "CUST", ledger: "LEDGER", distReturns: "DIST_RETURN", custPayments: "CUST_PAYMENT", audits: "REPORT", userProfiles: "USER", outlets: "OUTLET" };
+
+// Write ONE detailed audit entry. Raw-writes to auditTrail (bypasses dbWrite -> no recursion).
+function logChange(fullPath, before, after) {
   if (!db) return;
+  before = _redact(before); after = _redact(after);
+  if (_eq(before, after)) return; // nothing actually changed
+  var logical = _logicalPath(fullPath);
+  var info;
+  try { info = _buildChanges(logical, before, after); } catch (e) { console.error("audit diff error", e); return; }
+  var prefix = _ROOT_PREFIX[info.root] || info.root.toUpperCase();
+  var opTag = info.op === "create" ? "ADD" : (info.op === "delete" ? "DELETE" : "EDIT");
+  var id = "aud" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   var entry = {
-    id: "aud" + Date.now().toString(36) + Math.random().toString(36).slice(2,5),
-    action: action,
-    details: details,
-    user: user ? (user.name || user.email || "unknown") : "system",
+    id: id,
+    action: prefix + "_" + opTag,
+    path: logical,
+    op: info.op,
+    details: info.summary,
+    changes: info.changes,
+    user: _logUser(),
     ts: new Date().toISOString(),
-    tsDisplay: new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: true })
+    tsDisplay: new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true })
   };
-  var path = getOutletPath ? getOutletPath("auditTrail/" + entry.id) : "auditTrail/" + entry.id;
-  db.ref(path).set(entry);
+  try { db.ref(getOutletPath("auditTrail/" + id)).set(entry); } catch (e) { console.error("audit log error", e); }
+}
+
+// THE SINGLE WRITE FUNNEL. fullPath = a fully-resolved Firebase ref path.
+// Reads current value, logs the diff (best-effort, never blocks), then writes.
+function dbWrite(fullPath, value) {
+  if (!db) return Promise.resolve();
+  var val = value === undefined ? null : value;
+  var doSet = function() { return db.ref(fullPath).set(val).catch(function(e) { console.error("DB write error:", fullPath, e); }); };
+  if (_skipLog(fullPath)) return doSet();
+  return db.ref(fullPath).once("value").then(function(snap) {
+    try { logChange(fullPath, snap.val(), val); } catch (e) { console.error("log build error", e); }
+    return doSet();
+  }).catch(function() { return doSet(); }); // if the read fails, still write
 }
 
 // ══════════════════════════════════════════════
@@ -359,7 +507,8 @@ function setCurrentOutlet(outletId) {
 function getCurrentOutlet() { return _currentOutlet; }
 
 function fbSet(path, data) {
-  return db.ref(getOutletPath(path)).set(data).catch((e) => console.error("DB write error:", path, e));
+  if (!db) return Promise.resolve();
+  return dbWrite(getOutletPath(path), data);
 }
 function fbGet(path) {
   return db.ref(getOutletPath(path)).once("value").then((snap) => snap.val()).catch(() => null);
@@ -3067,7 +3216,7 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
       }, 0);
       var ret = { id: mkId(), billNo: retBill.billNo, patient: retBill.patient, date: new Date().toISOString(), items: returnItems, refundAmount: Math.round(refundAmt * 100) / 100 };
       // Save to Firebase
-      db.ref(getOutletPath("billReturns/" + ret.id)).set(ret);
+      dbWrite(getOutletPath("billReturns/" + ret.id), ret);
 
       // Add stock back to inventory
       var updInv = inv.map(function(m) {
@@ -3413,7 +3562,7 @@ function UsersPage({ sessions, mob, user }) {
   const deleteUser = async (u) => {
     if (!window.confirm("Delete " + u.name + " (" + u.email + ")? They will not be able to login.")) return;
     const key = u.email.replace(/\./g, "_").replace(/@/g, "__");
-    await db.ref("userProfiles/" + key).remove();
+    await dbWrite("userProfiles/" + key, null);
     await loadUsers();
   };
 
@@ -3747,7 +3896,7 @@ function BackupPage({ inv, bills, purch, saveAll, askConfirm, saveInv, saveBills
                 db.ref(p).once("value").then(function(snap) {
                   var val = snap.val();
                   if (val) {
-                    db.ref("outlets/" + outletId + "/" + p).set(val).then(function() {
+                    dbWrite("outlets/" + outletId + "/" + p, val).then(function() {
                       done++;
                       if (done === paths.length) {
                         alert("Migration complete! " + done + " data paths copied to outlets/" + outletId + "/. Reload the page.");
@@ -5028,7 +5177,7 @@ function AuditPage({ inv, mob }) {
     };
 
     // Save to Firebase
-    db.ref(getOutletPath("audits/" + report.id)).set(report);
+    dbWrite(getOutletPath("audits/" + report.id), report);
     setAuditReport(report);
     setAuditStarted(false);
   };
@@ -5239,7 +5388,7 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm, bills, s
         if (idx >= 0) nextInv[idx] = Object.assign({}, nextInv[idx], { stock: (Number(nextInv[idx].stock) || 0) + qty });
       });
       saveInv(nextInv);
-      db.ref(getOutletPath("returns/" + r.id)).remove();
+      dbWrite(getOutletPath("returns/" + r.id), null);
       alert("Purchase return cancelled.");
     });
   };
@@ -5254,7 +5403,7 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm, bills, s
         if (idx >= 0) nextInv[idx] = Object.assign({}, nextInv[idx], { stock: Math.max(0, (Number(nextInv[idx].stock) || 0) - qty) });
       });
       saveInv(nextInv);
-      db.ref(getOutletPath("billReturns/" + r.id)).remove();
+      dbWrite(getOutletPath("billReturns/" + r.id), null);
       alert("Bill return cancelled.");
     });
   };
@@ -6596,13 +6745,13 @@ function CustomersPage({ bills, mob, showBill }) {
   var addCustomer = function() {
     if (!newCust.name.trim()) { alert("Name required"); return; }
     var c = { id: mkId(), name: newCust.name.trim(), contact: newCust.contact.trim(), address: newCust.address.trim(), source: "manual", addedDate: new Date().toISOString() };
-    db.ref(getOutletPath("customers/" + c.id)).set(c);
+    dbWrite(getOutletPath("customers/" + c.id), c);
     setNewCust({ name: "", contact: "", address: "" });
     setAddMode(false);
   };
 
   var deleteCustomer = function(id) {
-    db.ref(getOutletPath("customers/" + id)).remove();
+    dbWrite(getOutletPath("customers/" + id), null);
   };
 
   // Get bills for a customer
@@ -7144,7 +7293,7 @@ function SupplierLedgerPage({ purch, mob }) {
     if (!addPay || !payAmt) return;
     var key = addPay.key;
     var pay = { id: mkId(), amount: parseFloat(payAmt) || 0, date: payDate, note: payNote, addedAt: new Date().toISOString() };
-    db.ref(getOutletPath("ledger/" + key + "/" + pay.id)).set(pay);
+    dbWrite(getOutletPath("ledger/" + key + "/" + pay.id), pay);
     setAddPay(null); setPayAmt(""); setPayNote("");
   };
 
@@ -7154,7 +7303,7 @@ function SupplierLedgerPage({ purch, mob }) {
     var inv = billSettle.invoice;
     var note = billSettleNote || ("Invoice: " + (inv.invoiceNo || inv.id));
     var pay = { id: mkId(), amount: parseFloat(billSettleAmt) || 0, date: billSettleDate, note: note, billRef: inv.invoiceNo || inv.id, addedAt: new Date().toISOString() };
-    db.ref(getOutletPath("ledger/" + key + "/" + pay.id)).set(pay);
+    dbWrite(getOutletPath("ledger/" + key + "/" + pay.id), pay);
     setBillSettle(null); setBillSettleAmt(""); setBillSettleNote("");
   };
 
@@ -7354,6 +7503,10 @@ function AuditTrailPage({ mob }) {
   var [logs, setLogs] = useState([]);
   var [filter, setFilter] = useState("all");
   var [loading, setLoading] = useState(true);
+  var [openId, setOpenId] = useState(null);
+  var [page, setPage] = useState(1);
+  var [pageSize, setPageSize] = useState(50);
+  var [search, setSearch] = useState("");
 
   useEffect(function() {
     var unsub = fbListen("auditTrail", function(data) {
@@ -7365,54 +7518,148 @@ function AuditTrailPage({ mob }) {
     return unsub;
   }, []);
 
-  var filtered = filter === "all" ? logs : logs.filter(function(l) { return l.action.indexOf(filter) >= 0; });
+  var byType = filter === "all" ? logs : logs.filter(function(l) { return (l.action || "").indexOf(filter) >= 0; });
+  var q = search.trim().toLowerCase();
+  var filtered = !q ? byType : byType.filter(function(l) {
+    return ((l.details || "") + " " + (l.path || "") + " " + (l.user || "") + " " + (l.action || "")).toLowerCase().indexOf(q) >= 0;
+  });
+  var total = filtered.length;
+  var totalPages = Math.max(1, Math.ceil(total / pageSize));
+  var curPage = Math.min(Math.max(1, page), totalPages);
+  var startIdx = (curPage - 1) * pageSize;
+  var pageRows = filtered.slice(startIdx, startIdx + pageSize);
 
   var actionColors = {
-    INV_ADD: { bg: "#D1FAE5", fg: "#065F46", label: "Added" },
-    INV_EDIT: { bg: "#DBEAFE", fg: "#1E40AF", label: "Edited" },
-    INV_DELETE: { bg: "#FEE2E2", fg: "#991B1B", label: "Deleted" },
+    INV_ADD: { bg: "#D1FAE5", fg: "#065F46", label: "Inv Add" },
+    INV_EDIT: { bg: "#DBEAFE", fg: "#1E40AF", label: "Inv Edit" },
+    INV_DELETE: { bg: "#FEE2E2", fg: "#991B1B", label: "Inv Del" },
     STOCK_MERGE: { bg: "#FEF3C7", fg: "#92400E", label: "Merged" },
+    BILL_ADD: { bg: "#D1FAE5", fg: "#065F46", label: "Bill Add" },
     BILL_EDIT: { bg: "#EDE9FE", fg: "#5B21B6", label: "Bill Edit" },
     BILL_DELETE: { bg: "#FEE2E2", fg: "#991B1B", label: "Bill Del" },
-    BILL_RETURN: { bg: "#FCE7F3", fg: "#9D174D", label: "Return" },
+    BILL_RETURN_ADD: { bg: "#FCE7F3", fg: "#9D174D", label: "Return" },
+    BILL_RETURN_DELETE: { bg: "#FEE2E2", fg: "#991B1B", label: "Return Del" },
     PURCH_ADD: { bg: "#D1FAE5", fg: "#065F46", label: "Purchase" },
+    PURCH_EDIT: { bg: "#DBEAFE", fg: "#1E40AF", label: "Purch Edit" },
     PURCH_DELETE: { bg: "#FEE2E2", fg: "#991B1B", label: "Purch Del" },
+    CUST_ADD: { bg: "#D1FAE5", fg: "#065F46", label: "Cust Add" },
+    CUST_EDIT: { bg: "#DBEAFE", fg: "#1E40AF", label: "Cust Edit" },
+    CUST_DELETE: { bg: "#FEE2E2", fg: "#991B1B", label: "Cust Del" },
+    CUST_PAYMENT_EDIT: { bg: "#FEF3C7", fg: "#92400E", label: "Payment" },
+    LEDGER_ADD: { bg: "#FEF3C7", fg: "#92400E", label: "Ledger" },
+    LEDGER_EDIT: { bg: "#FEF3C7", fg: "#92400E", label: "Ledger" },
+    DIST_RETURN_ADD: { bg: "#FCE7F3", fg: "#9D174D", label: "Dist Return" },
+    RETURN_DELETE: { bg: "#FEE2E2", fg: "#991B1B", label: "Return Del" },
+    REPORT_ADD: { bg: "#E0E7FF", fg: "#3730A3", label: "Report" }
   };
+  function colorFor(action) {
+    if (actionColors[action]) return actionColors[action];
+    var fg = "#374151", bg = "#F3F4F6";
+    if (/_DELETE$/.test(action)) { bg = "#FEE2E2"; fg = "#991B1B"; }
+    else if (/_ADD$/.test(action)) { bg = "#D1FAE5"; fg = "#065F46"; }
+    else if (/_EDIT$/.test(action)) { bg = "#DBEAFE"; fg = "#1E40AF"; }
+    return { bg: bg, fg: fg, label: action || "Write" };
+  }
+  function fmtVal(v) {
+    if (v === null || v === undefined) return "∅";
+    if (typeof v === "object") { try { return JSON.stringify(v); } catch (e) { return "{…}"; } }
+    return String(v);
+  }
+  function pgBtn(disabled) {
+    return { padding: "5px 10px", borderRadius: 6, border: "1px solid #ddd", background: disabled ? "#f3f3f3" : "#fff", color: disabled ? "#bbb" : "#0D6B5B", cursor: disabled ? "default" : "pointer", fontSize: 12, fontWeight: 600 };
+  }
+  function renderDetail(l) {
+    var changes = l.changes || [];
+    if (!changes.length) return <div style={{ fontSize: 12, color: "#888" }}>Legacy entry (no structured detail): {l.details}</div>;
+    return <div style={{ display: "grid", gap: 10 }}>
+      {changes.map(function(c, ci) {
+        var head = (c.kind === "added" ? "➕ Added " : c.kind === "removed" ? "🗑 Removed " : "✏️ Modified ") + (c.recordId || "");
+        return <div key={ci} style={{ border: "1px solid #eee", borderRadius: 8, padding: 10, background: "#FAFAF7" }}>
+          <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 6, color: "#374151" }}>{head}</div>
+          {c.kind === "modified" && (c.diff || []).length > 0 ?
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
+              <thead><tr>
+                <th style={{ textAlign: "left", padding: "3px 8px", color: "#888", borderBottom: "1px solid #eee" }}>Field</th>
+                <th style={{ textAlign: "left", padding: "3px 8px", color: "#888", borderBottom: "1px solid #eee" }}>Before</th>
+                <th style={{ textAlign: "left", padding: "3px 8px", color: "#888", borderBottom: "1px solid #eee" }}>After</th>
+              </tr></thead>
+              <tbody>{(c.diff || []).map(function(d, di) {
+                return <tr key={di}>
+                  <td style={{ padding: "3px 8px", fontWeight: 600 }}>{d.field}</td>
+                  <td style={{ padding: "3px 8px", color: "#B91C1C", wordBreak: "break-word" }}>{fmtVal(d.from)}</td>
+                  <td style={{ padding: "3px 8px", color: "#065F46", wordBreak: "break-word" }}>{fmtVal(d.to)}</td>
+                </tr>;
+              })}</tbody>
+            </table>
+          : <pre style={{ margin: 0, fontSize: 11, whiteSpace: "pre-wrap", wordBreak: "break-word", color: "#444" }}>{fmtVal(c.kind === "removed" ? c.before : c.after)}</pre>}
+        </div>;
+      })}
+    </div>;
+  }
 
   return (
     <div>
       <h2 style={hds}>Change Log (Audit Trail)</h2>
-      <p style={{ fontSize: 12, color: "#888", marginBottom: 14 }}>Every inventory change, bill edit, and deletion is logged here with timestamp and user.</p>
+      <p style={{ fontSize: 12, color: "#888", marginBottom: 14 }}>Every database write — sales, stock changes, edits, deletions, returns, payments — is logged here automatically with full before→after detail. Click any row to expand.</p>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
-        {[["all","All"],["INV","Inventory"],["BILL","Bills"],["PURCH","Purchases"],["STOCK","Stock Merge"]].map(function(f) {
-          return <button key={f[0]} onClick={function() { setFilter(f[0]); }} style={{ padding: "6px 14px", borderRadius: 8, border: filter === f[0] ? "2px solid #0D6B5B" : "1px solid #ddd", background: filter === f[0] ? "#D1FAE5" : "#fff", cursor: "pointer", fontSize: 12, fontWeight: filter === f[0] ? 700 : 400 }}>{f[1]}</button>;
+        {[["all","All"],["INV","Inventory"],["BILL_","Bills"],["BILL_RETURN","Returns"],["PURCH","Purchases"],["CUST","Customers"],["LEDGER","Ledger"],["DIST_RETURN","Dist Returns"]].map(function(f) {
+          return <button key={f[0]} onClick={function() { setFilter(f[0]); setPage(1); }} style={{ padding: "6px 14px", borderRadius: 8, border: filter === f[0] ? "2px solid #0D6B5B" : "1px solid #ddd", background: filter === f[0] ? "#D1FAE5" : "#fff", cursor: "pointer", fontSize: 12, fontWeight: filter === f[0] ? 700 : 400 }}>{f[1]}</button>;
         })}
+      </div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+        <input value={search} onChange={function(e) { setSearch(e.target.value); setPage(1); }} placeholder="Search details, medicine, bill no, user…" style={{ flex: "1 1 240px", minWidth: 180, padding: "8px 12px", borderRadius: 8, border: "1px solid #ddd", fontSize: 13 }} />
+        <label style={{ fontSize: 12, color: "#888" }}>Per page:&nbsp;
+          <select value={pageSize} onChange={function(e) { setPageSize(parseInt(e.target.value, 10)); setPage(1); }} style={{ padding: "6px 8px", borderRadius: 6, border: "1px solid #ddd", fontSize: 12 }}>
+            <option value={25}>25</option>
+            <option value={50}>50</option>
+            <option value={100}>100</option>
+            <option value={200}>200</option>
+            <option value={500}>500</option>
+          </select>
+        </label>
       </div>
       {loading ? <div style={{ padding: 20, textAlign: "center", color: "#888" }}>Loading audit trail...</div> :
        filtered.length === 0 ? <div style={{ padding: 20, textAlign: "center", color: "#888" }}>No audit entries yet. Changes will appear here automatically.</div> :
        <div style={{ ...cds, padding: 0, overflow: "hidden" }}><div style={{ overflowX: "auto" }}>
          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 400 }}>
-           <thead><tr><th style={ths}>When</th><th style={ths}>Type</th><th style={ths}>Details</th><th style={ths}>User</th></tr></thead>
+           <thead><tr><th style={ths}></th><th style={ths}>When</th><th style={ths}>Type</th><th style={ths}>Details</th><th style={ths}>User</th></tr></thead>
            <tbody>
-             {filtered.slice(0, 200).map(function(l) {
-               var ac = actionColors[l.action] || { bg: "#F3F4F6", fg: "#374151", label: l.action };
-               return <tr key={l.id}>
-                 <td style={{ ...tds, whiteSpace: "nowrap", fontSize: 11 }}>{l.tsDisplay || fDT(l.ts)}</td>
-                 <td style={tds}><span style={{ background: ac.bg, color: ac.fg, padding: "2px 10px", borderRadius: 14, fontSize: 10.5, fontWeight: 600, whiteSpace: "nowrap" }}>{ac.label}</span></td>
-                 <td style={{ ...tds, fontSize: 12, maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis" }}>{l.details}</td>
-                 <td style={{ ...tds, fontSize: 11, color: "#888" }}>{l.user}</td>
-               </tr>;
+             {pageRows.map(function(l) {
+               var ac = colorFor(l.action);
+               var isOpen = openId === l.id;
+               var hasDetail = l.changes && l.changes.length;
+               return <React.Fragment key={l.id}>
+                 <tr onClick={function() { setOpenId(isOpen ? null : l.id); }} style={{ cursor: "pointer", background: isOpen ? "#F5F3FF" : "transparent" }}>
+                   <td style={{ ...tds, width: 22, color: "#999", fontSize: 11 }}>{hasDetail ? (isOpen ? "▾" : "▸") : ""}</td>
+                   <td style={{ ...tds, whiteSpace: "nowrap", fontSize: 11 }}>{l.tsDisplay || fDT(l.ts)}</td>
+                   <td style={tds}><span style={{ background: ac.bg, color: ac.fg, padding: "2px 10px", borderRadius: 14, fontSize: 10.5, fontWeight: 600, whiteSpace: "nowrap" }}>{ac.label}</span></td>
+                   <td style={{ ...tds, fontSize: 12, maxWidth: 460 }}>{l.details}</td>
+                   <td style={{ ...tds, fontSize: 11, color: "#888" }}>{l.user}</td>
+                 </tr>
+                 {isOpen && <tr><td colSpan={5} style={{ padding: "10px 16px", background: "#fff", borderBottom: "1px solid #eee" }}>{renderDetail(l)}</td></tr>}
+               </React.Fragment>;
              })}
            </tbody>
          </table>
        </div></div>}
-       {filtered.length > 200 && <div style={{ color: "#888", fontSize: 12, padding: 8 }}>Showing 200 of {filtered.length} entries</div>}
+       {total > 0 && <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, padding: "10px 4px", color: "#555", fontSize: 12 }}>
+         <span>Showing {startIdx + 1}–{Math.min(startIdx + pageSize, total)} of {total} entr{total === 1 ? "y" : "ies"}{(filter !== "all" || q) ? " (filtered)" : ""}</span>
+         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+           <button onClick={function() { setPage(1); }} disabled={curPage <= 1} style={pgBtn(curPage <= 1)}>« First</button>
+           <button onClick={function() { setPage(curPage - 1); }} disabled={curPage <= 1} style={pgBtn(curPage <= 1)}>‹ Prev</button>
+           <span style={{ padding: "0 8px", fontWeight: 600 }}>Page {curPage} / {totalPages}</span>
+           <button onClick={function() { setPage(curPage + 1); }} disabled={curPage >= totalPages} style={pgBtn(curPage >= totalPages)}>Next ›</button>
+           <button onClick={function() { setPage(totalPages); }} disabled={curPage >= totalPages} style={pgBtn(curPage >= totalPages)}>Last »</button>
+         </div>
+       </div>}
        {logs.length > 0 && <div style={{ marginTop: 16, textAlign: "right" }}>
          <button onClick={function() {
-           var csv = "Timestamp,Action,Details,User\n";
-           logs.forEach(function(l) { csv += "\"" + (l.tsDisplay || l.ts) + "\",\"" + l.action + "\",\"" + (l.details || "").replace(/"/g,"'") + "\",\"" + l.user + "\"\n"; });
+           var csv = "Timestamp,Action,Path,Op,Details,User,Changes(JSON)\n";
+           logs.forEach(function(l) {
+             csv += "\"" + (l.tsDisplay || l.ts) + "\",\"" + (l.action || "") + "\",\"" + (l.path || "") + "\",\"" + (l.op || "") + "\",\"" + (l.details || "").replace(/"/g, "'") + "\",\"" + (l.user || "") + "\",\"" + JSON.stringify(l.changes || []).replace(/"/g, "'") + "\"\n";
+           });
            var blob = new Blob([csv], { type: "text/csv" }); var url = URL.createObjectURL(blob);
-           var a = document.createElement("a"); a.href = url; a.download = "AtoZ_AuditTrail_" + new Date().toISOString().slice(0,10) + ".csv"; a.click(); URL.revokeObjectURL(url);
+           var a = document.createElement("a"); a.href = url; a.download = "AtoZ_AuditTrail_" + new Date().toISOString().slice(0, 10) + ".csv"; a.click(); URL.revokeObjectURL(url);
          }} style={{ padding: "8px 20px", background: "#0D6B5B", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 600, fontSize: 12 }}>📥 Export Audit Log CSV</button>
        </div>}
     </div>
@@ -7455,7 +7702,7 @@ function NearExpiryReturnPage({ inv, purch, mob }) {
       returnedDate: new Date().toISOString(),
       returnedDateDisplay: new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric" })
     };
-    db.ref(getOutletPath("distReturns/" + entry.id)).set(entry);
+    dbWrite(getOutletPath("distReturns/" + entry.id), entry);
     logAudit("DIST_RETURN", "Returned to " + entry.distributor + ": " + entry.name + " Batch:" + entry.batch + " Qty:" + fStock(entry.stock, m.packQty));
   };
 
@@ -7547,7 +7794,7 @@ function CreditSalesPage({ bills, mob, showBill }) {
     var existing = custPayments[key] ? (Array.isArray(custPayments[key]) ? custPayments[key] : Object.values(custPayments[key])) : [];
     existing.push(entry);
     var obj = {}; existing.forEach(function(p, i) { obj[p.id || ("p" + i)] = p; });
-    db.ref(getOutletPath("custPayments/" + key)).set(obj);
+    dbWrite(getOutletPath("custPayments/" + key), obj);
     logAudit("CUST_PAYMENT", "Payment Rs." + payAmt + " from " + addPay.name + " (" + addPay.contact + ")");
     setAddPay(null); setPayAmt(""); setPayNote("");
   };
