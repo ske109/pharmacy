@@ -3035,13 +3035,15 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
   const [histLoading, setHistLoading] = useState(false);
   const mob = useM();
 
-  // Re-query Firebase whenever filter changes so Month/Year/Custom ranges
-  // fetch the full date range instead of filtering the (possibly truncated) bills prop
+  // Re-query Firebase whenever filter changes. ALL filters go through Firebase
+  // directly — never falls back to the bills prop, which may be truncated.
   useEffect(function() {
     var now = new Date();
     var from, to;
-    if (hFilter === "all") { setFilteredBills(bills); return; }
-    if (hFilter === "today") {
+    if (hFilter === "all") {
+      from = "2000-01-01T00:00:00.000Z";
+      to = new Date(now.getTime() + 86400000).toISOString();
+    } else if (hFilter === "today") {
       var d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
       from = d.toISOString();
       to = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59).toISOString();
@@ -3054,13 +3056,13 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
     } else if (hFilter === "custom" && hFrom && hTo) {
       from = new Date(hFrom).toISOString();
       to = new Date(hTo + "T23:59:59").toISOString();
-    } else { setFilteredBills(bills); return; }
+    } else { return; }
     setHistLoading(true);
     fbQueryBillsByDate(from, to, function(results) {
       setFilteredBills(results);
       setHistLoading(false);
     });
-  }, [hFilter, hFrom, hTo, bills]);
+  }, [hFilter, hFrom, hTo, bills.length]); // bills.length re-fetches on add/delete without resetting on every render
 
   const editAddItem = function(med) {
     if (!editBill) return;
@@ -4288,34 +4290,37 @@ function ProfitPage({ bills, inv, mob, purch, saveBills, showBill, setPage }) {
   const [profitLoading, setProfitLoading] = useState(false);
   const now = new Date();
 
-  // Re-query Firebase on filter change so Month/Year/Custom ranges fetch the full
-  // date range instead of filtering the (possibly truncated) bills prop
+  // Re-query Firebase on filter change. ALL filters go through Firebase directly
+  // so results are never limited by the (possibly truncated) bills prop.
   useEffect(function() {
+    var now2 = new Date();
     var from, to;
-    if (view === "bill") { setQueryBills(bills); return; }
-    if (view === "today") {
-      var d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    if (view === "bill") {
+      from = "2000-01-01T00:00:00.000Z";
+      to = new Date(now2.getTime() + 86400000).toISOString();
+    } else if (view === "today") {
+      var d = new Date(now2.getFullYear(), now2.getMonth(), now2.getDate());
       from = d.toISOString();
-      to = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59).toISOString();
+      to = new Date(now2.getFullYear(), now2.getMonth(), now2.getDate(), 23, 59, 59).toISOString();
     } else if (view === "week") {
-      var w = new Date(now); w.setDate(w.getDate() - 7);
-      from = w.toISOString(); to = now.toISOString();
+      var w = new Date(now2); w.setDate(w.getDate() - 7);
+      from = w.toISOString(); to = now2.toISOString();
     } else if (view === "month") {
-      from = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-      to = now.toISOString();
+      from = new Date(now2.getFullYear(), now2.getMonth(), 1).toISOString();
+      to = now2.toISOString();
     } else if (view === "year") {
-      from = new Date(now.getFullYear(), 0, 1).toISOString();
-      to = now.toISOString();
+      from = new Date(now2.getFullYear(), 0, 1).toISOString();
+      to = now2.toISOString();
     } else if (view === "custom" && fromD && toD) {
       from = new Date(fromD).toISOString();
       to = new Date(toD + "T23:59:59").toISOString();
-    } else { setQueryBills(bills); return; }
+    } else { return; }
     setProfitLoading(true);
     fbQueryBillsByDate(from, to, function(results) {
       setQueryBills(results);
       setProfitLoading(false);
     });
-  }, [view, fromD, toD, bills]);
+  }, [view, fromD, toD, bills.length]); // bills.length re-fetches on add/delete without resetting on every render
 
   const filterBills = (blist) => blist; // filtering now done via Firebase query above
 
