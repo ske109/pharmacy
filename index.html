@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>A to Z Pharmacy v2.5.3</title>
+<title>A to Z Pharmacy v2.5.1</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💊</text></svg>">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
 
@@ -50,7 +50,7 @@ input,select,button,textarea{font-family:inherit;-webkit-appearance:none}
 }
 </style>
 
-<meta name="app-version" content="2.5.3">
+<meta name="app-version" content="2.5.1">
 <meta name="app-changes" content="["Removed Claude API dependency for image/PDF bill reading [security/privacy]", "Added local Tesseract.js OCR with canvas preprocessing for purchase bill images", "Enhanced parsing with fallback line-by-line item extraction", "Cleaner worker without hardcoded API keys or Claude proxy route", "Improved error handling and user feedback for OCR quality", "v2.2.0: Advanced multi-pass image processing with deskew, adaptive thresholding, Sauvola binarization, OTSU thresholding, unsharp mask sharpening, multi-PSM Tesseract passes, and 3-strategy invoice parser (Vardhman columnar, flexible numeric-anchor, token-based)"]">
 <script>window.APP_VERSION = {"version": "2.3.0", "changes": ["Replaced EmailJS with Cloudflare Worker + Resend for reliable OTP delivery (no Gmail scope issues)", "Added /send-otp-email route to Cloudflare Worker", "3000 free emails/month via Resend vs 200 via EmailJS", "Proper error handling — shows actual failure reason instead of silent swallow", "OTP always logged to console as fallback"], "date": "2026-05-10", "type": "production"};</script>
 
@@ -517,6 +517,18 @@ function fbListen(path, callback) {
   const ref = db.ref(getOutletPath(path));
   ref.on("value", (snap) => { callback(snap.val()); });
   return () => ref.off("value");
+}
+
+// Query bills by date range directly from Firebase (fixes Month/Year/Custom filters
+// which broke because the full bills collection is too large to load all at once)
+function fbQueryBillsByDate(fromISO, toISO, callback) {
+  db.ref(getOutletPath("bills"))
+    .orderByChild("date")
+    .startAt(fromISO)
+    .endAt(toISO)
+    .once("value", function(snap) {
+      callback(snap.val() ? Object.values(snap.val()) : []);
+    });
 }
 
 // ══════════════════════════════════════════════
@@ -3019,21 +3031,36 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
   const [hFilter, setHFilter] = useState("all");
   const [hFrom, setHFrom] = useState("");
   const [hTo, setHTo] = useState("");
+  const [filteredBills, setFilteredBills] = useState(bills);
+  const [histLoading, setHistLoading] = useState(false);
   const mob = useM();
 
-  var now = new Date();
-  var _histT0 = performance.now();
-  var filteredBills = bills.filter(function(b) {
-    if (hFilter === "all") return true;
-    var d = new Date(b.date);
-    if (hFilter === "today") return d.toDateString() === now.toDateString();
-    if (hFilter === "week") { var w = new Date(now); w.setDate(w.getDate() - 7); return d >= w; }
-    if (hFilter === "month") return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-    if (hFilter === "custom" && hFrom && hTo) return d >= new Date(hFrom) && d <= new Date(hTo + "T23:59:59");
-    return true;
-  });
-  var _histT1 = performance.now();
-  console.log("[HIST] filter=" + (_histT1 - _histT0).toFixed(1) + "ms totalBills=" + bills.length + " filtered=" + filteredBills.length + " (hFilter=" + hFilter + ")");
+  // Re-query Firebase whenever filter changes so Month/Year/Custom ranges
+  // fetch the full date range instead of filtering the (possibly truncated) bills prop
+  useEffect(function() {
+    var now = new Date();
+    var from, to;
+    if (hFilter === "all") { setFilteredBills(bills); return; }
+    if (hFilter === "today") {
+      var d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      from = d.toISOString();
+      to = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59).toISOString();
+    } else if (hFilter === "week") {
+      var w = new Date(now); w.setDate(w.getDate() - 7);
+      from = w.toISOString(); to = now.toISOString();
+    } else if (hFilter === "month") {
+      from = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+      to = now.toISOString();
+    } else if (hFilter === "custom" && hFrom && hTo) {
+      from = new Date(hFrom).toISOString();
+      to = new Date(hTo + "T23:59:59").toISOString();
+    } else { setFilteredBills(bills); return; }
+    setHistLoading(true);
+    fbQueryBillsByDate(from, to, function(results) {
+      setFilteredBills(results);
+      setHistLoading(false);
+    });
+  }, [hFilter, hFrom, hTo, bills]);
 
   const editAddItem = function(med) {
     if (!editBill) return;
@@ -3243,7 +3270,7 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
   };
 
   return (
-    <div><h2 style={hds}>Bills ({filteredBills.length}{hFilter !== "all" ? "/" + bills.length : ""})</h2>
+    <div><h2 style={hds}>Bills ({histLoading ? "…" : filteredBills.length}{hFilter !== "all" ? "/" + bills.length : ""})</h2>
       <div style={{ display: "flex", gap: 3, background: "#E8E4DD", borderRadius: 7, padding: 3, marginBottom: 12, flexWrap: "wrap" }}>
         {[["all","All"],["today","Today"],["week","Week"],["month","Month"],["custom","Custom"]].map(function(x) { return <button key={x[0]} onClick={function(){setHFilter(x[0]);}} style={{ padding: "6px 12px", border: "none", borderRadius: 5, fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: hFilter === x[0] ? "#fff" : "transparent", color: hFilter === x[0] ? "#0D6B5B" : "#888" }}>{x[1]}</button>; })}
       </div>
@@ -3251,6 +3278,7 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
         <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>From</label><input type="date" value={hFrom} onChange={function(e){setHFrom(e.target.value);}} style={inps} /></div>
         <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>To</label><input type="date" value={hTo} onChange={function(e){setHTo(e.target.value);}} style={inps} /></div>
       </div>}
+      {histLoading && <div style={{ textAlign: "center", padding: "10px", fontSize: 13, color: "#0D6B5B", fontWeight: 600 }}>⏳ Loading bills…</div>}
 
       {retBill && (
         <div style={{ ...cds, border: "2px solid #DC2626", marginBottom: 16 }}>
@@ -3357,12 +3385,6 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, deleteBi
   const [sortDir, setSortDir] = React.useState("desc");
   const [expanded, setExpanded] = React.useState(null);
   const [q, setQ] = React.useState("");
-  const [hpPage, setHpPage] = React.useState(1);
-  const HP_PAGE_SIZE = 50;
-  const _htRenderStart = performance.now();
-  // Reset to first page when the search or the upstream period filter changes
-  React.useEffect(function() { setHpPage(1); }, [q, bills.length]);
-  React.useEffect(function() { console.log("[HISTTABLE] render\u2192commit = " + (performance.now() - _htRenderStart).toFixed(1) + "ms"); });
 
   const BILL_COLS = [
     { key: "bill", label: "Bill No" }, { key: "date", label: "Date" }, { key: "patient", label: "Patient" },
@@ -3387,42 +3409,21 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, deleteBi
 
   let filtered = q ? bills.filter((b) => b.billNo.toLowerCase().includes(q.toLowerCase()) || b.patient.toLowerCase().includes(q.toLowerCase()) || (b.paymentMode || "").toLowerCase().includes(q.toLowerCase())) : bills;
 
-  const _sortT0 = performance.now();
-  const keyOf = function(b) {
-    if (sortCol === "date") return new Date(b.date).getTime();
-    if (sortCol === "bill") return b.billNo;
-    if (sortCol === "patient") return (b.patient || "").toLowerCase();
-    if (sortCol === "amount") return b.netAmount;
-    if (sortCol === "pay") return (b.paymentMode || "");
-    if (sortCol === "billedby") return (b.createdBy || "").toLowerCase();
+  const sorted = [...filtered].sort((a, b) => {
+    let va, vb;
+    if (sortCol === "date") { va = new Date(a.date).getTime(); vb = new Date(b.date).getTime(); }
+    else if (sortCol === "bill") { va = a.billNo; vb = b.billNo; }
+    else if (sortCol === "patient") { va = (a.patient || "").toLowerCase(); vb = (b.patient || "").toLowerCase(); }
+    else if (sortCol === "amount") { va = a.netAmount; vb = b.netAmount; }
+    else if (sortCol === "pay") { va = (a.paymentMode || ""); vb = (b.paymentMode || ""); }
+    else if (sortCol === "billedby") { va = (a.createdBy || "").toLowerCase(); vb = (b.createdBy || "").toLowerCase(); }
+    else { va = 0; vb = 0; }
+    if (va < vb) return sortDir === "asc" ? -1 : 1;
+    if (va > vb) return sortDir === "asc" ? 1 : -1;
     return 0;
-  };
-  const sorted = filtered
-    .map(function(b) { return { b: b, k: keyOf(b) }; })
-    .sort(function(x, y) {
-      if (x.k < y.k) return sortDir === "asc" ? -1 : 1;
-      if (x.k > y.k) return sortDir === "asc" ? 1 : -1;
-      return 0;
-    })
-    .map(function(o) { return o.b; });
-  const _sortT1 = performance.now();
-  console.log("[HISTTABLE] sort=" + (_sortT1 - _sortT0).toFixed(1) + "ms n=" + sorted.length + " rendering=" + Math.min(sorted.length, HP_PAGE_SIZE));
+  });
 
   const visibleColCount = BILL_COLS.filter((c) => sh(c.key)).length + 2; // +2 for items-expand + actions
-
-  const hpTotalPages = Math.max(1, Math.ceil(sorted.length / HP_PAGE_SIZE));
-  const hpCur = Math.min(hpPage, hpTotalPages);
-  const pageRows = sorted.slice((hpCur - 1) * HP_PAGE_SIZE, hpCur * HP_PAGE_SIZE);
-  const pagerBtn = (dis) => ({ padding: "6px 12px", borderRadius: 7, border: "1px solid #ddd", background: dis ? "#f5f5f0" : "#fff", color: dis ? "#bbb" : "#0D6B5B", cursor: dis ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 600, fontFamily: "inherit" });
-  const hpPager = hpTotalPages > 1 ? (
-    <div style={{ display: "flex", gap: 6, alignItems: "center", justifyContent: "center", flexWrap: "wrap", marginTop: 12 }}>
-      <button onClick={() => setHpPage(1)} disabled={hpCur <= 1} style={pagerBtn(hpCur <= 1)}>{"\u00AB First"}</button>
-      <button onClick={() => setHpPage(hpCur - 1)} disabled={hpCur <= 1} style={pagerBtn(hpCur <= 1)}>{"\u2039 Prev"}</button>
-      <span style={{ fontSize: 12, color: "#555", fontWeight: 600, padding: "0 8px" }}>Page {hpCur} / {hpTotalPages} &middot; {sorted.length} bills</span>
-      <button onClick={() => setHpPage(hpCur + 1)} disabled={hpCur >= hpTotalPages} style={pagerBtn(hpCur >= hpTotalPages)}>{"Next \u203A"}</button>
-      <button onClick={() => setHpPage(hpTotalPages)} disabled={hpCur >= hpTotalPages} style={pagerBtn(hpCur >= hpTotalPages)}>{"Last \u00BB"}</button>
-    </div>
-  ) : null;
 
   return (
     <div>
@@ -3433,7 +3434,7 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, deleteBi
 
       {/* Mobile card view */}
       {mob && <div>
-        {pageRows.map(function(b) {
+        {sorted.map(function(b) {
           return <div key={b.billNo} style={{ ...cds, padding: 12, marginBottom: 8, borderLeft: "3px solid #0D6B5B" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div><div style={{ fontFamily: "monospace", fontWeight: 700, color: "#0D6B5B", fontSize: 14 }}>{b.billNo}</div>
@@ -3452,7 +3453,6 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, deleteBi
             </div>
           </div>;
         })}
-        {hpPager}
       </div>}
 
       {/* Desktop table view */}
@@ -3472,7 +3472,7 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, deleteBi
               <th style={ths}></th>
             </tr></thead>
             <tbody>
-              {pageRows.map((b) => {
+              {sorted.map((b) => {
                 const isOpen = expanded === b.billNo;
                 return (
                   <React.Fragment key={b.billNo}>
@@ -3521,7 +3521,6 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, deleteBi
             </tbody>
           </table>
         </div>
-        {hpPager}
       </div>}
     </div>
   );
@@ -4285,22 +4284,40 @@ function ProfitPage({ bills, inv, mob, purch, saveBills, showBill, setPage }) {
   const [profitSearch, setProfitSearch] = useState("");
   const [fromD, setFromD] = useState("");
   const [toD, setToD] = useState("");
-  const [profPage, setProfPage] = useState(1);
-  const PROF_PAGE_SIZE = 50;
+  const [queryBills, setQueryBills] = useState(bills);
+  const [profitLoading, setProfitLoading] = useState(false);
   const now = new Date();
-  const _profRenderStart = performance.now();
-  // Reset to first page whenever the period/search changes
-  useEffect(function() { setProfPage(1); }, [view, profitSearch, fromD, toD]);
-  useEffect(function() { console.log("[PROFIT] render\u2192commit = " + (performance.now() - _profRenderStart).toFixed(1) + "ms"); });
 
-  const filterBills = (blist) => {
-    if (view === "today") return blist.filter((b) => new Date(b.date).toDateString() === now.toDateString());
-    if (view === "week") { const w = new Date(now); w.setDate(w.getDate() - 7); return blist.filter((b) => new Date(b.date) >= w); }
-    if (view === "month") return blist.filter((b) => { const d = new Date(b.date); return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear(); });
-    if (view === "year") return blist.filter((b) => new Date(b.date).getFullYear() === now.getFullYear());
-    if (view === "custom" && fromD && toD) return blist.filter((b) => { const d = new Date(b.date); return d >= new Date(fromD) && d <= new Date(toD + "T23:59:59"); });
-    return blist;
-  };
+  // Re-query Firebase on filter change so Month/Year/Custom ranges fetch the full
+  // date range instead of filtering the (possibly truncated) bills prop
+  useEffect(function() {
+    var from, to;
+    if (view === "bill") { setQueryBills(bills); return; }
+    if (view === "today") {
+      var d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      from = d.toISOString();
+      to = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59).toISOString();
+    } else if (view === "week") {
+      var w = new Date(now); w.setDate(w.getDate() - 7);
+      from = w.toISOString(); to = now.toISOString();
+    } else if (view === "month") {
+      from = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+      to = now.toISOString();
+    } else if (view === "year") {
+      from = new Date(now.getFullYear(), 0, 1).toISOString();
+      to = now.toISOString();
+    } else if (view === "custom" && fromD && toD) {
+      from = new Date(fromD).toISOString();
+      to = new Date(toD + "T23:59:59").toISOString();
+    } else { setQueryBills(bills); return; }
+    setProfitLoading(true);
+    fbQueryBillsByDate(from, to, function(results) {
+      setQueryBills(results);
+      setProfitLoading(false);
+    });
+  }, [view, fromD, toD, bills]);
+
+  const filterBills = (blist) => blist; // filtering now done via Firebase query above
 
   const calcItemProfit = (it) => {
     const salePrice = (it.unitPrice || it.mrp) * it.qty;
@@ -4336,22 +4353,16 @@ function ProfitPage({ bills, inv, mob, purch, saveBills, showBill, setPage }) {
     return { netSale, totalCost, totalDisc, profit: netSale - totalCost, margin: netSale > 0 ? ((netSale - totalCost) / netSale * 100) : 0 };
   };
 
-  const _profT0 = performance.now();
-  const fl = filterBills(bills).filter(function(b) {
+  const fl = filterBills(queryBills).filter(function(b) {
     if (!profitSearch) return true;
     var q = profitSearch.toLowerCase();
     return b.billNo.toLowerCase().indexOf(q) >= 0 || (b.patient || "").toLowerCase().indexOf(q) >= 0 || b.items.some(function(it) { return (it.name || "").toLowerCase().indexOf(q) >= 0; });
   });
-  const _profT1 = performance.now();
-  console.log("[PROFIT] render view=" + view + " totalBills=" + bills.length + " filtered=" + fl.length + " | filter+search=" + (_profT1 - _profT0).toFixed(1) + "ms");
   const [profitExpand, setProfitExpand] = useState(null);
   const [showDiscBills, setShowDiscBills] = useState(false);
   var getStockForItem = function(it) { var m = inv.find(function(x) { return x.id === it.mid; }); if (!m) m = inv.find(function(x) { return x.name === it.name; }); return m ? fStock(m.stock, m.packQty) : "0"; };
 
-  const _profT2 = performance.now();
   const totals = fl.reduce((acc, b) => { const p = calcBillProfit(b); return { sale: acc.sale + p.netSale, cost: acc.cost + p.totalCost, disc: acc.disc + p.totalDisc, profit: acc.profit + p.profit }; }, { sale: 0, cost: 0, disc: 0, profit: 0 });
-  const _profT3 = performance.now();
-  console.log("[PROFIT] totals over " + fl.length + " bills = " + (_profT3 - _profT2).toFixed(1) + "ms");
   const overallMargin = totals.sale > 0 ? (totals.profit / totals.sale * 100) : 0;
 
   var recalcAll = function() {
@@ -4445,6 +4456,7 @@ function ProfitPage({ bills, inv, mob, purch, saveBills, showBill, setPage }) {
         <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>From</label><input type="date" value={fromD} onChange={(e) => setFromD(e.target.value)} style={inps} /></div>
         <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>To</label><input type="date" value={toD} onChange={(e) => setToD(e.target.value)} style={inps} /></div></div>}
       <input value={profitSearch} onChange={function(e) { setProfitSearch(e.target.value); }} placeholder="Search bill no, patient, or medicine name..." style={{ ...inps, marginBottom: 14 }} />
+      {profitLoading && <div style={{ textAlign: "center", padding: "10px", fontSize: 13, color: "#0D6B5B", fontWeight: 600 }}>⏳ Loading bills…</div>}
 
       <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(5,1fr)", gap: 12, marginBottom: 16 }}>
         <Stat icon="🧾" label="Bills" value={fl.length} color="#2563EB" />
@@ -4510,14 +4522,8 @@ function ProfitPage({ bills, inv, mob, purch, saveBills, showBill, setPage }) {
 
       <div style={cds}><b>Bill-wise Breakdown ({fl.length})</b>
         {fl.length === 0 ? <p style={{ color: "#aaa", textAlign: "center", padding: 16, fontSize: 12 }}>No bills in this period</p> :
-        (function() {
-          var ordered = [...fl].reverse();
-          var profTotalPages = Math.max(1, Math.ceil(ordered.length / PROF_PAGE_SIZE));
-          var profCur = Math.min(profPage, profTotalPages);
-          var profRows = ordered.slice((profCur - 1) * PROF_PAGE_SIZE, profCur * PROF_PAGE_SIZE);
-          var profBtn = function(dis) { return { padding: "6px 12px", borderRadius: 7, border: "1px solid #ddd", background: dis ? "#f5f5f0" : "#fff", color: dis ? "#bbb" : "#0D6B5B", cursor: dis ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 600, fontFamily: "inherit" }; };
-          return <div style={{ marginTop: 10 }}>
-          {profRows.map(function(b) { var p = calcBillProfit(b); var isExp = profitExpand === b.billNo;
+        <div style={{ marginTop: 10 }}>
+          {[...fl].reverse().map(function(b) { var p = calcBillProfit(b); var isExp = profitExpand === b.billNo;
             return <div key={b.billNo} style={{ marginBottom: 6, borderRadius: 10, border: "1px solid #eee", overflow: "hidden" }}>
               <div onClick={function() { setProfitExpand(isExp ? null : b.billNo); }} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", background: isExp ? "#F0FDF4" : "#FAFAF7", cursor: "pointer", borderLeft: "3px solid " + (p.profit >= 0 ? "#059669" : "#DC2626"), flexWrap: "wrap", gap: 4 }}>
                 <div><span style={{ fontFamily: "monospace", fontWeight: 700, color: "#0D6B5B", fontSize: 13 }}>{b.billNo}</span><span style={{ color: "#888", fontSize: 11, marginLeft: 8 }}>{fD(b.date)} | {b.patient}</span></div>
@@ -4531,15 +4537,7 @@ function ProfitPage({ bills, inv, mob, purch, saveBills, showBill, setPage }) {
               {isExp && <BillExpandedRow b={b} bills={bills} calcItemProfit={calcItemProfit} calcBillProfit={calcBillProfit} getStockForItem={getStockForItem} showBill={showBill} setPage={setPage} saveBills={saveBills} />}
             </div>;
           })}
-          {profTotalPages > 1 && <div style={{ display: "flex", gap: 6, alignItems: "center", justifyContent: "center", flexWrap: "wrap", marginTop: 12 }}>
-            <button onClick={function() { setProfPage(1); }} disabled={profCur <= 1} style={profBtn(profCur <= 1)}>{"\u00AB First"}</button>
-            <button onClick={function() { setProfPage(profCur - 1); }} disabled={profCur <= 1} style={profBtn(profCur <= 1)}>{"\u2039 Prev"}</button>
-            <span style={{ fontSize: 12, color: "#555", fontWeight: 600, padding: "0 8px" }}>Page {profCur} / {profTotalPages} &middot; {ordered.length} bills</span>
-            <button onClick={function() { setProfPage(profCur + 1); }} disabled={profCur >= profTotalPages} style={profBtn(profCur >= profTotalPages)}>{"Next \u203A"}</button>
-            <button onClick={function() { setProfPage(profTotalPages); }} disabled={profCur >= profTotalPages} style={profBtn(profCur >= profTotalPages)}>{"Last \u00BB"}</button>
-          </div>}
-          </div>;
-        })()}
+        </div>}
 
         
       </div>
