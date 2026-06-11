@@ -522,17 +522,26 @@ function fbListen(path, callback) {
 // Query bills by date range directly from Firebase (fixes Month/Year/Custom filters
 // which broke because the full bills collection is too large to load all at once)
 function fbQueryBillsByDate(fromISO, toISO, callback) {
-  // Always fetch ALL bills then filter in JS.
-  // This avoids the Firebase .orderByChild index requirement and is reliable
-  // regardless of database rules configuration.
-  var path = getOutletPath("bills");
-  console.log("[fbQuery] fetching all bills from:", path, "then filtering", fromISO, "to", toISO);
-  db.ref(path).once("value", function(snap) {
-    var all = snap.val() ? Object.values(snap.val()) : [];
-    console.log("[fbQuery] total bills in DB:", all.length);
+  // Read from BOTH root-level bills/ (legacy) and outlets/outletX/bills/ (current)
+  // then merge, deduplicate by billNo, and filter by date.
+  var outletPath = getOutletPath("bills");
+  var rootPath = "bills";
+  console.log("[fbQuery] reading outlet:", outletPath, "+ root: bills/");
+  var outletSnap = null, rootSnap = null;
+  function merge() {
+    if (outletSnap === null || rootSnap === null) return; // wait for both
+    var seen = {};
+    var all = [];
+    // outlet bills first (newer, takes priority on duplicates)
+    (outletSnap ? Object.values(outletSnap) : []).forEach(function(b) {
+      if (b && b.billNo) { seen[b.billNo] = true; all.push(b); }
+    });
+    // root bills — only add if not already seen
+    (rootSnap ? Object.values(rootSnap) : []).forEach(function(b) {
+      if (b && b.billNo && !seen[b.billNo]) { seen[b.billNo] = true; all.push(b); }
+    });
+    console.log("[fbQuery] merged total:", all.length, "bills (outlet:", (outletSnap ? Object.keys(outletSnap).length : 0), "+ root:", (rootSnap ? Object.keys(rootSnap).length : 0), ")");
     if (fromISO === "2000-01-01T00:00:00.000Z") {
-      // "All" filter — return everything
-      console.log("[fbQuery] returning all", all.length, "bills");
       callback(all);
       return;
     }
@@ -542,10 +551,15 @@ function fbQueryBillsByDate(fromISO, toISO, callback) {
     });
     console.log("[fbQuery] filtered to:", filtered.length, "bills");
     callback(filtered);
-  }, function(err) {
-    console.error("[fbQuery] Firebase read error:", err);
-    callback([]);
-  });
+  }
+  db.ref(outletPath).once("value", function(snap) {
+    outletSnap = snap.val();
+    merge();
+  }, function(err) { console.error("[fbQuery] outlet read error:", err); outletSnap = {}; merge(); });
+  db.ref(rootPath).once("value", function(snap) {
+    rootSnap = snap.val();
+    merge();
+  }, function(err) { console.error("[fbQuery] root read error:", err); rootSnap = {}; merge(); });
 }
 
 // ══════════════════════════════════════════════
@@ -8017,7 +8031,21 @@ function App() {
           }
         }
       }),
-      fbListen("bills", (data) => { setBills(data ? Object.values(data) : []); }),
+      // Listen to outlet-level bills (current)
+      fbListen("bills", (data) => {
+        var outletBills = data ? Object.values(data) : [];
+        // Also read root-level bills (legacy, where historical bills are stored)
+        db.ref("bills").once("value", function(snap) {
+          var rootBills = snap.val() ? Object.values(snap.val()) : [];
+          // Merge: outlet bills take priority on duplicates
+          var seen = {};
+          var merged = [];
+          outletBills.forEach(function(b) { if (b && b.billNo) { seen[b.billNo] = true; merged.push(b); } });
+          rootBills.forEach(function(b) { if (b && b.billNo && !seen[b.billNo]) { merged.push(b); } });
+          console.log("[bills] merged:", merged.length, "(outlet:", outletBills.length, "root:", rootBills.length, ")");
+          setBills(merged);
+        });
+      }),
       fbListen("purchases", (data) => { setPurch(data ? Object.values(data).map(function(p) { if (!p.entryDate) { p.entryDate = p.date ? new Date(p.date).toISOString() : ""; } return p; }) : []); }),
       fbListen("sessions", (data) => { setSessions(data ? Object.values(data) : []); }),
     ];
