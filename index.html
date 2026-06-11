@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>A to Z Pharmacy v2.5.1</title>
+<title>A to Z Pharmacy v2.2.0</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💊</text></svg>">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
 
@@ -50,7 +50,7 @@ input,select,button,textarea{font-family:inherit;-webkit-appearance:none}
 }
 </style>
 
-<meta name="app-version" content="2.5.1">
+<meta name="app-version" content="2.3.0">
 <meta name="app-changes" content="["Removed Claude API dependency for image/PDF bill reading [security/privacy]", "Added local Tesseract.js OCR with canvas preprocessing for purchase bill images", "Enhanced parsing with fallback line-by-line item extraction", "Cleaner worker without hardcoded API keys or Claude proxy route", "Improved error handling and user feedback for OCR quality", "v2.2.0: Advanced multi-pass image processing with deskew, adaptive thresholding, Sauvola binarization, OTSU thresholding, unsharp mask sharpening, multi-PSM Tesseract passes, and 3-strategy invoice parser (Vardhman columnar, flexible numeric-anchor, token-based)"]">
 <script>window.APP_VERSION = {"version": "2.3.0", "changes": ["Replaced EmailJS with Cloudflare Worker + Resend for reliable OTP delivery (no Gmail scope issues)", "Added /send-otp-email route to Cloudflare Worker", "3000 free emails/month via Resend vs 200 via EmailJS", "Proper error handling — shows actual failure reason instead of silent swallow", "OTP always logged to console as fallback"], "date": "2026-05-10", "type": "production"};</script>
 
@@ -212,7 +212,7 @@ async function saveUserProfile(email, profile) {
 // Helper to set a specific path (not outlet-scoped)
 async function fbSetPath(path, val) {
   if (!db) return;
-  return dbWrite(path, val);
+  return db.ref(path).set(val);
 }
 
 // Legacy compat — dynamically built from Firebase now
@@ -260,166 +260,18 @@ function parseStockInput(val, packQty) {
 // ══════════════════════════════════════════════
 // AUDIT TRAIL — logs who changed what and when
 // ══════════════════════════════════════════════
-// Per-feature logAudit() is SUPERSEDED by the universal write logger below
-// (dbWrite -> logChange records every write with full before->after detail).
-// Kept as a no-op so the existing logAudit() calls scattered through the app
-// don't create duplicate changelog entries.
-function logAudit(action, details, user) { return; }
-
-// ══════════════════════════════════════════════
-// UNIVERSAL WRITE LOGGING
-// Every database write funnels through dbWrite(), which reads the current
-// value, records a full before->after diff to the audit trail, then writes.
-// Reads are NEVER logged. Nothing in the app can write without being logged.
-// ══════════════════════════════════════════════
-
-// Never log: the audit trail itself (would recurse), session presence pings
-// (heartbeat noise), and OTP codes (short-lived secrets). These still WRITE.
-function _skipLog(fullPath) {
-  return /(^|\/)(auditTrail|sessions|otps)(\/|$)/.test(String(fullPath));
-}
-// "outlets/outlet2/bills/ATZ1" -> "bills/ATZ1" for readable logs
-function _logicalPath(fullPath) {
-  return String(fullPath).replace(/^outlets\/[^/]+\//, "");
-}
-// Who is acting right now (from the saved session) — no plumbing needed
-function _logUser() {
-  try { var s = JSON.parse(localStorage.getItem("atoz_session") || "null"); return s ? (s.name || s.email || "unknown") : "system"; }
-  catch (e) { return "system"; }
-}
-function _eq(a, b) {
-  try { return JSON.stringify(a === undefined ? null : a) === JSON.stringify(b === undefined ? null : b); }
-  catch (e) { return false; }
-}
-// Redact obvious secrets before they land in a long-lived log
-var _SECRET = { password: 1, passwd: 1, pwd: 1, pin: 1, otp: 1, token: 1, secret: 1, apikey: 1, api_key: 1 };
-function _redact(v) {
-  if (!v || typeof v !== "object") return v;
-  if (Array.isArray(v)) return v.map(_redact);
-  var out = {};
-  Object.keys(v).forEach(function(k) {
-    if (_SECRET[k.toLowerCase()]) out[k] = "***";
-    else if (v[k] && typeof v[k] === "object") out[k] = _redact(v[k]);
-    else out[k] = v[k];
-  });
-  return out;
-}
-// Field-level diff between two records -> [{ field, from, to }]
-function _diffFields(before, after) {
-  var out = [], keys = {};
-  Object.keys(before || {}).forEach(function(k) { keys[k] = 1; });
-  Object.keys(after || {}).forEach(function(k) { keys[k] = 1; });
-  Object.keys(keys).forEach(function(k) {
-    var a = before ? before[k] : undefined, b = after ? after[k] : undefined;
-    if (!_eq(a, b)) out.push({ field: k, from: a === undefined ? null : a, to: b === undefined ? null : b });
-  });
-  return out;
-}
-// One-line label for a record (used in the changelog summary)
-function _recLabel(root, rec) {
-  if (!rec || typeof rec !== "object") return String(rec);
-  if (rec.billNo) {
-    var items = (rec.items || []).map(function(i) { return (i.name || "?") + " x" + (i.qty || 0) + (i.loose ? " (loose)" : ""); });
-    return "Bill " + rec.billNo + " · " + (rec.patient || "-") + " · Rs." + f2(rec.netAmount) + (items.length ? " · " + items.join(", ") : "");
-  }
-  if (rec.name && (rec.batch !== undefined || rec.mrp !== undefined || rec.stock !== undefined)) {
-    return rec.name + (rec.batch ? " (Batch " + rec.batch + ")" : "");
-  }
-  if (rec.supplier !== undefined || rec.invoiceNo !== undefined) {
-    return (rec.supplier || "supplier") + " · Inv " + (rec.invoiceNo || "-") + " · " + ((rec.items || []).length) + " item(s)";
-  }
-  return rec.id || rec.name || (typeof rec === "object" ? JSON.stringify(rec).slice(0, 60) : String(rec));
-}
-function _diffSummary(label, diff) {
-  var hide = ["items", "patientAddress", "patientContact", "doctorContact"];
-  var parts = diff.filter(function(d) { return hide.indexOf(d.field) < 0; }).slice(0, 6).map(function(d) {
-    var from = d.from == null ? "∅" : (typeof d.from === "object" ? "{…}" : String(d.from));
-    var to = d.to == null ? "∅" : (typeof d.to === "object" ? "{…}" : String(d.to));
-    return d.field + " " + from + "→" + to;
-  });
-  return label + (parts.length ? " · " + parts.join(", ") : "");
-}
-// Build the structured change set + summary for one write
-function _buildChanges(logical, before, after) {
-  var root = logical.split("/")[0];
-  var isCollection = logical.indexOf("/") === -1 && after && typeof after === "object" && !Array.isArray(after);
-  var changes = [];
-  var op = after == null ? "delete" : (before == null ? "create" : "update");
-
-  if (after == null && before && typeof before === "object" && logical.indexOf("/") === -1) {
-    Object.keys(before).forEach(function(k) { changes.push({ recordId: k, kind: "removed", before: before[k], after: null }); });
-  } else if (isCollection) {
-    var b = before || {}, a = after || {}, keys = {};
-    Object.keys(b).forEach(function(k) { keys[k] = 1; });
-    Object.keys(a).forEach(function(k) { keys[k] = 1; });
-    Object.keys(keys).forEach(function(k) {
-      var hasB = Object.prototype.hasOwnProperty.call(b, k), hasA = Object.prototype.hasOwnProperty.call(a, k);
-      if (hasA && !hasB) changes.push({ recordId: k, kind: "added", before: null, after: a[k] });
-      else if (hasB && !hasA) changes.push({ recordId: k, kind: "removed", before: b[k], after: null });
-      else if (!_eq(b[k], a[k])) changes.push({ recordId: k, kind: "modified", before: b[k], after: a[k], diff: _diffFields(b[k], a[k]) });
-    });
-  } else {
-    var recId = logical.indexOf("/") >= 0 ? logical.substring(logical.indexOf("/") + 1) : root;
-    if (after == null) changes.push({ recordId: recId, kind: "removed", before: before, after: null });
-    else if (before == null) changes.push({ recordId: recId, kind: "added", before: null, after: after });
-    else changes.push({ recordId: recId, kind: "modified", before: before, after: after, diff: _diffFields(before, after) });
-  }
-
-  var summary;
-  if (changes.length === 1) {
-    var c = changes[0];
-    if (c.kind === "added") summary = "Added " + _recLabel(root, c.after);
-    else if (c.kind === "removed") summary = "Deleted " + _recLabel(root, c.before);
-    else summary = _diffSummary(_recLabel(root, c.after), c.diff || []);
-  } else {
-    var add = 0, mod = 0, rem = 0;
-    changes.forEach(function(c) { if (c.kind === "added") add++; else if (c.kind === "removed") rem++; else mod++; });
-    var bits = [];
-    if (add) bits.push("+" + add + " added");
-    if (mod) bits.push("~" + mod + " changed");
-    if (rem) bits.push("-" + rem + " removed");
-    summary = root + ": " + changes.length + " record(s) (" + bits.join(", ") + ")";
-  }
-  return { op: op, changes: changes, summary: summary, root: root };
-}
-var _ROOT_PREFIX = { inventory: "INV", bills: "BILL", purchases: "PURCH", returns: "RETURN", billReturns: "BILL_RETURN", racks: "RACK", customers: "CUST", ledger: "LEDGER", distReturns: "DIST_RETURN", custPayments: "CUST_PAYMENT", audits: "REPORT", userProfiles: "USER", outlets: "OUTLET" };
-
-// Write ONE detailed audit entry. Raw-writes to auditTrail (bypasses dbWrite -> no recursion).
-function logChange(fullPath, before, after) {
+function logAudit(action, details, user) {
   if (!db) return;
-  before = _redact(before); after = _redact(after);
-  if (_eq(before, after)) return; // nothing actually changed
-  var logical = _logicalPath(fullPath);
-  var info;
-  try { info = _buildChanges(logical, before, after); } catch (e) { console.error("audit diff error", e); return; }
-  var prefix = _ROOT_PREFIX[info.root] || info.root.toUpperCase();
-  var opTag = info.op === "create" ? "ADD" : (info.op === "delete" ? "DELETE" : "EDIT");
-  var id = "aud" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   var entry = {
-    id: id,
-    action: prefix + "_" + opTag,
-    path: logical,
-    op: info.op,
-    details: info.summary,
-    changes: info.changes,
-    user: _logUser(),
+    id: "aud" + Date.now().toString(36) + Math.random().toString(36).slice(2,5),
+    action: action,
+    details: details,
+    user: user ? (user.name || user.email || "unknown") : "system",
     ts: new Date().toISOString(),
-    tsDisplay: new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true })
+    tsDisplay: new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: true })
   };
-  try { db.ref(getOutletPath("auditTrail/" + id)).set(entry); } catch (e) { console.error("audit log error", e); }
-}
-
-// THE SINGLE WRITE FUNNEL. fullPath = a fully-resolved Firebase ref path.
-// Reads current value, logs the diff (best-effort, never blocks), then writes.
-function dbWrite(fullPath, value) {
-  if (!db) return Promise.resolve();
-  var val = value === undefined ? null : value;
-  var doSet = function() { return db.ref(fullPath).set(val).catch(function(e) { console.error("DB write error:", fullPath, e); }); };
-  if (_skipLog(fullPath)) return doSet();
-  return db.ref(fullPath).once("value").then(function(snap) {
-    try { logChange(fullPath, snap.val(), val); } catch (e) { console.error("log build error", e); }
-    return doSet();
-  }).catch(function() { return doSet(); }); // if the read fails, still write
+  var path = getOutletPath ? getOutletPath("auditTrail/" + entry.id) : "auditTrail/" + entry.id;
+  db.ref(path).set(entry);
 }
 
 // ══════════════════════════════════════════════
@@ -507,8 +359,7 @@ function setCurrentOutlet(outletId) {
 function getCurrentOutlet() { return _currentOutlet; }
 
 function fbSet(path, data) {
-  if (!db) return Promise.resolve();
-  return dbWrite(getOutletPath(path), data);
+  return db.ref(getOutletPath(path)).set(data).catch((e) => console.error("DB write error:", path, e));
 }
 function fbGet(path) {
   return db.ref(getOutletPath(path)).once("value").then((snap) => snap.val()).catch(() => null);
@@ -519,18 +370,6 @@ function fbListen(path, callback) {
   return () => ref.off("value");
 }
 
-// Query bills by date range directly from Firebase (fixes Month/Year/Custom filters
-// which broke because the full bills collection is too large to load all at once)
-function fbQueryBillsByDate(fromISO, toISO, callback) {
-  db.ref(getOutletPath("bills"))
-    .orderByChild("date")
-    .startAt(fromISO)
-    .endAt(toISO)
-    .once("value", function(snap) {
-      callback(snap.val() ? Object.values(snap.val()) : []);
-    });
-}
-
 // ══════════════════════════════════════════════
 // CSV PARSER
 // ══════════════════════════════════════════════
@@ -539,6 +378,7 @@ function parseCSV(t) { const res = []; let row = [], f = "", q = false; for (let
 function normalizeInvoiceText(text) {
   return String(text || "")
     .replace(/\n/g, "\n")
+    .replace(/[|]/g, "I")
     .replace(/[“”]/g, '"')
     .replace(/[‘’]/g, "'")
     .replace(/[ 	]+/g, " ")
@@ -546,13 +386,13 @@ function normalizeInvoiceText(text) {
     .trim();
 }
 
-// ── Azure Document Intelligence (primary) + OCR.space (fallback) ─────────────
-// Sends to Cloudflare Worker → Azure Document Intelligence → returns rich result.
-// Falls back to OCR.space automatically if Azure is not configured or fails.
-// Returns { text, tables, confidence, provider }
+// ── OCR.space API — replaces Tesseract.js for pharmacy bill reading ──────────
+// Sends image or PDF to Cloudflare Worker → OCR.space API → returns clean text.
+// Free tier: 500 requests/day. Engine 2 is best for numbers & special chars.
 async function extractImageBillText(file, onProgress) {
-  if (onProgress) onProgress({ status: "uploading", progress: 0.1 });
+  if (onProgress) onProgress({ status: "recognizing text", progress: 0.1 });
 
+  // Convert file to base64
   const base64 = await new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result); // data:image/...;base64,...
@@ -560,7 +400,7 @@ async function extractImageBillText(file, onProgress) {
     reader.readAsDataURL(file);
   });
 
-  if (onProgress) onProgress({ status: "processing", progress: 0.3 });
+  if (onProgress) onProgress({ status: "recognizing text", progress: 0.3 });
 
   const resp = await fetch(PROXY_URL + "/ocr", {
     method: "POST",
@@ -568,28 +408,23 @@ async function extractImageBillText(file, onProgress) {
     body: JSON.stringify({
       base64: base64,
       filename: file.name,
-      filetype: file.type || "image/jpeg",
+      filetype: file.type,
     }),
   });
 
-  if (onProgress) onProgress({ status: "processing", progress: 0.8 });
+  if (onProgress) onProgress({ status: "recognizing text", progress: 0.8 });
 
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({}));
-    throw new Error(err.error || "OCR request failed (" + resp.status + ")");
+    throw new Error(err.error || "OCR.space request failed (" + resp.status + ")");
   }
 
   const data = await resp.json();
   if (!data.ok) throw new Error(data.error || "OCR failed");
 
-  if (onProgress) onProgress({ status: "done", progress: 1.0, provider: data.provider });
+  if (onProgress) onProgress({ status: "recognizing text", progress: 1.0 });
 
-  return {
-    text:       normalizeInvoiceText(data.text || ""),
-    tables:     data.tables || [],
-    confidence: data.confidence || 0,
-    provider:   data.provider || "unknown",
-  };
+  return normalizeInvoiceText(data.text || "");
 }
 
 // ── Spatial table reconstruction from Tesseract word bboxes ─────────────────
@@ -812,20 +647,20 @@ function parseInvoiceTable(text) {
   }
 
   // ── 2. Find pipe-table header row ───────────────────────────────────────
-  // Lines use | as Azure preserves real pipe chars
+  // Lines use | or I (since normalizeInvoiceText converts | → I)
   var headerIdx = -1;
   var colMap = {};
 
   for (var i = 0; i < lines.length; i++) {
     var l = lines[i];
-    var pipes = (l.match(/[|]/g) || []).length;
+    var pipes = (l.match(/[|I]/g) || []).length;
     if (pipes < 5) continue;
     var lower = l.toLowerCase();
     if ((lower.includes("description") || lower.includes("particular"))
-        && (lower.includes("mrp") || lower.includes("batch") || lower.includes("qty") || lower.includes("billed") || lower.includes("rack"))) {
+        && (lower.includes("mrp") || lower.includes("batch") || lower.includes("qty"))) {
 
       // Split on pipe/I separators
-      var cols = l.split(/\s*[|]\s*/)
+      var cols = l.split(/\s*[|I]\s*/)
                   .map(function(c){ return c.trim().toLowerCase(); })
                   .filter(Boolean);
 
@@ -833,22 +668,21 @@ function parseInvoiceTable(text) {
         // Use first match for each semantic field
         if (/^rack$/.test(col))                                   colMap.rack  = colMap.rack  ?? idx;
         if (/desc|particular|item\s*name|medicine/.test(col))    colMap.name  = colMap.name  ?? idx;
-        if (/^qty$|^qty[\s_]*billed$|^billed$|^qty[\s_]*bill/.test(col)) colMap.qty = colMap.qty ?? idx;
+        if (/^qty$|^qty\s*billed$|^billed$/.test(col))           colMap.qty   = colMap.qty   ?? idx;
         if (/^free/.test(col) && !/value/.test(col))             colMap.free  = colMap.free  ?? idx;
         if (/^pack/.test(col))                                    colMap.pack  = colMap.pack  ?? idx;
         if (/batch/.test(col))                                    colMap.batch = colMap.batch ?? idx;
         if (/^exp/.test(col))                                     colMap.exp   = colMap.exp   ?? idx;
-        if (/new[\s_]*mrp|mrp[\s_]*new/.test(col))               colMap.newMrp  = colMap.newMrp  ?? idx;
+        if (/new\s*mrp/.test(col))                                colMap.newMrp  = colMap.newMrp  ?? idx;
         if (/old\s*mrp/.test(col))                                colMap.oldMrp  = colMap.oldMrp  ?? idx;
         if (/^mrp$/.test(col))                                    colMap.mrp     = colMap.mrp     ?? idx;
-        if (/trade[\s_]*price|^ptr$|^rate$|^net[\s_]*rate$/.test(col)) colMap.trade = colMap.trade ?? idx;
+        if (/trade\s*price|ptr|rate/.test(col))                   colMap.trade   = colMap.trade   ?? idx;
         if (/disc\s*%/.test(col))                                 colMap.disc    = colMap.disc    ?? idx;
         if (/^gst\s*%$|^gst$|^cgst/.test(col))                  colMap.gst     = colMap.gst     ?? idx;
         if (/hsn/.test(col))                                      colMap.hsn     = colMap.hsn     ?? idx;
         if (/net\s*value/.test(col))                              colMap.net     = colMap.net     ?? idx;
         if (/taxable\s*value/.test(col))                          colMap.taxable = colMap.taxable ?? idx;
         if (/scm\s*disc/.test(col))                               colMap.scmDisc = colMap.scmDisc ?? idx;
-        if (/^scm$/.test(col))                                      colMap.scm     = colMap.scm     ?? idx;
       });
 
       if (colMap.name !== undefined && Object.keys(colMap).length >= 4) {
@@ -873,14 +707,14 @@ function parseInvoiceTable(text) {
     for (var di = headerIdx + 1; di < lines.length; di++) {
       var l = lines[di];
       // Skip separator rows (--- or ===)
-      if (/^[|\-\s=]+$/.test(l)) continue;
+      if (/^[\|I\-\s=]+$/.test(l)) continue;
       // Stop at HTML or footer
       if (/^<|^Out\s*Stock|Taxable\s*Sale|Tot\s*Items/i.test(l)) break;
       // Must have enough pipe separators to be a data row
-      if ((l.match(/[|]/g) || []).length < 4) continue;
+      if ((l.match(/[|I]/g) || []).length < 4) continue;
 
       // Split row into cells — handle leading/trailing pipes
-      var cells = l.split(/\s*[|]\s*/).map(function(c){ return c.trim(); });
+      var cells = l.split(/\s*[|I]\s*/).map(function(c){ return c.trim(); });
       // Remove empty first/last cell from leading/trailing separator
       if (cells[0] === "") cells.shift();
       if (cells[cells.length-1] === "") cells.pop();
@@ -1696,25 +1530,39 @@ function Login({ onLogin }) {
     if (!em || !em.includes("@")) { setErr("Enter a valid email address"); return; }
     setLoading(true); setErr(""); setInfo("");
     try {
-      // Worker generates + stores the OTP server-side, checks registration,
-      // and emails the code. The browser never sees or stores the OTP.
-      const resp = await fetch(PROXY_URL + "/auth/request-otp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: em })
-      });
-      const data = await resp.json();
-      if (!resp.ok || !data.ok) {
-        setErr(data.error || ("Request failed (HTTP " + resp.status + ")"));
-        setLoading(false);
-        return;
+      // Check if user is registered (owner or in userProfiles)
+      const isOwner = OWNER_EMAILS.includes(em);
+      let profile = null;
+      if (!isOwner) {
+        profile = await loadUserProfile(em);
+        if (!profile) { setErr("This email is not registered. Contact owner to add you."); setLoading(false); return; }
+        if (profile.disabled) { setErr("Your account has been disabled. Contact owner."); setLoading(false); return; }
+      }
+      const code = genOTP();
+      console.log("[OTP DEBUG] Code for " + em + ": " + code);
+      await saveOTP(em, code);
+      var emailOk = false;
+      var emailErr = "";
+      var fallbackOk = false;
+      try {
+        await sendOTPEmail(em, code, isOwner ? "Owner" : (profile && profile.name) || em);
+        emailOk = true;
+      } catch(mailErr) {
+        emailErr = mailErr.message || "Unknown error";
+        // Try sending to admin as fallback
+        if (em.toLowerCase() !== "krishkwish@gmail.com") {
+          fallbackOk = await sendOTPFallback(em, code);
+        }
       }
       setStep("otp");
       setResendCd(60);
-      if (data.delivered === "admin") {
+      if (emailOk) {
+        setInfo("OTP sent to " + em + ". Check inbox & spam.");
+      } else if (fallbackOk) {
         setInfo("OTP sent to admin (krishkwish@gmail.com). Please ask admin for the OTP code.");
       } else {
-        setInfo("OTP sent to " + em + ". Check inbox & spam.");
+        setErr("Email failed: " + emailErr);
+        setInfo("Could not send OTP email. Please contact admin.");
       }
     } catch(e) {
       console.error("[OTP ERROR]", e);
@@ -1727,35 +1575,24 @@ function Login({ onLogin }) {
     if (!otp.trim() || otp.trim().length !== 6) { setErr("Enter the 6-digit OTP"); return; }
     setLoading(true); setErr("");
     try {
+      const result = await verifyOTP(email.trim().toLowerCase(), otp.trim());
+      if (!result.ok) { setErr(result.err); setLoading(false); return; }
+      // Successful OTP — sign in via Firebase Anonymous or load profile
       const em = email.trim().toLowerCase();
-      // Worker verifies the OTP server-side and returns a Firebase custom token.
-      const resp = await fetch(PROXY_URL + "/auth/verify-otp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: em, otp: otp.trim() })
-      });
-      const data = await resp.json();
-      if (!resp.ok || !data.ok) {
-        setErr(data.error || "Verification failed");
-        setLoading(false);
-        return;
-      }
-      // Real Firebase sign-in — this is what makes the database rules enforceable.
-      if (!auth) { setErr("Auth not initialised. Reload the page."); setLoading(false); return; }
-      await auth.signInWithCustomToken(data.token);
-
-      const isOwner = data.role === "owner";
-      const profile = data.profile || {};
+      const isOwner = OWNER_EMAILS.includes(em);
+      let profile = isOwner ? { name: em === "krishkwish@gmail.com" ? "Krish" : "Saloni", role: "owner", pages: null } : await loadUserProfile(em);
+      if (!profile) { setErr("Profile not found. Contact owner."); setLoading(false); return; }
+      // Update last login
+      if (!isOwner) await saveUserProfile(em, { ...profile, lastLogin: new Date().toISOString() });
       onLogin({
-        id: data.uid,                       // uid = mangled email (matches auth.uid)
+        id: em.replace(/[^a-z0-9]/gi, "_"),
         email: em,
-        name: data.name || em,
+        name: profile.name || em,
         role: isOwner ? "owner" : "staff",
-        pages: isOwner ? null : (profile.pages || []),
-        outlets: isOwner ? null : (profile.outlets || Object.keys(OUTLETS)),
+        pages: isOwner ? null : (profile.pages || []), // null = all pages for owner
+        outlets: isOwner ? null : (profile.outlets || Object.keys(OUTLETS)), // null = all outlets for owner
       });
     } catch(e) {
-      console.error("[VERIFY ERROR]", e);
       setErr("Verification failed: " + e.message);
     }
     setLoading(false);
@@ -2061,27 +1898,19 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm, inv, s
           alert("PDF parsed but no items detected. Try a cleaner PDF or CSV.");
         }
       } else {
-        setImgStatus("Sending to Azure OCR...");
-        const ocrResult = await extractImageBillText(file, (m) => {
+        setImgStatus("Sending to OCR.space...");
+        const text = await extractImageBillText(file, (m) => {
           if (m && m.progress !== undefined) {
             const pct = Math.round(m.progress * 100);
-            const provLabel = m.provider ? " via " + m.provider : "";
-            setImgStatus("Reading bill" + provLabel + "... " + pct + "%");
+            setImgStatus("OCR.space reading bill... " + pct + "%");
           }
         });
-        const providerLabel = ocrResult.provider === "azure" ? "Azure Document Intelligence"
-          : ocrResult.provider === "ocrspace" ? "OCR.space (fallback)"
-          : ocrResult.provider || "OCR";
-        const confLabel = ocrResult.confidence ? " (" + Math.round(ocrResult.confidence * 100) + "% confidence)" : "";
-        setImgStatus("Parsing with " + providerLabel + confLabel + "...");
-        const parsed = parseImageBillToItems(ocrResult.text);
+        setImgStatus("Parsing table structure...");
+        const parsed = parseImageBillToItems(text);
         if (parsed.items && parsed.items.length > 0) {
-          setRev({ ...parsed, srcType: "image", srcFile: file.name, rawText: ocrResult.text, ocrProvider: ocrResult.provider, ocrConfidence: ocrResult.confidence });
+          setRev({ ...parsed, srcType: "image", srcFile: file.name, rawText: text });
         } else {
-          const tip = ocrResult.provider === "azure"
-            ? "Azure ran but no rows found — try prebuilt-layout model or a clearer photo."
-            : "OCR ran but no medicine rows found.\n\nTips:\n• Use a clear, well-lit photo\n• Add AZURE_DI_ENDPOINT + AZURE_DI_KEY to Cloudflare Worker secrets for best results\n• Try CSV export instead";
-          alert(tip);
+          alert("OCR ran but no medicine rows found.\n\nTips:\n• Use a clear, well-lit photo\n• Make sure BREVO_API_KEY and OCR_SPACE_KEY are set in Cloudflare Worker secrets\n• Try CSV export instead");
         }
       }
     } catch (err) {
@@ -2290,7 +2119,7 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm, inv, s
             })}
           </div>}
         </div>}
-        {tab === "image" && <div style={{ border: "2px dashed #bbb", borderRadius: 10, padding: 36, textAlign: "center", cursor: "pointer", background: "#FAFAF7" }} onClick={() => !imgP && imgR.current && imgR.current.click()}><input ref={imgR} type="file" accept="image/*,.pdf,application/pdf" onChange={doImg} style={{ display: "none" }} />{imgP ? <div><div style={{ fontSize: 36 }}>🔄</div><div style={{ fontSize: 14, fontWeight: 600, color: "#0D6B5B", marginTop: 8 }}>{imgStatus || "Processing..."}</div><div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>Azure Document Intelligence — do not close this page</div></div> : <div><div style={{ fontSize: 36 }}>📸</div><div style={{ fontSize: 14, fontWeight: 600, color: "#555", marginTop: 8 }}>Upload Invoice (Photo or PDF)</div><div style={{ fontSize: 11, color: "#aaa", marginTop: 4 }}>Powered by Azure Document Intelligence</div></div>}</div>}
+        {tab === "image" && <div style={{ border: "2px dashed #bbb", borderRadius: 10, padding: 36, textAlign: "center", cursor: "pointer", background: "#FAFAF7" }} onClick={() => !imgP && imgR.current && imgR.current.click()}><input ref={imgR} type="file" accept="image/*,.pdf,application/pdf" onChange={doImg} style={{ display: "none" }} />{imgP ? <div><div style={{ fontSize: 36 }}>🔄</div><div style={{ fontSize: 14, fontWeight: 600, color: "#0D6B5B", marginTop: 8 }}>{imgStatus || "Processing..."}</div><div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>OCR.space — do not close this page</div></div> : <div><div style={{ fontSize: 36 }}>📸</div><div style={{ fontSize: 14, fontWeight: 600, color: "#555", marginTop: 8 }}>Upload Invoice (Photo or PDF)</div></div>}</div>}
         {tab === "aiExtract" && <div style={{ borderRadius: 10, overflow: "hidden", border: "1px solid #ddd", background: "#fff" }}>
           <div style={{ padding: "10px 14px", background: "#F0FDF4", borderBottom: "1px solid #ddd", fontSize: 12 }}>
             <span style={{ fontWeight: 700, color: "#0D6B5B" }}>🤖 AI Data Extraction</span>
@@ -2670,53 +2499,130 @@ function BillPage({ inv, saveInv, addBill, mob, showBill, user }) {
   const res = sq.length >= 1 ? inv.filter((m) => { const s = sq.toLowerCase(); return (m.name.toLowerCase().includes(s) || m.batch.toLowerCase().includes(s) || (m.uid || "") === sq.toUpperCase() || (m.uid || "").toLowerCase().includes(s)) && m.stock > 0; }).sort(function(a, b) { var da = getDaysToExpiry(a); var db = getDaysToExpiry(b); return da - db; }).slice(0, 12) : [];
   const addIt = (med) => { const ex = items.findIndex((i) => i.mid === med.id && !i.loose); if (ex >= 0) setItems((p) => p.map((i, idx) => idx === ex ? { ...i, qty: i.qty + 1 } : i)); else setItems((p) => [...p, { mid: med.id, name: med.name, manufacturer: med.manufacturer || "", pack: med.pack || "", batch: med.batch, expiry: med.expiry, mrp: med.mrp, ptr: med.ptr || 0, gstRate: med.gstRate || 5, qty: 1, discount: 0, loose: false, packQty: med.packQty || 0, unitPrice: med.mrp, unitPtr: med.ptr || 0, uid: med.uid || "", rack: med.rack || "", purchaseBillNo: med.purchaseBillNo || "", purchaseDistributor: med.purchaseDistributor || med.distributor || "", purchaseDate: med.purchaseDate || "", unitCost: med.unitCost || 0, purchDiscPct: med.purchDiscPct || 0, purchSchemePct: med.purchSchemePct || 0, purchFreeRatio: med.purchFreeRatio || 1 }]); setSq(""); setSo(false); };
 
-  // Camera scan — reads medicine strip/box image using Azure Document Intelligence
+  // Camera scan - reads medicine strip/box image using local Tesseract.js v5 OCR (no API needed)
   const doScan = async (e) => {
     const file = e.target.files[0]; if (!file) return;
     setScanning(true); setScanResult(null);
     try {
-      // Convert to base64 for Azure OCR via Cloudflare Worker
-      const base64 = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
+      // Ensure Tesseract.js v5 is loaded (lazy, cached)
+      const ok = await ensureTesseract();
+      if (!ok) { setScanResult({ type: "err", msg: "OCR engine failed to load. Check internet connection." }); setScanning(false); e.target.value = ""; return; }
 
-      setScanResult({ type: "info", msg: "Reading strip with Azure OCR..." });
+      // ── Advanced canvas preprocessing ──────────────────────────────────────
+      // Medicine strips/boxes: small text, coloured backgrounds, curved surfaces.
+      // Steps: upscale → greyscale → adaptive contrast stretch → sharpen → binarise
+      const preprocessMedicineImage = async (imgFile) => {
+        const url = URL.createObjectURL(imgFile);
+        try {
+          const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
+          // Upscale small images; cap at 2400px wide to keep Tesseract fast
+          const TARGET_W = Math.min(2400, Math.max(1200, img.width * 2));
+          const scale = TARGET_W / img.width;
+          const w = Math.round(img.width * scale);
+          const h = Math.round(img.height * scale);
+          const c = document.createElement("canvas"); c.width = w; c.height = h;
+          const ctx = c.getContext("2d", { willReadFrequently: true });
+          // White background (handles transparent PNGs)
+          ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, w, h);
+          // Bicubic-equivalent: draw at 2× then shrink forces browser to interpolate
+          ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
+          ctx.drawImage(img, 0, 0, w, h);
+          const id = ctx.getImageData(0, 0, w, h); const d = id.data; const len = d.length;
 
-      const resp = await fetch(PROXY_URL + "/ocr", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ base64, filename: file.name, filetype: file.type || "image/jpeg" }),
-      });
+          // Pass 1: RGB → luminance (greyscale)
+          const grey = new Float32Array(w * h);
+          for (let i = 0; i < len; i += 4) {
+            grey[i >> 2] = d[i] * 0.2126 + d[i+1] * 0.7152 + d[i+2] * 0.0722;
+          }
 
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}));
-        throw new Error(err.error || "OCR request failed (" + resp.status + ")");
-      }
-      const ocrData = await resp.json();
-      if (!ocrData.ok) throw new Error(ocrData.error || "OCR failed");
+          // Pass 2: Compute local min/max in 64×64 tiles for adaptive contrast stretch
+          const TW = 64, TH = 64;
+          const localMin = new Float32Array(w * h);
+          const localMax = new Float32Array(w * h);
+          for (let py = 0; py < h; py++) {
+            for (let px = 0; px < w; px++) {
+              const x0 = Math.max(0, px - TW), x1 = Math.min(w - 1, px + TW);
+              const y0 = Math.max(0, py - TH), y1 = Math.min(h - 1, py + TH);
+              let mn = 255, mx = 0;
+              // Sample every 4th pixel in tile for speed
+              for (let ty = y0; ty <= y1; ty += 4) {
+                for (let tx = x0; tx <= x1; tx += 4) {
+                  const v = grey[ty * w + tx];
+                  if (v < mn) mn = v; if (v > mx) mx = v;
+                }
+              }
+              localMin[py * w + px] = mn; localMax[py * w + px] = mx;
+            }
+          }
 
-      const rawText = normalizeInvoiceText(ocrData.text || "");
-      console.log("[doScan] Azure OCR result:", rawText.slice(0, 300));
+          // Pass 3: Adaptive normalise + sharpen kernel [0,-1,0,-1,5,-1,0,-1,0]
+          const sharp = new Float32Array(w * h);
+          for (let py = 0; py < h; py++) {
+            for (let px = 0; px < w; px++) {
+              const idx = py * w + px;
+              const mn = localMin[idx], mx = localMax[idx];
+              const range = mx - mn || 1;
+              const norm = (grey[idx] - mn) / range * 255;
+              // Inline 3×3 sharpen
+              const get = (x, y) => { const g = grey[Math.min(h-1,Math.max(0,y)) * w + Math.min(w-1,Math.max(0,x))]; const mn2 = localMin[Math.min(h-1,Math.max(0,y)) * w + Math.min(w-1,Math.max(0,x))], mx2 = localMax[Math.min(h-1,Math.max(0,y)) * w + Math.min(w-1,Math.max(0,x))]; return (g - mn2) / (mx2 - mn2 || 1) * 255; };
+              const sharpened = 5 * norm - get(px-1,py) - get(px+1,py) - get(px,py-1) - get(px,py+1);
+              sharp[idx] = Math.min(255, Math.max(0, sharpened));
+            }
+          }
+
+          // Pass 4: Otsu global threshold for clean black-on-white binary
+          const hist = new Int32Array(256);
+          for (let i = 0; i < sharp.length; i++) hist[Math.round(sharp[i])]++;
+          const N = sharp.length; let total = 0;
+          for (let i = 0; i < 256; i++) total += i * hist[i];
+          let sumB = 0, wB = 0, best = 0, thresh = 128;
+          for (let t = 0; t < 256; t++) {
+            wB += hist[t]; if (!wB) continue;
+            const wF = N - wB; if (!wF) break;
+            sumB += t * hist[t];
+            const mB = sumB / wB, mF = (total - sumB) / wF;
+            const bcv = wB * wF * (mB - mF) * (mB - mF);
+            if (bcv > best) { best = bcv; thresh = t; }
+          }
+
+          // Write final binary image back
+          for (let i = 0; i < sharp.length; i++) {
+            const v = sharp[i] < thresh ? 0 : 255;
+            d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v; d[i * 4 + 3] = 255;
+          }
+          ctx.putImageData(id, 0, 0);
+          return c;
+        } finally { URL.revokeObjectURL(url); }
+      };
+
+      const canvas = await preprocessMedicineImage(file);
+
+      // ── Tesseract.js v5 — dual PSM pass for best medicine strip coverage ───
+      // PSM 6 = uniform block of text (good for strips with small label text)
+      // PSM 11 = sparse text (good for boxes where text is scattered)
+      const runOCR = async (psm) => {
+        const result = await Tesseract.recognize(canvas, "eng", {
+          tessedit_pageseg_mode: psm,
+          tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,:/-+%() ",
+          preserve_interword_spaces: "1",
+        });
+        return normalizeInvoiceText((result && result.data && result.data.text) || "");
+      };
+
+      // Run both PSM modes in parallel, pick the longer (more content) result
+      const [text6, text11] = await Promise.all([runOCR(6), runOCR(11)]);
+      const rawText = text6.length >= text11.length ? text6 : text11;
 
       // ── Smart pharmacy-aware field extraction ──────────────────────────────
       const lines = rawText.split("\n").map(l => l.trim()).filter(Boolean);
       const joined = lines.join(" ");
 
-      // Name: prefer branded line (top quarter), fall back to INN+dosage line
-      // Brand names (MEFTAL-SPAS, INSUPEN etc) often have no dosage on same line
-      const topLines = lines.slice(0, Math.max(3, Math.ceil(lines.length / 4)));
-      const brandLine = topLines.find(l => l.length > 3 && /[A-Z]{3,}/i.test(l) && !/^(mfg|batch|b\.no|exp|use|keep|store|rx|\d)/i.test(l)) || "";
+      // Name: longest line in top-third that looks like a medicine name (has letters + digits/mg/ml)
       const nameLines = lines.slice(0, Math.ceil(lines.length / 2)).filter(l =>
         l.length > 4 && /[a-z]/i.test(l) &&
         (/\d+\s*mg|\d+\s*ml|\d+\s*mcg|\d+\s*iu|\d+\s*g\b/i.test(l) || /tab|cap|inj|syp|gel|cream|drop|spray/i.test(l))
       );
-      const dosageLine = nameLines.sort((a, b) => b.length - a.length)[0] || "";
-      // Use brand if it looks like a proper name (short, all-caps brand), else use dosage line
-      const name = (brandLine && brandLine.length <= 40 ? brandLine : dosageLine) ||
-        dosageLine || brandLine ||
+      const name = nameLines.sort((a, b) => b.length - a.length)[0] ||
         lines.filter(l => l.length > 4 && /[a-z]/i.test(l))[0] || "";
 
       // Manufacturer: line with known pharma keywords
@@ -2753,37 +2659,33 @@ function BillPage({ inv, saveInv, addBill, mob, showBill, user }) {
 
       const parsed = { name: name.slice(0, 80), manufacturer: manufacturer.slice(0, 60), batch, expiry, pack, mrp };
 
-      // ── Match against inventory — partial name, any word, no special chars ──
-      // Strip hyphens, dots, special chars from OCR name for fuzzy matching
-      const cleanOcrName = parsed.name.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
-      // All meaningful words (3+ letters, skip numbers)
-      const ocrWords = cleanOcrName.split(/\s+/).filter(w => w.length >= 3 && isNaN(w));
-
-      const matches = inv.filter((m) => {
-        const mn = m.name.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
-        // Batch exact match (highest confidence)
+      // ── Match against inventory ────────────────────────────────────────────
+      const medName = parsed.name.toLowerCase();
+      const words = medName.split(/\s+/).filter(w => w.length > 3);
+      const match = inv.find((m) => {
+        if (m.stock <= 0) return false;
+        const mn = m.name.toLowerCase();
+        if (mn === medName) return true;
         if (parsed.batch && m.batch && m.batch === parsed.batch) return true;
-        // ANY single meaningful word from OCR name appears in inventory name
-        if (ocrWords.length > 0 && ocrWords.some(w => mn.includes(w))) return true;
-        return false;
+        // Full name containment
+        if (mn.includes(medName) || medName.includes(mn)) return true;
+        // Word-level: any 2+ meaningful words from OCR appear in inventory name
+        const hits = words.filter(w => mn.includes(w));
+        return hits.length >= 2;
       });
 
-      if (matches.length === 1) {
-        // Exactly one match — add directly
-        addIt(matches[0]);
-        setScanResult({ type: "ok", msg: "Added: " + matches[0].name, matches: [] });
-      } else if (matches.length > 1) {
-        // Multiple matches — show pick list
-        setScanResult({ type: "pick", msg: "Found " + matches.length + " matches — tap to add:", matches });
+      if (match) {
+        addIt(match);
+        setScanResult({ type: "ok", msg: "✅ Found: " + match.name + " (Stock: " + fStock(match.stock, match.packQty) + ")" });
       } else {
-        // No match — pre-fill search with cleaned name so user can search manually
         const preview = [
           parsed.name && "Name: " + parsed.name,
+          parsed.batch && "Batch: " + parsed.batch,
           parsed.expiry && "Exp: " + parsed.expiry,
           parsed.mrp && "MRP: ₹" + parsed.mrp
         ].filter(Boolean).join(" | ");
-        setScanResult({ type: "info", msg: (preview || "Could not extract details") + " — not in inventory.", matches: [] });
-        if (parsed.name) { setSq(cleanOcrName); setSo(true); }
+        setScanResult({ type: "info", msg: (preview || "Could not extract details") + " — not in inventory." });
+        if (parsed.name) setSq(parsed.name);
       }
     } catch (err) {
       console.error("doScan error:", err);
@@ -2874,18 +2776,10 @@ function BillPage({ inv, saveInv, addBill, mob, showBill, user }) {
             <button onClick={doBarcodeScan} disabled={barcodeScanning} style={{ ...bts(false), padding: "12px 16px", fontSize: 13, opacity: barcodeScanning ? 0.6 : 1, background: "#EDE9FE", color: "#5B21B6" }}>{barcodeScanning ? "Scanning..." : "▦ Barcode"}</button>
           </div>
         </div>
-        {scanning && <div style={{ marginTop: 10, padding: 12, background: "#EFF6FF", borderRadius: 8, fontSize: 13, color: "#1E40AF", display: "flex", alignItems: "center", gap: 8 }}><span style={{ display: "inline-block", width: 16, height: 16, border: "2px solid #1E40AF", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.7s linear infinite" }}></span> Reading strip with Azure OCR...</div>}
-        {scanResult && <div style={{ marginTop: 10, borderRadius: 8, overflow: "hidden", border: "1px solid", borderColor: scanResult.type === "ok" ? "#6EE7B7" : scanResult.type === "err" ? "#FCA5A5" : scanResult.type === "pick" ? "#93C5FD" : "#FCD34D" }}>
-          <div style={{ padding: "10px 12px", fontSize: 12.5, background: scanResult.type === "ok" ? "#D1FAE5" : scanResult.type === "err" ? "#FEE2E2" : scanResult.type === "pick" ? "#EFF6FF" : "#FEF3C7", color: scanResult.type === "ok" ? "#065F46" : scanResult.type === "err" ? "#991B1B" : scanResult.type === "pick" ? "#1E40AF" : "#92400E", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <span>{scanResult.type === "ok" && "✅ "}{scanResult.type === "err" && "❌ "}{scanResult.type === "pick" && "🔍 "}{scanResult.type === "info" && "ℹ️ "}{scanResult.msg}</span>
-            <button onClick={() => setScanResult(null)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, opacity: 0.5, flexShrink: 0 }}>✕</button>
-          </div>
-          {scanResult.type === "pick" && scanResult.matches && scanResult.matches.length > 0 && <div style={{ background: "#fff", padding: "6px 8px", display: "flex", flexDirection: "column", gap: 4 }}>
-            {scanResult.matches.map((m) => <button key={m.id} onClick={() => { addIt(m); setScanResult(null); }} style={{ textAlign: "left", padding: "8px 12px", border: "1px solid #E5E7EB", borderRadius: 6, background: "#FAFAFA", cursor: "pointer", fontSize: 12.5, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ fontWeight: 600, color: "#111" }}>{m.name}</span>
-              <span style={{ fontSize: 11, color: "#6B7280", marginLeft: 8, flexShrink: 0 }}>Stock: {fStock(m.stock, m.packQty)} · ₹{m.mrp}</span>
-            </button>)}
-          </div>}
+        {scanning && <div style={{ marginTop: 10, padding: 12, background: "#EFF6FF", borderRadius: 8, fontSize: 13, color: "#1E40AF", display: "flex", alignItems: "center", gap: 8 }}><span style={{ display: "inline-block", width: 16, height: 16, border: "2px solid #1E40AF", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.7s linear infinite" }}></span> Reading medicine strip (local OCR)...</div>}
+        {scanResult && <div style={{ marginTop: 10, padding: 12, borderRadius: 8, fontSize: 12.5, background: scanResult.type === "ok" ? "#D1FAE5" : scanResult.type === "err" ? "#FEE2E2" : "#FEF3C7", color: scanResult.type === "ok" ? "#065F46" : scanResult.type === "err" ? "#991B1B" : "#92400E" }}>
+          {scanResult.type === "ok" && "✅ "}{scanResult.type === "err" && "❌ "}{scanResult.type === "info" && "ℹ️ "}{scanResult.msg}
+          <button onClick={() => setScanResult(null)} style={{ marginLeft: 8, background: "none", border: "none", cursor: "pointer", fontSize: 14, opacity: 0.6 }}>x</button>
         </div>}
         {items.length > 0 && <div>
           <div style={{ overflowX: "auto", marginTop: 14 }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: mob ? 0 : 750 }}><thead><tr>
@@ -3031,38 +2925,18 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
   const [hFilter, setHFilter] = useState("all");
   const [hFrom, setHFrom] = useState("");
   const [hTo, setHTo] = useState("");
-  const [filteredBills, setFilteredBills] = useState(bills);
-  const [histLoading, setHistLoading] = useState(false);
   const mob = useM();
 
-  // Re-query Firebase whenever filter changes. ALL filters go through Firebase
-  // directly — never falls back to the bills prop, which may be truncated.
-  useEffect(function() {
-    var now = new Date();
-    var from, to;
-    if (hFilter === "all") {
-      from = "2000-01-01T00:00:00.000Z";
-      to = new Date(now.getTime() + 86400000).toISOString();
-    } else if (hFilter === "today") {
-      var d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      from = d.toISOString();
-      to = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59).toISOString();
-    } else if (hFilter === "week") {
-      var w = new Date(now); w.setDate(w.getDate() - 7);
-      from = w.toISOString(); to = now.toISOString();
-    } else if (hFilter === "month") {
-      from = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-      to = now.toISOString();
-    } else if (hFilter === "custom" && hFrom && hTo) {
-      from = new Date(hFrom).toISOString();
-      to = new Date(hTo + "T23:59:59").toISOString();
-    } else { return; }
-    setHistLoading(true);
-    fbQueryBillsByDate(from, to, function(results) {
-      setFilteredBills(results);
-      setHistLoading(false);
-    });
-  }, [hFilter, hFrom, hTo, bills.length]); // bills.length re-fetches on add/delete without resetting on every render
+  var now = new Date();
+  var filteredBills = bills.filter(function(b) {
+    if (hFilter === "all") return true;
+    var d = new Date(b.date);
+    if (hFilter === "today") return d.toDateString() === now.toDateString();
+    if (hFilter === "week") { var w = new Date(now); w.setDate(w.getDate() - 7); return d >= w; }
+    if (hFilter === "month") return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+    if (hFilter === "custom" && hFrom && hTo) return d >= new Date(hFrom) && d <= new Date(hTo + "T23:59:59");
+    return true;
+  });
 
   const editAddItem = function(med) {
     if (!editBill) return;
@@ -3248,7 +3122,7 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
       }, 0);
       var ret = { id: mkId(), billNo: retBill.billNo, patient: retBill.patient, date: new Date().toISOString(), items: returnItems, refundAmount: Math.round(refundAmt * 100) / 100 };
       // Save to Firebase
-      dbWrite(getOutletPath("billReturns/" + ret.id), ret);
+      db.ref(getOutletPath("billReturns/" + ret.id)).set(ret);
 
       // Add stock back to inventory
       var updInv = inv.map(function(m) {
@@ -3272,7 +3146,7 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
   };
 
   return (
-    <div><h2 style={hds}>Bills ({histLoading ? "…" : filteredBills.length}{hFilter !== "all" ? "/" + bills.length : ""})</h2>
+    <div><h2 style={hds}>Bills ({filteredBills.length}{hFilter !== "all" ? "/" + bills.length : ""})</h2>
       <div style={{ display: "flex", gap: 3, background: "#E8E4DD", borderRadius: 7, padding: 3, marginBottom: 12, flexWrap: "wrap" }}>
         {[["all","All"],["today","Today"],["week","Week"],["month","Month"],["custom","Custom"]].map(function(x) { return <button key={x[0]} onClick={function(){setHFilter(x[0]);}} style={{ padding: "6px 12px", border: "none", borderRadius: 5, fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: hFilter === x[0] ? "#fff" : "transparent", color: hFilter === x[0] ? "#0D6B5B" : "#888" }}>{x[1]}</button>; })}
       </div>
@@ -3280,7 +3154,6 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
         <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>From</label><input type="date" value={hFrom} onChange={function(e){setHFrom(e.target.value);}} style={inps} /></div>
         <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>To</label><input type="date" value={hTo} onChange={function(e){setHTo(e.target.value);}} style={inps} /></div>
       </div>}
-      {histLoading && <div style={{ textAlign: "center", padding: "10px", fontSize: 13, color: "#0D6B5B", fontWeight: 600 }}>⏳ Loading bills…</div>}
 
       {retBill && (
         <div style={{ ...cds, border: "2px solid #DC2626", marginBottom: 16 }}>
@@ -3595,7 +3468,7 @@ function UsersPage({ sessions, mob, user }) {
   const deleteUser = async (u) => {
     if (!window.confirm("Delete " + u.name + " (" + u.email + ")? They will not be able to login.")) return;
     const key = u.email.replace(/\./g, "_").replace(/@/g, "__");
-    await dbWrite("userProfiles/" + key, null);
+    await db.ref("userProfiles/" + key).remove();
     await loadUsers();
   };
 
@@ -3929,7 +3802,7 @@ function BackupPage({ inv, bills, purch, saveAll, askConfirm, saveInv, saveBills
                 db.ref(p).once("value").then(function(snap) {
                   var val = snap.val();
                   if (val) {
-                    dbWrite("outlets/" + outletId + "/" + p, val).then(function() {
+                    db.ref("outlets/" + outletId + "/" + p).set(val).then(function() {
                       done++;
                       if (done === paths.length) {
                         alert("Migration complete! " + done + " data paths copied to outlets/" + outletId + "/. Reload the page.");
@@ -4286,43 +4159,16 @@ function ProfitPage({ bills, inv, mob, purch, saveBills, showBill, setPage }) {
   const [profitSearch, setProfitSearch] = useState("");
   const [fromD, setFromD] = useState("");
   const [toD, setToD] = useState("");
-  const [queryBills, setQueryBills] = useState(bills);
-  const [profitLoading, setProfitLoading] = useState(false);
   const now = new Date();
 
-  // Re-query Firebase on filter change. ALL filters go through Firebase directly
-  // so results are never limited by the (possibly truncated) bills prop.
-  useEffect(function() {
-    var now2 = new Date();
-    var from, to;
-    if (view === "bill") {
-      from = "2000-01-01T00:00:00.000Z";
-      to = new Date(now2.getTime() + 86400000).toISOString();
-    } else if (view === "today") {
-      var d = new Date(now2.getFullYear(), now2.getMonth(), now2.getDate());
-      from = d.toISOString();
-      to = new Date(now2.getFullYear(), now2.getMonth(), now2.getDate(), 23, 59, 59).toISOString();
-    } else if (view === "week") {
-      var w = new Date(now2); w.setDate(w.getDate() - 7);
-      from = w.toISOString(); to = now2.toISOString();
-    } else if (view === "month") {
-      from = new Date(now2.getFullYear(), now2.getMonth(), 1).toISOString();
-      to = now2.toISOString();
-    } else if (view === "year") {
-      from = new Date(now2.getFullYear(), 0, 1).toISOString();
-      to = now2.toISOString();
-    } else if (view === "custom" && fromD && toD) {
-      from = new Date(fromD).toISOString();
-      to = new Date(toD + "T23:59:59").toISOString();
-    } else { return; }
-    setProfitLoading(true);
-    fbQueryBillsByDate(from, to, function(results) {
-      setQueryBills(results);
-      setProfitLoading(false);
-    });
-  }, [view, fromD, toD, bills.length]); // bills.length re-fetches on add/delete without resetting on every render
-
-  const filterBills = (blist) => blist; // filtering now done via Firebase query above
+  const filterBills = (blist) => {
+    if (view === "today") return blist.filter((b) => new Date(b.date).toDateString() === now.toDateString());
+    if (view === "week") { const w = new Date(now); w.setDate(w.getDate() - 7); return blist.filter((b) => new Date(b.date) >= w); }
+    if (view === "month") return blist.filter((b) => { const d = new Date(b.date); return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear(); });
+    if (view === "year") return blist.filter((b) => new Date(b.date).getFullYear() === now.getFullYear());
+    if (view === "custom" && fromD && toD) return blist.filter((b) => { const d = new Date(b.date); return d >= new Date(fromD) && d <= new Date(toD + "T23:59:59"); });
+    return blist;
+  };
 
   const calcItemProfit = (it) => {
     const salePrice = (it.unitPrice || it.mrp) * it.qty;
@@ -4358,7 +4204,7 @@ function ProfitPage({ bills, inv, mob, purch, saveBills, showBill, setPage }) {
     return { netSale, totalCost, totalDisc, profit: netSale - totalCost, margin: netSale > 0 ? ((netSale - totalCost) / netSale * 100) : 0 };
   };
 
-  const fl = filterBills(queryBills).filter(function(b) {
+  const fl = filterBills(bills).filter(function(b) {
     if (!profitSearch) return true;
     var q = profitSearch.toLowerCase();
     return b.billNo.toLowerCase().indexOf(q) >= 0 || (b.patient || "").toLowerCase().indexOf(q) >= 0 || b.items.some(function(it) { return (it.name || "").toLowerCase().indexOf(q) >= 0; });
@@ -4461,7 +4307,6 @@ function ProfitPage({ bills, inv, mob, purch, saveBills, showBill, setPage }) {
         <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>From</label><input type="date" value={fromD} onChange={(e) => setFromD(e.target.value)} style={inps} /></div>
         <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>To</label><input type="date" value={toD} onChange={(e) => setToD(e.target.value)} style={inps} /></div></div>}
       <input value={profitSearch} onChange={function(e) { setProfitSearch(e.target.value); }} placeholder="Search bill no, patient, or medicine name..." style={{ ...inps, marginBottom: 14 }} />
-      {profitLoading && <div style={{ textAlign: "center", padding: "10px", fontSize: 13, color: "#0D6B5B", fontWeight: 600 }}>⏳ Loading bills…</div>}
 
       <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(5,1fr)", gap: 12, marginBottom: 16 }}>
         <Stat icon="🧾" label="Bills" value={fl.length} color="#2563EB" />
@@ -5238,7 +5083,7 @@ function AuditPage({ inv, mob }) {
     };
 
     // Save to Firebase
-    dbWrite(getOutletPath("audits/" + report.id), report);
+    db.ref(getOutletPath("audits/" + report.id)).set(report);
     setAuditReport(report);
     setAuditStarted(false);
   };
@@ -5449,7 +5294,7 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm, bills, s
         if (idx >= 0) nextInv[idx] = Object.assign({}, nextInv[idx], { stock: (Number(nextInv[idx].stock) || 0) + qty });
       });
       saveInv(nextInv);
-      dbWrite(getOutletPath("returns/" + r.id), null);
+      db.ref(getOutletPath("returns/" + r.id)).remove();
       alert("Purchase return cancelled.");
     });
   };
@@ -5464,7 +5309,7 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm, bills, s
         if (idx >= 0) nextInv[idx] = Object.assign({}, nextInv[idx], { stock: Math.max(0, (Number(nextInv[idx].stock) || 0) - qty) });
       });
       saveInv(nextInv);
-      dbWrite(getOutletPath("billReturns/" + r.id), null);
+      db.ref(getOutletPath("billReturns/" + r.id)).remove();
       alert("Bill return cancelled.");
     });
   };
@@ -6806,13 +6651,13 @@ function CustomersPage({ bills, mob, showBill }) {
   var addCustomer = function() {
     if (!newCust.name.trim()) { alert("Name required"); return; }
     var c = { id: mkId(), name: newCust.name.trim(), contact: newCust.contact.trim(), address: newCust.address.trim(), source: "manual", addedDate: new Date().toISOString() };
-    dbWrite(getOutletPath("customers/" + c.id), c);
+    db.ref(getOutletPath("customers/" + c.id)).set(c);
     setNewCust({ name: "", contact: "", address: "" });
     setAddMode(false);
   };
 
   var deleteCustomer = function(id) {
-    dbWrite(getOutletPath("customers/" + id), null);
+    db.ref(getOutletPath("customers/" + id)).remove();
   };
 
   // Get bills for a customer
@@ -7354,7 +7199,7 @@ function SupplierLedgerPage({ purch, mob }) {
     if (!addPay || !payAmt) return;
     var key = addPay.key;
     var pay = { id: mkId(), amount: parseFloat(payAmt) || 0, date: payDate, note: payNote, addedAt: new Date().toISOString() };
-    dbWrite(getOutletPath("ledger/" + key + "/" + pay.id), pay);
+    db.ref(getOutletPath("ledger/" + key + "/" + pay.id)).set(pay);
     setAddPay(null); setPayAmt(""); setPayNote("");
   };
 
@@ -7364,7 +7209,7 @@ function SupplierLedgerPage({ purch, mob }) {
     var inv = billSettle.invoice;
     var note = billSettleNote || ("Invoice: " + (inv.invoiceNo || inv.id));
     var pay = { id: mkId(), amount: parseFloat(billSettleAmt) || 0, date: billSettleDate, note: note, billRef: inv.invoiceNo || inv.id, addedAt: new Date().toISOString() };
-    dbWrite(getOutletPath("ledger/" + key + "/" + pay.id), pay);
+    db.ref(getOutletPath("ledger/" + key + "/" + pay.id)).set(pay);
     setBillSettle(null); setBillSettleAmt(""); setBillSettleNote("");
   };
 
@@ -7564,10 +7409,6 @@ function AuditTrailPage({ mob }) {
   var [logs, setLogs] = useState([]);
   var [filter, setFilter] = useState("all");
   var [loading, setLoading] = useState(true);
-  var [openId, setOpenId] = useState(null);
-  var [page, setPage] = useState(1);
-  var [pageSize, setPageSize] = useState(50);
-  var [search, setSearch] = useState("");
 
   useEffect(function() {
     var unsub = fbListen("auditTrail", function(data) {
@@ -7579,148 +7420,54 @@ function AuditTrailPage({ mob }) {
     return unsub;
   }, []);
 
-  var byType = filter === "all" ? logs : logs.filter(function(l) { return (l.action || "").indexOf(filter) >= 0; });
-  var q = search.trim().toLowerCase();
-  var filtered = !q ? byType : byType.filter(function(l) {
-    return ((l.details || "") + " " + (l.path || "") + " " + (l.user || "") + " " + (l.action || "")).toLowerCase().indexOf(q) >= 0;
-  });
-  var total = filtered.length;
-  var totalPages = Math.max(1, Math.ceil(total / pageSize));
-  var curPage = Math.min(Math.max(1, page), totalPages);
-  var startIdx = (curPage - 1) * pageSize;
-  var pageRows = filtered.slice(startIdx, startIdx + pageSize);
+  var filtered = filter === "all" ? logs : logs.filter(function(l) { return l.action.indexOf(filter) >= 0; });
 
   var actionColors = {
-    INV_ADD: { bg: "#D1FAE5", fg: "#065F46", label: "Inv Add" },
-    INV_EDIT: { bg: "#DBEAFE", fg: "#1E40AF", label: "Inv Edit" },
-    INV_DELETE: { bg: "#FEE2E2", fg: "#991B1B", label: "Inv Del" },
+    INV_ADD: { bg: "#D1FAE5", fg: "#065F46", label: "Added" },
+    INV_EDIT: { bg: "#DBEAFE", fg: "#1E40AF", label: "Edited" },
+    INV_DELETE: { bg: "#FEE2E2", fg: "#991B1B", label: "Deleted" },
     STOCK_MERGE: { bg: "#FEF3C7", fg: "#92400E", label: "Merged" },
-    BILL_ADD: { bg: "#D1FAE5", fg: "#065F46", label: "Bill Add" },
     BILL_EDIT: { bg: "#EDE9FE", fg: "#5B21B6", label: "Bill Edit" },
     BILL_DELETE: { bg: "#FEE2E2", fg: "#991B1B", label: "Bill Del" },
-    BILL_RETURN_ADD: { bg: "#FCE7F3", fg: "#9D174D", label: "Return" },
-    BILL_RETURN_DELETE: { bg: "#FEE2E2", fg: "#991B1B", label: "Return Del" },
+    BILL_RETURN: { bg: "#FCE7F3", fg: "#9D174D", label: "Return" },
     PURCH_ADD: { bg: "#D1FAE5", fg: "#065F46", label: "Purchase" },
-    PURCH_EDIT: { bg: "#DBEAFE", fg: "#1E40AF", label: "Purch Edit" },
     PURCH_DELETE: { bg: "#FEE2E2", fg: "#991B1B", label: "Purch Del" },
-    CUST_ADD: { bg: "#D1FAE5", fg: "#065F46", label: "Cust Add" },
-    CUST_EDIT: { bg: "#DBEAFE", fg: "#1E40AF", label: "Cust Edit" },
-    CUST_DELETE: { bg: "#FEE2E2", fg: "#991B1B", label: "Cust Del" },
-    CUST_PAYMENT_EDIT: { bg: "#FEF3C7", fg: "#92400E", label: "Payment" },
-    LEDGER_ADD: { bg: "#FEF3C7", fg: "#92400E", label: "Ledger" },
-    LEDGER_EDIT: { bg: "#FEF3C7", fg: "#92400E", label: "Ledger" },
-    DIST_RETURN_ADD: { bg: "#FCE7F3", fg: "#9D174D", label: "Dist Return" },
-    RETURN_DELETE: { bg: "#FEE2E2", fg: "#991B1B", label: "Return Del" },
-    REPORT_ADD: { bg: "#E0E7FF", fg: "#3730A3", label: "Report" }
   };
-  function colorFor(action) {
-    if (actionColors[action]) return actionColors[action];
-    var fg = "#374151", bg = "#F3F4F6";
-    if (/_DELETE$/.test(action)) { bg = "#FEE2E2"; fg = "#991B1B"; }
-    else if (/_ADD$/.test(action)) { bg = "#D1FAE5"; fg = "#065F46"; }
-    else if (/_EDIT$/.test(action)) { bg = "#DBEAFE"; fg = "#1E40AF"; }
-    return { bg: bg, fg: fg, label: action || "Write" };
-  }
-  function fmtVal(v) {
-    if (v === null || v === undefined) return "∅";
-    if (typeof v === "object") { try { return JSON.stringify(v); } catch (e) { return "{…}"; } }
-    return String(v);
-  }
-  function pgBtn(disabled) {
-    return { padding: "5px 10px", borderRadius: 6, border: "1px solid #ddd", background: disabled ? "#f3f3f3" : "#fff", color: disabled ? "#bbb" : "#0D6B5B", cursor: disabled ? "default" : "pointer", fontSize: 12, fontWeight: 600 };
-  }
-  function renderDetail(l) {
-    var changes = l.changes || [];
-    if (!changes.length) return <div style={{ fontSize: 12, color: "#888" }}>Legacy entry (no structured detail): {l.details}</div>;
-    return <div style={{ display: "grid", gap: 10 }}>
-      {changes.map(function(c, ci) {
-        var head = (c.kind === "added" ? "➕ Added " : c.kind === "removed" ? "🗑 Removed " : "✏️ Modified ") + (c.recordId || "");
-        return <div key={ci} style={{ border: "1px solid #eee", borderRadius: 8, padding: 10, background: "#FAFAF7" }}>
-          <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 6, color: "#374151" }}>{head}</div>
-          {c.kind === "modified" && (c.diff || []).length > 0 ?
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
-              <thead><tr>
-                <th style={{ textAlign: "left", padding: "3px 8px", color: "#888", borderBottom: "1px solid #eee" }}>Field</th>
-                <th style={{ textAlign: "left", padding: "3px 8px", color: "#888", borderBottom: "1px solid #eee" }}>Before</th>
-                <th style={{ textAlign: "left", padding: "3px 8px", color: "#888", borderBottom: "1px solid #eee" }}>After</th>
-              </tr></thead>
-              <tbody>{(c.diff || []).map(function(d, di) {
-                return <tr key={di}>
-                  <td style={{ padding: "3px 8px", fontWeight: 600 }}>{d.field}</td>
-                  <td style={{ padding: "3px 8px", color: "#B91C1C", wordBreak: "break-word" }}>{fmtVal(d.from)}</td>
-                  <td style={{ padding: "3px 8px", color: "#065F46", wordBreak: "break-word" }}>{fmtVal(d.to)}</td>
-                </tr>;
-              })}</tbody>
-            </table>
-          : <pre style={{ margin: 0, fontSize: 11, whiteSpace: "pre-wrap", wordBreak: "break-word", color: "#444" }}>{fmtVal(c.kind === "removed" ? c.before : c.after)}</pre>}
-        </div>;
-      })}
-    </div>;
-  }
 
   return (
     <div>
       <h2 style={hds}>Change Log (Audit Trail)</h2>
-      <p style={{ fontSize: 12, color: "#888", marginBottom: 14 }}>Every database write — sales, stock changes, edits, deletions, returns, payments — is logged here automatically with full before→after detail. Click any row to expand.</p>
+      <p style={{ fontSize: 12, color: "#888", marginBottom: 14 }}>Every inventory change, bill edit, and deletion is logged here with timestamp and user.</p>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
-        {[["all","All"],["INV","Inventory"],["BILL_","Bills"],["BILL_RETURN","Returns"],["PURCH","Purchases"],["CUST","Customers"],["LEDGER","Ledger"],["DIST_RETURN","Dist Returns"]].map(function(f) {
-          return <button key={f[0]} onClick={function() { setFilter(f[0]); setPage(1); }} style={{ padding: "6px 14px", borderRadius: 8, border: filter === f[0] ? "2px solid #0D6B5B" : "1px solid #ddd", background: filter === f[0] ? "#D1FAE5" : "#fff", cursor: "pointer", fontSize: 12, fontWeight: filter === f[0] ? 700 : 400 }}>{f[1]}</button>;
+        {[["all","All"],["INV","Inventory"],["BILL","Bills"],["PURCH","Purchases"],["STOCK","Stock Merge"]].map(function(f) {
+          return <button key={f[0]} onClick={function() { setFilter(f[0]); }} style={{ padding: "6px 14px", borderRadius: 8, border: filter === f[0] ? "2px solid #0D6B5B" : "1px solid #ddd", background: filter === f[0] ? "#D1FAE5" : "#fff", cursor: "pointer", fontSize: 12, fontWeight: filter === f[0] ? 700 : 400 }}>{f[1]}</button>;
         })}
-      </div>
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
-        <input value={search} onChange={function(e) { setSearch(e.target.value); setPage(1); }} placeholder="Search details, medicine, bill no, user…" style={{ flex: "1 1 240px", minWidth: 180, padding: "8px 12px", borderRadius: 8, border: "1px solid #ddd", fontSize: 13 }} />
-        <label style={{ fontSize: 12, color: "#888" }}>Per page:&nbsp;
-          <select value={pageSize} onChange={function(e) { setPageSize(parseInt(e.target.value, 10)); setPage(1); }} style={{ padding: "6px 8px", borderRadius: 6, border: "1px solid #ddd", fontSize: 12 }}>
-            <option value={25}>25</option>
-            <option value={50}>50</option>
-            <option value={100}>100</option>
-            <option value={200}>200</option>
-            <option value={500}>500</option>
-          </select>
-        </label>
       </div>
       {loading ? <div style={{ padding: 20, textAlign: "center", color: "#888" }}>Loading audit trail...</div> :
        filtered.length === 0 ? <div style={{ padding: 20, textAlign: "center", color: "#888" }}>No audit entries yet. Changes will appear here automatically.</div> :
        <div style={{ ...cds, padding: 0, overflow: "hidden" }}><div style={{ overflowX: "auto" }}>
          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 400 }}>
-           <thead><tr><th style={ths}></th><th style={ths}>When</th><th style={ths}>Type</th><th style={ths}>Details</th><th style={ths}>User</th></tr></thead>
+           <thead><tr><th style={ths}>When</th><th style={ths}>Type</th><th style={ths}>Details</th><th style={ths}>User</th></tr></thead>
            <tbody>
-             {pageRows.map(function(l) {
-               var ac = colorFor(l.action);
-               var isOpen = openId === l.id;
-               var hasDetail = l.changes && l.changes.length;
-               return <React.Fragment key={l.id}>
-                 <tr onClick={function() { setOpenId(isOpen ? null : l.id); }} style={{ cursor: "pointer", background: isOpen ? "#F5F3FF" : "transparent" }}>
-                   <td style={{ ...tds, width: 22, color: "#999", fontSize: 11 }}>{hasDetail ? (isOpen ? "▾" : "▸") : ""}</td>
-                   <td style={{ ...tds, whiteSpace: "nowrap", fontSize: 11 }}>{l.tsDisplay || fDT(l.ts)}</td>
-                   <td style={tds}><span style={{ background: ac.bg, color: ac.fg, padding: "2px 10px", borderRadius: 14, fontSize: 10.5, fontWeight: 600, whiteSpace: "nowrap" }}>{ac.label}</span></td>
-                   <td style={{ ...tds, fontSize: 12, maxWidth: 460 }}>{l.details}</td>
-                   <td style={{ ...tds, fontSize: 11, color: "#888" }}>{l.user}</td>
-                 </tr>
-                 {isOpen && <tr><td colSpan={5} style={{ padding: "10px 16px", background: "#fff", borderBottom: "1px solid #eee" }}>{renderDetail(l)}</td></tr>}
-               </React.Fragment>;
+             {filtered.slice(0, 200).map(function(l) {
+               var ac = actionColors[l.action] || { bg: "#F3F4F6", fg: "#374151", label: l.action };
+               return <tr key={l.id}>
+                 <td style={{ ...tds, whiteSpace: "nowrap", fontSize: 11 }}>{l.tsDisplay || fDT(l.ts)}</td>
+                 <td style={tds}><span style={{ background: ac.bg, color: ac.fg, padding: "2px 10px", borderRadius: 14, fontSize: 10.5, fontWeight: 600, whiteSpace: "nowrap" }}>{ac.label}</span></td>
+                 <td style={{ ...tds, fontSize: 12, maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis" }}>{l.details}</td>
+                 <td style={{ ...tds, fontSize: 11, color: "#888" }}>{l.user}</td>
+               </tr>;
              })}
            </tbody>
          </table>
        </div></div>}
-       {total > 0 && <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, padding: "10px 4px", color: "#555", fontSize: 12 }}>
-         <span>Showing {startIdx + 1}–{Math.min(startIdx + pageSize, total)} of {total} entr{total === 1 ? "y" : "ies"}{(filter !== "all" || q) ? " (filtered)" : ""}</span>
-         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-           <button onClick={function() { setPage(1); }} disabled={curPage <= 1} style={pgBtn(curPage <= 1)}>« First</button>
-           <button onClick={function() { setPage(curPage - 1); }} disabled={curPage <= 1} style={pgBtn(curPage <= 1)}>‹ Prev</button>
-           <span style={{ padding: "0 8px", fontWeight: 600 }}>Page {curPage} / {totalPages}</span>
-           <button onClick={function() { setPage(curPage + 1); }} disabled={curPage >= totalPages} style={pgBtn(curPage >= totalPages)}>Next ›</button>
-           <button onClick={function() { setPage(totalPages); }} disabled={curPage >= totalPages} style={pgBtn(curPage >= totalPages)}>Last »</button>
-         </div>
-       </div>}
+       {filtered.length > 200 && <div style={{ color: "#888", fontSize: 12, padding: 8 }}>Showing 200 of {filtered.length} entries</div>}
        {logs.length > 0 && <div style={{ marginTop: 16, textAlign: "right" }}>
          <button onClick={function() {
-           var csv = "Timestamp,Action,Path,Op,Details,User,Changes(JSON)\n";
-           logs.forEach(function(l) {
-             csv += "\"" + (l.tsDisplay || l.ts) + "\",\"" + (l.action || "") + "\",\"" + (l.path || "") + "\",\"" + (l.op || "") + "\",\"" + (l.details || "").replace(/"/g, "'") + "\",\"" + (l.user || "") + "\",\"" + JSON.stringify(l.changes || []).replace(/"/g, "'") + "\"\n";
-           });
+           var csv = "Timestamp,Action,Details,User\n";
+           logs.forEach(function(l) { csv += "\"" + (l.tsDisplay || l.ts) + "\",\"" + l.action + "\",\"" + (l.details || "").replace(/"/g,"'") + "\",\"" + l.user + "\"\n"; });
            var blob = new Blob([csv], { type: "text/csv" }); var url = URL.createObjectURL(blob);
-           var a = document.createElement("a"); a.href = url; a.download = "AtoZ_AuditTrail_" + new Date().toISOString().slice(0, 10) + ".csv"; a.click(); URL.revokeObjectURL(url);
+           var a = document.createElement("a"); a.href = url; a.download = "AtoZ_AuditTrail_" + new Date().toISOString().slice(0,10) + ".csv"; a.click(); URL.revokeObjectURL(url);
          }} style={{ padding: "8px 20px", background: "#0D6B5B", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 600, fontSize: 12 }}>📥 Export Audit Log CSV</button>
        </div>}
     </div>
@@ -7763,7 +7510,7 @@ function NearExpiryReturnPage({ inv, purch, mob }) {
       returnedDate: new Date().toISOString(),
       returnedDateDisplay: new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric" })
     };
-    dbWrite(getOutletPath("distReturns/" + entry.id), entry);
+    db.ref(getOutletPath("distReturns/" + entry.id)).set(entry);
     logAudit("DIST_RETURN", "Returned to " + entry.distributor + ": " + entry.name + " Batch:" + entry.batch + " Qty:" + fStock(entry.stock, m.packQty));
   };
 
@@ -7855,7 +7602,7 @@ function CreditSalesPage({ bills, mob, showBill }) {
     var existing = custPayments[key] ? (Array.isArray(custPayments[key]) ? custPayments[key] : Object.values(custPayments[key])) : [];
     existing.push(entry);
     var obj = {}; existing.forEach(function(p, i) { obj[p.id || ("p" + i)] = p; });
-    dbWrite(getOutletPath("custPayments/" + key), obj);
+    db.ref(getOutletPath("custPayments/" + key)).set(obj);
     logAudit("CUST_PAYMENT", "Payment Rs." + payAmt + " from " + addPay.name + " (" + addPay.contact + ")");
     setAddPay(null); setPayAmt(""); setPayNote("");
   };
@@ -7940,38 +7687,24 @@ function App() {
     // Set PH from stored outlet
     PH = OUTLETS[getCurrentOutlet()] || OUTLETS.outlet2;
 
-    // Real Firebase Auth: a session is valid ONLY if Firebase still has a
-    // signed-in user. The localStorage entry just carries role/profile detail;
-    // it cannot by itself grant access (the DB rules require auth anyway).
-    if (!auth) { setLoading(false); return; }
-
-    const unsub = auth.onAuthStateChanged((fbUser) => {
-      if (fbUser) {
-        const saved = localStorage.getItem("atoz_session");
-        if (saved) {
-          try {
-            const u = JSON.parse(saved);
-            // localStorage uid must match the live Firebase uid
-            if (u && u.id === fbUser.uid && u.loginTs &&
-                (Date.now() - u.loginTs) < 24 * 60 * 60 * 1000) {
-              setUser(u);
-            } else {
-              localStorage.removeItem("atoz_session");
-              auth.signOut();
-            }
-          } catch(e) {
-            localStorage.removeItem("atoz_session");
-            auth.signOut();
-          }
+    // OTP-based auth: no Firebase Auth session, user stored in component state.
+    // On page reload, user must log in again (security by design for pharmacy).
+    // Check if we have a recent session in localStorage (persists across tabs/restarts).
+    const saved = localStorage.getItem("atoz_session");
+    if (saved) {
+      try {
+        const u = JSON.parse(saved);
+        if (u && u.email && u.loginTs && (Date.now() - u.loginTs) < 24 * 60 * 60 * 1000) {
+          // Session still valid (8 hours)
+          setUser(u);
+        } else {
+          localStorage.removeItem("atoz_session");
         }
-        // If no localStorage detail, user must log in again (rare edge case).
-      } else {
-        // No Firebase session -> not logged in.
-        localStorage.removeItem("atoz_session");
-        setUser(null);
-      }
-      setLoading(false);
-    });
+      } catch(e) { localStorage.removeItem("atoz_session"); }
+    }
+    setLoading(false);
+    // No Firebase Auth listener needed — OTP auth is stateless
+    const unsub = () => {};
     return unsub;
   }, []);
 
@@ -8043,7 +7776,6 @@ function App() {
   const logout = () => {
     localStorage.removeItem("atoz_session");
     fbSet("sessions/" + (user ? user.id : ""), null);
-    if (auth) auth.signOut();
     setUser(null);
     setPage("dash");
   };
