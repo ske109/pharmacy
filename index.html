@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>A to Z Pharmacy v2.2.0</title>
+<title>A to Z Pharmacy v2.1.0</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💊</text></svg>">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
 
@@ -50,12 +50,9 @@ input,select,button,textarea{font-family:inherit;-webkit-appearance:none}
 }
 </style>
 
-<meta name="app-version" content="2.3.0">
-<meta name="app-changes" content="["Removed Claude API dependency for image/PDF bill reading [security/privacy]", "Added local Tesseract.js OCR with canvas preprocessing for purchase bill images", "Enhanced parsing with fallback line-by-line item extraction", "Cleaner worker without hardcoded API keys or Claude proxy route", "Improved error handling and user feedback for OCR quality", "v2.2.0: Advanced multi-pass image processing with deskew, adaptive thresholding, Sauvola binarization, OTSU thresholding, unsharp mask sharpening, multi-PSM Tesseract passes, and 3-strategy invoice parser (Vardhman columnar, flexible numeric-anchor, token-based)"]">
-<script>window.APP_VERSION = {"version": "2.3.0", "changes": ["Replaced EmailJS with Cloudflare Worker + Resend for reliable OTP delivery (no Gmail scope issues)", "Added /send-otp-email route to Cloudflare Worker", "3000 free emails/month via Resend vs 200 via EmailJS", "Proper error handling — shows actual failure reason instead of silent swallow", "OTP always logged to console as fallback"], "date": "2026-05-10", "type": "production"};</script>
-
-<!-- OTP emails sent via Cloudflare Worker + Brevo (300 free/day, ANY recipient, no domain needed) -->
-<!-- Setup: 1) Sign up at brevo.com  2) Get API key  3) Add as BREVO_API_KEY secret in your Cloudflare Worker -->
+<meta name="app-version" content="2.0.0">
+<meta name="app-changes" content="["Removed Claude API dependency for image/PDF bill reading [security/privacy]", "Added local Tesseract.js OCR with canvas preprocessing for purchase bill images", "Enhanced parsing with fallback line-by-line item extraction", "Cleaner worker without hardcoded API keys or Claude proxy route", "Improved error handling and user feedback for OCR quality", "v2.1.0: Advanced multi-pass image processing with deskew, adaptive thresholding, Sauvola binarization, OTSU thresholding, unsharp mask sharpening, multi-PSM Tesseract passes, and 3-strategy invoice parser (Vardhman columnar, flexible numeric-anchor, token-based)"]">
+<script>window.APP_VERSION = {"version": "2.1.0", "changes": ["Removed Claude API dependency for image/PDF bill reading [security/privacy]", "Added local Tesseract.js OCR with canvas preprocessing for purchase bill images", "Enhanced parsing with fallback line-by-line item extraction", "Cleaner worker without hardcoded API keys or Claude proxy route", "Improved error handling and user feedback for OCR quality", "v2.1.0: Advanced multi-pass image processing with deskew, adaptive thresholding, Sauvola binarization, OTSU thresholding, unsharp mask sharpening, multi-PSM Tesseract passes, and 3-strategy invoice parser (Vardhman columnar, flexible numeric-anchor, token-based)"], "date": "2026-05-08", "type": "production"};</script>
 </head>
 <body>
 <div id="root"></div>
@@ -92,124 +89,16 @@ const PROXY_READY = PROXY_URL.indexOf("YOUR-WORKER") === -1;
 // ══════════════════════════════════════════════
 // PHARMACY INFO
 // ══════════════════════════════════════════════
-// ── OUTLET CONFIGURATION ──────────────────────────────────────────────────────
-const OUTLETS = {
-  outlet1: {
-    id: "outlet1",
-    name: "A to Z Pharmacy - ORR, Mahadevpura",
-    shortName: "Doddanekundi",
-    addr: "SHOP NO 1, GROUND FLOOR DODDANEKKUNDI, NEAR HP PETROL BUNK OUTER RING ROAD BANGALORE 560037",
-    mob: "9663995818",
-    dl: "KA-B61-262772, KA-B61-262773",
-    gstin: "29ACFFA9109D1ZH",
-    upi: "atozpharmacyupi"
-  },
-  outlet2: {
-    id: "outlet2",
-    name: "A to Z Pharma - Vibez Gully, Whitefield",
-    shortName: "Whitefield",
-    addr: "SY NO 11/14 SHOP NO 9, GR. FL. Vibez Gully, Kondasapura Whitefield main road, Bidarahalli hobli, BANGALORE 560067",
-    mob: "7619639377",
-    dl: "KA-B61-269146, KA-B61-269147",
-    gstin: "29ACFFA9109D1ZH",
-    upi: "atozpharmacyupi"
-  }
+const PH = {
+  name: "A to Z Pharma",
+  addr: "SY NO 11/14 SHOP NO 9 ,GR. FL. Vibez Gully, Kondasapura Whitefield main road, Bidarahalli hobli, BANGALORE 560067",
+  mob: "7619639377",
+  dl: "KA-B61-269146, KA-B61-269147",
+  gstin: "29ACFFA9109D1ZH",
+  upi: "atozpharmacyupi"
 };
-var PH = OUTLETS.outlet2; // default, overridden by outlet selection
-
-// ── OWNER EMAILS (hardcoded, always full access) ──────────────────────────
-const OWNER_EMAILS = ["krishkwish@gmail.com", "saloniakumar1096@gmail.com"];
-
-// ── ALL NAV PAGES with labels (used for permission checkboxes) ─────────────
-const ALL_PAGES = [
-  { id: "dash",      label: "Dashboard",       icon: "📊" },
-  { id: "purch",     label: "Purchases",       icon: "📦" },
-  { id: "returns",   label: "Returns",         icon: "↩️" },
-  { id: "inv",       label: "Inventory",       icon: "💊" },
-  { id: "rack",      label: "Racks",           icon: "🗄" },
-  { id: "audit",     label: "Audit",           icon: "📝" },
-  { id: "bill",      label: "New Bill",        icon: "🧾" },
-  { id: "profit",    label: "Profit Margin",   icon: "💹" },
-  { id: "stock",     label: "Stock",           icon: "📋" },
-  { id: "expiry",    label: "Expiry",          icon: "⏰" },
-  { id: "hist",      label: "Bills History",   icon: "🗂" },
-  { id: "reports",   label: "Reports",         icon: "📑" },
-  { id: "gst",       label: "GST Reports",     icon: "🧾" },
-  { id: "customers", label: "Customers",       icon: "👤" },
-  { id: "ledger",    label: "Supplier Ledger", icon: "📒" },
-  { id: "predict",   label: "Stock Predict",   icon: "🤖" },
-  { id: "compare",   label: "Price Compare",   icon: "⚖️" },
-  { id: "users",     label: "Users & Roles",   icon: "👥" },
-  { id: "backup",    label: "Backup",          icon: "💾" },
-];
-
-// ── OTP helpers (6-digit, stored in Firebase with 10min expiry) ───────────
-function genOTP() { return String(Math.floor(100000 + Math.random() * 900000)); }
-async function sendOTPEmail(toEmail, otp, recipientName) {
-  try {
-    var resp = await fetch(PROXY_URL + "/send-otp-email", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ to_email: toEmail, to_name: recipientName || toEmail, otp_code: otp })
-    });
-    var data = await resp.json();
-    if (!resp.ok || !data.ok) {
-      throw new Error(data.error || "HTTP " + resp.status);
-    }
-  } catch(e) {
-    throw new Error("Email failed: " + e.message);
-  }
-}
-
-// Fallback: send OTP to admin email when primary delivery fails
-async function sendOTPFallback(toEmail, otp) {
-  try {
-    var resp = await fetch(PROXY_URL + "/send-otp-email", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ to_email: "krishkwish@gmail.com", to_name: "Admin", otp_code: otp, for_email: toEmail })
-    });
-    var data = await resp.json();
-    return data && data.ok;
-  } catch(e) { return false; }
-}
-// Firebase paths for OTP store
-async function saveOTP(email, otp) {
-  const key = email.replace(/\./g, "_").replace(/@/g, "__");
-  await fbSetPath("otps/" + key, { otp, ts: Date.now(), email });
-}
-async function verifyOTP(email, enteredOtp) {
-  const key = email.replace(/\./g, "_").replace(/@/g, "__");
-  const snap = await new Promise(res => db.ref("otps/" + key).once("value", res));
-  const data = snap.val();
-  if (!data) return { ok: false, err: "No OTP found. Please request again." };
-  if (Date.now() - data.ts > 10 * 60 * 1000) return { ok: false, err: "OTP expired. Please request again." };
-  if (data.otp !== enteredOtp.trim()) return { ok: false, err: "Incorrect OTP. Please try again." };
-  // Clear used OTP
-  await fbSetPath("otps/" + key, null);
-  return { ok: true };
-}
-// Load user profile from Firebase
-async function loadUserProfile(email) {
-  const key = email.replace(/\./g, "_").replace(/@/g, "__");
-  const snap = await new Promise(res => db.ref("userProfiles/" + key).once("value", res));
-  return snap.val();
-}
-// Save user profile
-async function saveUserProfile(email, profile) {
-  const key = email.replace(/\./g, "_").replace(/@/g, "__");
-  await fbSetPath("userProfiles/" + key, profile);
-}
-// Helper to set a specific path (not outlet-scoped)
-async function fbSetPath(path, val) {
-  if (!db) return;
-  return db.ref(path).set(val);
-}
-
-// Legacy compat — dynamically built from Firebase now
-const ROLES = {};
-const STAFF_OUTLETS = {};
-const ROLE_NAMES = {};
+const ROLES = { "owner@atozpharmacy.com": "owner", "staff@atozpharmacy.com": "staff" };
+const ROLE_NAMES = { "owner@atozpharmacy.com": "Pharmacy Owner", "staff@atozpharmacy.com": "Staff Member" };
 
 // ══════════════════════════════════════════════
 // UTILITIES
@@ -251,30 +140,14 @@ function parseStockInput(val, packQty) {
 // ══════════════════════════════════════════════
 // FIREBASE DATABASE HELPERS (real-time sync)
 // ══════════════════════════════════════════════
-// Current outlet prefix for Firebase paths
-var _currentOutlet = localStorage.getItem("currentOutlet") || "outlet2";
-function getOutletPath(path) {
-  // Paths that are outlet-specific
-  var outletPaths = ["inventory", "bills", "purchases", "returns", "billReturns", "racks", "audits", "customers", "ledger", "sessions"];
-  var root = path.split("/")[0];
-  if (outletPaths.indexOf(root) >= 0) return "outlets/" + _currentOutlet + "/" + path;
-  return path; // global paths (users, etc)
-}
-function setCurrentOutlet(outletId) {
-  _currentOutlet = outletId;
-  localStorage.setItem("currentOutlet", outletId);
-  PH = OUTLETS[outletId] || OUTLETS.outlet2;
-}
-function getCurrentOutlet() { return _currentOutlet; }
-
 function fbSet(path, data) {
-  return db.ref(getOutletPath(path)).set(data).catch((e) => console.error("DB write error:", path, e));
+  return db.ref(path).set(data).catch((e) => console.error("DB write error:", path, e));
 }
 function fbGet(path) {
-  return db.ref(getOutletPath(path)).once("value").then((snap) => snap.val()).catch(() => null);
+  return db.ref(path).once("value").then((snap) => snap.val()).catch(() => null);
 }
 function fbListen(path, callback) {
-  const ref = db.ref(getOutletPath(path));
+  const ref = db.ref(path);
   ref.on("value", (snap) => { callback(snap.val()); });
   return () => ref.off("value");
 }
@@ -295,558 +168,238 @@ function normalizeInvoiceText(text) {
     .trim();
 }
 
-// ── OCR.space API — replaces Tesseract.js for pharmacy bill reading ──────────
-// Sends image or PDF to Cloudflare Worker → OCR.space API → returns clean text.
-// Free tier: 500 requests/day. Engine 2 is best for numbers & special chars.
-async function extractImageBillText(file, onProgress) {
-  if (onProgress) onProgress({ status: "recognizing text", progress: 0.1 });
+// ── Simple OCR using Tesseract.js v5 createWorker ────────────────────────────
+// Based on image.html approach - simple, direct, no heavy preprocessing
+var _ocrWorker = null;
 
-  // Convert file to base64
-  const base64 = await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result); // data:image/...;base64,...
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-
-  if (onProgress) onProgress({ status: "recognizing text", progress: 0.3 });
-
-  const resp = await fetch(PROXY_URL + "/ocr", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      base64: base64,
-      filename: file.name,
-      filetype: file.type,
-    }),
-  });
-
-  if (onProgress) onProgress({ status: "recognizing text", progress: 0.8 });
-
-  if (!resp.ok) {
-    const err = await resp.json().catch(() => ({}));
-    throw new Error(err.error || "OCR.space request failed (" + resp.status + ")");
+async function getOcrWorker() {
+  if (_ocrWorker) return _ocrWorker;
+  // Load Tesseract.js if not loaded
+  if (!window.Tesseract) {
+    await new Promise(function(res, rej) {
+      var s = document.createElement("script");
+      s.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+      s.onload = function() { res(); };
+      s.onerror = function() { rej(new Error("Failed to load Tesseract.js")); };
+      document.head.appendChild(s);
+    });
   }
-
-  const data = await resp.json();
-  if (!data.ok) throw new Error(data.error || "OCR failed");
-
-  if (onProgress) onProgress({ status: "recognizing text", progress: 1.0 });
-
-  return normalizeInvoiceText(data.text || "");
+  _ocrWorker = await Tesseract.createWorker("eng");
+  return _ocrWorker;
 }
 
-// ── Spatial table reconstruction from Tesseract word bboxes ─────────────────
-// Groups words into rows by Y-proximity, then reconstructs columns by X-order.
-// This survives even when raw text lines are garbled by OCR column misalignment.
-function spatialReconstructRows(words, pageW) {
-  if (!words || !words.length) return [];
-  // Filter low-confidence junk AND words without bbox
-  const good = words.filter(w => w && w.text && w.text.trim() && (w.confidence || 0) > 20 && w.bbox && typeof w.bbox.x0 === "number");
-  if (!good.length) return [];
-
-  // Cluster words into rows using Y-center proximity (gap = ~half line height)
-  const avgH = good.reduce((s, w) => s + (w.bbox.y1 - w.bbox.y0), 0) / good.length;
-  const ROW_GAP = Math.max(8, avgH * 0.6);
-
-  const sorted = [...good].sort((a, b) => (a.bbox.y0 + a.bbox.y1) - (b.bbox.y0 + b.bbox.y1));
-  const rows = [];
-  let cur = [sorted[0]];
-  let curY = (sorted[0].bbox.y0 + sorted[0].bbox.y1) / 2;
-
-  for (let i = 1; i < sorted.length; i++) {
-    const w = sorted[i];
-    const wy = (w.bbox.y0 + w.bbox.y1) / 2;
-    if (Math.abs(wy - curY) < ROW_GAP) {
-      cur.push(w);
-      curY = (curY * cur.length + wy) / (cur.length + 1); // running avg
-    } else {
-      rows.push(cur.sort((a, b) => a.bbox.x0 - b.bbox.x0));
-      cur = [w]; curY = wy;
-    }
-  }
-  if (cur.length) rows.push(cur.sort((a, b) => a.bbox.x0 - b.bbox.x0));
-  return rows;
-}
-
-// ── Column zone detection ─────────────────────────────────────────────────────
-// Vardhman bill columns (% of page width):
-// RACK(0-5%) | NAME(5-35%) | QTY_BILLED(35-42%) | QTY_FREE(42-48%) |
-// PACK(48-54%) | BATCH(54-62%) | EXP(62-69%) | OLD_MRP(69-74%) |
-// NEW_MRP(74-80%) | TRADE_PRICE(80-86%) | DISC%(86-90%) | ...
-// These are approximate — we detect them from the header row.
-function detectColumnZones(rows, pageW) {
-  // Look for a header row containing known column keywords
-  const COL_KEYWORDS = {
-    rack: /^rack$/i,
-    desc: /^desc|^item|^medicine|^product|^name/i,
-    qty: /^qty|^billed|^quantity/i,
-    free: /^free/i,
-    scheme: /^scm|^scheme|^sch/i,
-    pack: /^pack|^pkg/i,
-    batch: /^batch|^lot/i,
-    exp: /^exp|^expiry/i,
-    mrp: /^mrp|^m\.r\.p|^new\s*mrp/i,
-    trade: /^trade|^ptr|^rate|^price/i,
-    disc: /^disc|^dis\s*%/i,
-  };
-
-  let headerRow = null, headerIdx = -1;
-  for (let i = 0; i < Math.min(rows.length, 20); i++) {
-    const texts = rows[i].map(w => w.text.trim());
-    const matches = texts.filter(t => Object.values(COL_KEYWORDS).some(re => re.test(t)));
-    if (matches.length >= 3) { headerRow = rows[i]; headerIdx = i; break; }
-  }
-
-  // If we found a header, compute column X-ranges from header word positions
-  if (headerRow) {
-    const zones = {};
-    for (const [col, re] of Object.entries(COL_KEYWORDS)) {
-      const hw = headerRow.find(w => re.test(w.text.trim()));
-      if (hw && hw.bbox) zones[col] = { x0: hw.bbox.x0 - 10, x1: hw.bbox.x1 + 40 };
-    }
-    return { zones, startRow: headerIdx + 1 };
-  }
-
-  // Fallback: use fixed percentage zones based on Vardhman invoice layout
-  // RACK(0-5%) | DESCRIPTION(5-25%) | QTY_BILLED(25-30%) | FREE/SCM(30-35%) |
-  // PACK(35-40%) | BATCH(40-48%) | EXP(48-53%) | OLD_MRP(53-58%) | NEW_MRP(58-65%) |
-  // TRADE_PRICE(65-72%) | DISC%(72-76%) | SCM_DISC(76-80%) | TAXABLE(80-86%) |
-  // GST%(86-89%) | NET(89-95%) | HSN(95-100%)
-  const p = pageW;
-  return {
-    zones: {
-      rack:   { x0: 0,          x1: p * 0.05 },
-      desc:   { x0: p * 0.04,   x1: p * 0.26 },
-      qty:    { x0: p * 0.25,   x1: p * 0.30 },
-      free:   { x0: p * 0.29,   x1: p * 0.33 },
-      scheme: { x0: p * 0.32,   x1: p * 0.36 },
-      pack:   { x0: p * 0.35,   x1: p * 0.41 },
-      batch:  { x0: p * 0.40,   x1: p * 0.49 },
-      exp:    { x0: p * 0.48,   x1: p * 0.54 },
-      mrp:    { x0: p * 0.57,   x1: p * 0.66 },
-      trade:  { x0: p * 0.65,   x1: p * 0.73 },
-      disc:   { x0: p * 0.72,   x1: p * 0.77 },
-    },
-    startRow: 0
-  };
-}
-
-// ── Extract words in a column zone from a row ────────────────────────────────
-function wordsInZone(row, zone) {
-  if (!zone) return "";
-  return row.filter(w => {
-    if (!w || !w.bbox) return false;
-    const cx = (w.bbox.x0 + w.bbox.x1) / 2;
-    return cx >= zone.x0 && cx <= zone.x1;
-  }).map(w => w.text.trim()).filter(Boolean).join(" ");
-}
-
-// ── Main spatial parser ───────────────────────────────────────────────────────
-function parseWithSpatialData(words, pageW, fallbackText) {
-  // Strategy: Use both spatial (bbox) and text-based parsing, take best result
-  var spatialItems = [];
-  var textItems = [];
-
-  // === SPATIAL APPROACH: only if we have good bbox data ===
-  try {
-    var rows = spatialReconstructRows(words, pageW);
-    if (rows.length > 0) {
-      var det = detectColumnZones(rows, pageW);
-      var zones = det.zones;
-      var startRow = det.startRow;
-
-      for (var ri = startRow; ri < rows.length; ri++) {
-        var row = rows[ri];
-        var fullLine = row.map(function(w) { return w.text; }).join(" ").trim();
-        if (fullLine.length < 8) continue;
-        if (/^(total|grand|taxable|cgst|sgst|igst|round|gst|bank|pan|dl|gstin|address|phone|mobile|email|invoice|page|schedule|checked|order|case|hunt|sales|mrp printed|terms|authoris|scan|collectable|tcs|billing|shipping|buyer|seller)/i.test(fullLine)) continue;
-
-        var name = wordsInZone(row, zones.desc).replace(/[|\\]/g, "").trim();
-        if (!name || name.length < 3 || !/[a-zA-Z]{2,}/.test(name)) continue;
-
-        var mrpStr = wordsInZone(row, zones.mrp);
-        var tradeStr = wordsInZone(row, zones.trade);
-        var mrp = parseFloat((mrpStr || "").replace(/[^\d.]/g, "")) || 0;
-        var ptr = parseFloat((tradeStr || "").replace(/[^\d.]/g, "")) || 0;
-        if (mrp <= 0 && ptr <= 0) continue;
-
-        var qtyStr = wordsInZone(row, zones.qty);
-        var freeStr = zones.free ? wordsInZone(row, zones.free) : "";
-        var schemeStr = zones.scheme ? wordsInZone(row, zones.scheme) : "";
-        var discStr = wordsInZone(row, zones.disc);
-        var batchStr = wordsInZone(row, zones.batch);
-        var expStr = wordsInZone(row, zones.exp);
-
-        var qty = parseInt((qtyStr || "").replace(/[^\d]/g, "")) || 1;
-        var freeQty = parseInt((freeStr || "").replace(/[^\d]/g, "")) || 0;
-        var discPct = parseFloat(((discStr || "").match(/(\d+\.?\d*)/) || [])[1] || "0");
-        var schemePct = parseFloat(((schemeStr || "").match(/(\d+\.?\d*)/) || [])[1] || "0");
-        var batch = ((batchStr || fullLine).match(/\b([A-Z]{1,5}\d{3,}[A-Z0-9]*)\b/) || [])[1] || "";
-        var expM = (expStr || fullLine).match(/\b(\d{1,2})[\/\-](\d{2,4})\b/);
-        var expiry = expM ? (expM[2].length === 2 ? "20" + expM[2] : expM[2]) + "-" + expM[1].padStart(2, "0") : "";
-        var gstM = fullLine.match(/\b(5|12|18|28)\s*%?(?:\s|$)/);
-        var gstRate = gstM ? parseInt(gstM[1]) : 5;
-
-        spatialItems.push({ name: name.slice(0, 80), manufacturer: "", hsn: "300490", batch: batch, expiry: expiry, pack: "", mrp: Math.round(mrp * 100) / 100, qty: Math.max(1, qty), freeQty: freeQty, ptr: Math.round((ptr || mrp * 0.85) * 100) / 100, gstRate: gstRate, rack: "", packQty: 0, discPct: discPct, schemePct: schemePct, amount: 0 });
+// Scale up image for better OCR
+function scaleImageForOcr(file) {
+  return new Promise(function(res, rej) {
+    var url = URL.createObjectURL(file);
+    var img = new Image();
+    img.onload = function() {
+      var TARGET = 3000;
+      var scale = Math.max(1, TARGET / Math.max(img.width, img.height));
+      var w = Math.round(img.width * scale);
+      var h = Math.round(img.height * scale);
+      var c = document.createElement("canvas");
+      c.width = w; c.height = h;
+      var ctx = c.getContext("2d");
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, w, h);
+      ctx.drawImage(img, 0, 0, w, h);
+      // Increase contrast
+      var id = ctx.getImageData(0, 0, w, h);
+      var d = id.data;
+      for (var i = 0; i < d.length; i += 4) {
+        var gray = d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114;
+        var v = gray < 140 ? 0 : 255;
+        d[i] = d[i+1] = d[i+2] = v;
       }
-    }
-  } catch(e) { /* spatial failed, continue to text */ }
-
-  // === TEXT APPROACH: parse raw OCR text line by line ===
-  textItems = parseVardhmanText(fallbackText);
-
-  // Take whichever found more items
-  var items = spatialItems.length >= textItems.length ? spatialItems : textItems;
-
-  if (items.length > 0) {
-    // Extract header info
-    var supplier = "", invoiceNo = "", date = "";
-    var headerText = fallbackText.substring(0, 2000);
-    var invM = headerText.match(/\b(VE-\d{2}-\d{4,})\b/i) || headerText.match(/Invoice[\s.#-]*No[\s.:]*([A-Z0-9\/-]+)/i) || headerText.match(/Inv\.?\s*No\.?\s*[:\s]*([A-Z0-9\/-]+)/i);
-    if (invM) invoiceNo = invM[1];
-    var dateM = headerText.match(/(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4})/);
-    if (dateM) date = dateM[1];
-    if (/vardhman|medisales/i.test(headerText)) supplier = "Vardhman Medisales";
-    else if (/pharma|distributor|health|medical|drugs|traders|agencies|marketing/i.test(headerText)) {
-      var supM = headerText.match(/([A-Z][A-Z\s&]+(?:MEDISALES|PHARMA|DISTRIBUTORS|TRADERS|AGENCIES|HEALTHCARE|MARKETING))/i);
-      supplier = supM ? supM[1].trim() : "Distributor";
-    }
-    return { supplier: supplier || "Distributor", invoiceNo: invoiceNo, date: date, items: items };
-  }
-
-  return null;
-}
-
-// ── Vardhman text-based parser ───────────────────────────────────────────────
-// Parses OCR text looking for medicine rows with pattern:
-// [RackCode] MedicineName [Pack] BatchNo ExpDate MRP TradePrice Qty Disc%
-// ══════════════════════════════════════════════════════════════════════════
-// INVOICE PARSER v3 — Generic pipe-table + line-by-line fallback
-// OCR.space Engine 3 returns a clean markdown pipe table — we parse that first.
-// Column positions are detected dynamically from the header row.
-// ══════════════════════════════════════════════════════════════════════════
-
-function parseInvoiceTable(text) {
-  if (!text) return { items: [], supplier: "", invoiceNo: "", date: "" };
-
-  var lines = text.split("\n").map(function(l){ return l.trim(); }).filter(Boolean);
-
-  // ── 1. Extract invoice header info ──────────────────────────────────────
-  var supplier = "", invoiceNo = "", date = "";
-  for (var hi = 0; hi < Math.min(lines.length, 60); hi++) {
-    var hl = lines[hi];
-    if (!invoiceNo) {
-      var im = hl.match(/Tax\s*Inv\.?\s*No\.?\s*[:\s]+([A-Z0-9\-\/]+)/i)
-            || hl.match(/Invoice\s*No\.?\s*[:\s]+([A-Z0-9\-\/]+)/i)
-            || hl.match(/\b(VE-\d{2}-\d{4,})\b/i);
-      if (im) invoiceNo = im[1].trim();
-    }
-    if (!date) {
-      // Match "Invoice Date : 08/05/2026" or "Invoice Date : 08/05/26"
-      var dm = hl.match(/Invoice\s*Date\s*[:\s]+([\d]{1,2}[\/\-.][\d]{1,2}[\/\-.][\d]{2,4})/i)
-            || hl.match(/^(\d{2}[\/\-]\d{2}[\/\-]\d{4})\b/);
-      if (dm) date = parseDateToISO(dm[1]);
-    }
-    if (!supplier) {
-      if (/vardhman/i.test(hl)) supplier = "Vardhman Medisales";
-      else if (/medisales|pharma|distributor|health|drugs|traders|agencies/i.test(hl))
-        supplier = hl.replace(/[|:]/g, " ").replace(/\s+/g, " ").trim().slice(0, 60);
-    }
-  }
-
-  // ── 2. Find pipe-table header row ───────────────────────────────────────
-  // Lines use | or I (since normalizeInvoiceText converts | → I)
-  var headerIdx = -1;
-  var colMap = {};
-
-  for (var i = 0; i < lines.length; i++) {
-    var l = lines[i];
-    var pipes = (l.match(/[|I]/g) || []).length;
-    if (pipes < 5) continue;
-    var lower = l.toLowerCase();
-    if ((lower.includes("description") || lower.includes("particular"))
-        && (lower.includes("mrp") || lower.includes("batch") || lower.includes("qty"))) {
-
-      // Split on pipe/I separators
-      var cols = l.split(/\s*[|I]\s*/)
-                  .map(function(c){ return c.trim().toLowerCase(); })
-                  .filter(Boolean);
-
-      cols.forEach(function(col, idx) {
-        // Use first match for each semantic field
-        if (/^rack$/.test(col))                                   colMap.rack  = colMap.rack  ?? idx;
-        if (/desc|particular|item\s*name|medicine/.test(col))    colMap.name  = colMap.name  ?? idx;
-        if (/^qty$|^qty\s*billed$|^billed$/.test(col))           colMap.qty   = colMap.qty   ?? idx;
-        if (/^free/.test(col) && !/value/.test(col))             colMap.free  = colMap.free  ?? idx;
-        if (/^pack/.test(col))                                    colMap.pack  = colMap.pack  ?? idx;
-        if (/batch/.test(col))                                    colMap.batch = colMap.batch ?? idx;
-        if (/^exp/.test(col))                                     colMap.exp   = colMap.exp   ?? idx;
-        if (/new\s*mrp/.test(col))                                colMap.newMrp  = colMap.newMrp  ?? idx;
-        if (/old\s*mrp/.test(col))                                colMap.oldMrp  = colMap.oldMrp  ?? idx;
-        if (/^mrp$/.test(col))                                    colMap.mrp     = colMap.mrp     ?? idx;
-        if (/trade\s*price|ptr|rate/.test(col))                   colMap.trade   = colMap.trade   ?? idx;
-        if (/disc\s*%/.test(col))                                 colMap.disc    = colMap.disc    ?? idx;
-        if (/^gst\s*%$|^gst$|^cgst/.test(col))                  colMap.gst     = colMap.gst     ?? idx;
-        if (/hsn/.test(col))                                      colMap.hsn     = colMap.hsn     ?? idx;
-        if (/net\s*value/.test(col))                              colMap.net     = colMap.net     ?? idx;
-        if (/taxable\s*value/.test(col))                          colMap.taxable = colMap.taxable ?? idx;
-        if (/scm\s*disc/.test(col))                               colMap.scmDisc = colMap.scmDisc ?? idx;
-      });
-
-      if (colMap.name !== undefined && Object.keys(colMap).length >= 4) {
-        headerIdx = i;
-        console.log("[PARSER] Found table header at line", i, "colMap:", JSON.stringify(colMap));
-        break;
-      }
-    }
-  }
-
-  // ── 3. Parse data rows using column map ─────────────────────────────────
-  if (headerIdx >= 0) {
-    var items = [];
-
-    var g = function(cells, key) {
-      var idx = colMap[key];
-      if (idx === undefined || idx >= cells.length) return "";
-      return (cells[idx] || "").replace(/\*\*/g, "").replace(/[~`]/g, "").trim();
+      ctx.putImageData(id, 0, 0);
+      c.toBlob(function(blob) {
+        URL.revokeObjectURL(url);
+        res(blob);
+      }, "image/png");
     };
-    var gn = function(cells, key) { return parseFloat(g(cells, key).replace(/,/g, "")) || 0; };
+    img.onerror = function() { URL.revokeObjectURL(url); rej(new Error("Image load failed")); };
+    img.src = url;
+  });
+}
 
-    for (var di = headerIdx + 1; di < lines.length; di++) {
-      var l = lines[di];
-      // Skip separator rows (--- or ===)
-      if (/^[\|I\-\s=]+$/.test(l)) continue;
-      // Stop at HTML or footer
-      if (/^<|^Out\s*Stock|Taxable\s*Sale|Tot\s*Items/i.test(l)) break;
-      // Must have enough pipe separators to be a data row
-      if ((l.match(/[|I]/g) || []).length < 4) continue;
+async function extractImageBillText(file, onProgress) {
+  var worker = await getOcrWorker();
+  // Scale and binarize
+  if (onProgress) onProgress({ progress: 0.1 });
+  var processed = await scaleImageForOcr(file);
+  if (onProgress) onProgress({ progress: 0.2 });
 
-      // Split row into cells — handle leading/trailing pipes
-      var cells = l.split(/\s*[|I]\s*/).map(function(c){ return c.trim(); });
-      // Remove empty first/last cell from leading/trailing separator
-      if (cells[0] === "") cells.shift();
-      if (cells[cells.length-1] === "") cells.pop();
+  var result = await worker.recognize(processed);
+  if (onProgress) onProgress({ progress: 0.9 });
+  var text = (result && result.data && result.data.text) || "";
 
-      var name = g(cells, "name");
-      if (!name || name.length < 2 || /^-+$/.test(name)) continue;
-      // Clean OCR noise from name
-      name = name.replace(/[~`*]/g, "").replace(/\s+/g, " ").trim();
-      if (!name || !/[A-Za-z]{2,}/.test(name)) continue;
+  // Store word bboxes for spatial fallback
+  if (result && result.data && result.data.words) {
+    window._ocrWords = result.data.words;
+    window._ocrPageW = result.data.width || 3000;
+  } else {
+    window._ocrWords = null;
+  }
 
-      // MRP: NEW MRP preferred, then plain MRP, then OLD MRP
-      var mrp = gn(cells, "newMrp") || gn(cells, "mrp") || gn(cells, "oldMrp");
-      // PTR = trade price
-      var ptr = gn(cells, "trade");
-      if (ptr <= 0) ptr = Math.round(mrp * 0.85 * 100) / 100;
-      if (mrp <= 0) continue;
+  if (onProgress) onProgress({ progress: 1.0 });
+  return normalizeInvoiceText(text);
+}
 
-      // Expiry: MM/YY or MM/YYYY
-      var expiry = parseDateToISO(g(cells, "exp")) || "";
-      // expiry for MM/YY format
-      var expRaw = g(cells, "exp");
-      if (!expiry && expRaw) {
-        var em = expRaw.match(/^(\d{1,2})[\/\-](\d{2,4})$/);
-        if (em) {
-          var yr = em[2].length === 2 ? "20" + em[2] : em[2];
-          expiry = yr + "-" + em[1].padStart(2, "0");
-        }
+// ── Invoice text parser ──────────────────────────────────────────────────────
+// Parses raw OCR text to extract purchase invoice items
+function parseImageBillToItems(text) {
+  if (!text || text.trim().length < 20) return { supplier: "", invoiceNo: "", date: "", items: [] };
+
+  var lines = text.split("\n").map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 3; });
+
+  // Extract header info
+  var supplier = "", invoiceNo = "", date = "";
+  for (var hi = 0; hi < Math.min(lines.length, 30); hi++) {
+    var hl = lines[hi];
+    if (!invoiceNo) { var im = hl.match(/\b(VE-\d{2}-\d{4,})\b/i) || hl.match(/Inv[oice.]*\s*No[.:\s]*([A-Z0-9\/-]+)/i) || hl.match(/MAX-\d+/i); if (im) invoiceNo = im[1] || im[0]; }
+    if (!date) { var dm = hl.match(/(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/); if (dm) date = dm[1]; }
+    if (!supplier) {
+      if (/vardhman|medisales/i.test(hl)) supplier = "Vardhman Medisales";
+      else if (/marketing|pharma|distributors?|traders|agencies|healthcare/i.test(hl)) {
+        var sm = hl.match(/([A-Z][A-Z\s&]{3,}(?:MARKETING|MEDISALES|PHARMA|DISTRIBUTORS?|TRADERS|AGENCIES|HEALTHCARE))/i);
+        if (sm) supplier = sm[1].trim();
       }
-
-      var qty     = parseInt(g(cells, "qty"))  || 1;
-      var free    = parseInt(g(cells, "free")) || 0;
-      var disc    = gn(cells, "disc");
-      var gstRaw  = gn(cells, "gst");
-      // GST col sometimes has "5" which is 5% (CGST 2.5 + SGST 2.5)
-      // If parsed as 2.5 or 2, multiply back
-      var gstRate = [5, 12, 18, 28].includes(gstRaw) ? gstRaw
-                  : [2.5, 6, 9, 14].includes(gstRaw) ? gstRaw * 2 : 5;
-      var hsn     = g(cells, "hsn") || "300490";
-      var rack    = g(cells, "rack");
-      var pack    = g(cells, "pack");
-      var batch   = g(cells, "batch").replace(/[~*]/g, "").trim();
-
-      console.log("[PARSER] Row:", name, "| MRP:", mrp, "| PTR:", ptr, "| Qty:", qty, "| Batch:", batch, "| Exp:", expiry);
-
-      items.push({
-        name:     name.slice(0, 80),
-        manufacturer: "",
-        hsn:      hsn || "300490",
-        batch:    batch,
-        expiry:   expiry,
-        pack:     pack,
-        mrp:      Math.round(mrp * 100) / 100,
-        qty:      Math.max(1, qty),
-        freeQty:  free,
-        ptr:      Math.round(ptr * 100) / 100,
-        gstRate:  gstRate,
-        rack:     rack,
-        packQty:  0,
-        discPct:  disc,
-        schemePct: 0,
-        amount:   0
-      });
-    }
-
-    if (items.length > 0) {
-      console.log("[PARSER] Pipe-table found", items.length, "items:", items.map(function(i){return i.name;}));
-      return { supplier: supplier || "Unknown", invoiceNo: invoiceNo, date: date, items: items };
     }
   }
 
-  // ── 4. Line-by-line fallback (non-table OCR, other distributors) ─────────
-  console.log("[PARSER] Pipe-table failed, trying line-by-line fallback");
-  var fbItems = parseLineByLine(text);
-  return { supplier: supplier || "Unknown", invoiceNo: invoiceNo, date: date, items: fbItems };
-}
-
-// Convert various date formats to yyyy-MM-dd for HTML date input
-function parseDateToISO(str) {
-  if (!str) return "";
-  str = str.trim();
-  // Already ISO
-  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
-  // DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY
-  var m = str.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})$/);
-  if (m) {
-    var yr = m[3].length === 2 ? "20" + m[3] : m[3];
-    return yr + "-" + m[2].padStart(2, "0") + "-" + m[1].padStart(2, "0");
-  }
-  return "";
-}
-
-// Line-by-line fallback for plain-text OCR output
-function parseLineByLine(text) {
-  if (!text) return [];
-  var lines = text.split("\n").map(function(l){ return l.trim(); }).filter(function(l){ return l.length > 5; });
-  var items = [];
-
-  // Find where table starts
+  // Find table start - look for header row
   var tableStart = 0;
-  for (var i = 0; i < Math.min(lines.length, 50); i++) {
-    var lower = lines[i].toLowerCase();
-    if ((lower.includes("description") || lower.includes("particulars")) &&
-        (lower.includes("qty") || lower.includes("batch") || lower.includes("mrp"))) {
-      tableStart = i + 1; break;
-    }
-    if (lower.includes("rack") && lower.includes("batch")) { tableStart = i + 1; break; }
+  for (var ti = 0; ti < Math.min(lines.length, 40); ti++) {
+    var tl = lines[ti].toLowerCase();
+    var headerScore = 0;
+    if (tl.indexOf("description") >= 0 || tl.indexOf("particulars") >= 0 || tl.indexOf("product") >= 0) headerScore += 3;
+    if (tl.indexOf("qty") >= 0 || tl.indexOf("billed") >= 0) headerScore += 2;
+    if (tl.indexOf("batch") >= 0) headerScore += 2;
+    if (tl.indexOf("mrp") >= 0) headerScore += 2;
+    if (tl.indexOf("trade") >= 0 || tl.indexOf("ptr") >= 0 || tl.indexOf("rate") >= 0) headerScore += 2;
+    if (tl.indexOf("disc") >= 0) headerScore += 1;
+    if (tl.indexOf("rack") >= 0) headerScore += 1;
+    if (tl.indexOf("pack") >= 0) headerScore += 1;
+    if (tl.indexOf("exp") >= 0) headerScore += 1;
+    if (headerScore >= 5) { tableStart = ti + 1; break; }
   }
 
-  var SKIP = /^(total|sub.?total|grand|taxable|cgst|sgst|igst|round|gst.?summary|bank|ifsc|pan|dl.no|gstin|address|phone|mobile|email|invoice|page|schedule|checked|order|case|hunt|sales|mrp.printed|terms|authoris|scan|collectable|signature|do.not|cash|sign|valid|credit|east.zone|west.zone|relation|billed|buyer|seller|shipping|net.value|sale.value|sch.disc|bengaluru|subayyan|banaswadi|<)/i;
+  // Skip patterns
+  var SKIP = /^(total|sub.?total|grand|net|taxable|cgst|sgst|igst|round|gst|bank|ifsc|pan|dl.?no|gstin|address|phone|mobile|email|invoice|page|schedule|checked|order|case|hunt|sales|mrp.?printed|terms|authoris|scan|collectable|signature|do.?not|cash.?payment|sign|valid|credit|east.?zone|west|relation|billed.?to|buyer|seller|shipping|sale.?value|sch.?disc|tot.?items|tot.?qty|mrp.?value|[*]|rupees|amount|ic\b|cs\b|cov\b)/i;
+
+  var items = [];
 
   for (var li = tableStart; li < lines.length; li++) {
     var l = lines[li];
-    if (SKIP.test(l)) continue;
     if (l.length < 8) continue;
+    if (SKIP.test(l.trim())) continue;
 
+    // Find all decimal numbers (prices: XX.XX)
+    var decNums = [];
+    var decRe = /(\d+\.\d{2})/g;
+    var decM;
+    while ((decM = decRe.exec(l)) !== null) decNums.push({ val: parseFloat(decM[1]), pos: decM.index });
+
+    // Find all integers
+    var intNums = [];
+    var intRe = /\b(\d{1,3})\b/g;
+    var intM;
+    while ((intM = intRe.exec(l)) !== null) intNums.push({ val: parseInt(intM[1]), pos: intM.index });
+
+    // Need at least 1 decimal number (a price)
+    if (decNums.length < 1) continue;
+
+    // Extract name: text at start of line before prices/pack/batch
     var rackM = l.match(/^([A-Z]\d{3,5})\s+/);
     var nameStart = rackM ? rackM[0].length : 0;
 
-    // Name ends at pack pattern or batch number
-    var packM = l.match(/\b(\d{1,3}[x×X]\d+\s*ML|\d{1,3}['`]?\s*[SsTt]\b|DEVICE|PCS)\b/i);
+    // Find where name ends
     var nameEnd = l.length;
-    if (packM && packM.index > nameStart + 2) nameEnd = packM.index;
-    else {
-      var bp = l.search(/\b[A-Z]{1,5}\d{4,}/);
-      if (bp > nameStart + 5) nameEnd = bp;
+    // Stop at pack pattern
+    var packM = l.match(/\b(\d{1,3}['\x60]?\s*[SsTt]\b|\d+[Xx]\d+\s*ML|DEVICE|PCS|BOX)\b/i);
+    if (packM && packM.index > nameStart + 3) nameEnd = Math.min(nameEnd, packM.index);
+    // Stop at batch pattern (letters followed by 4+ digits)
+    var batchPos = l.substring(nameStart).search(/\s[A-Z]{1,5}\d{4,}/);
+    if (batchPos > 3) nameEnd = Math.min(nameEnd, nameStart + batchPos);
+    // Stop at first decimal price if it comes before other markers
+    if (decNums.length > 0 && decNums[0].pos > nameStart + 3 && decNums[0].pos < nameEnd) {
+      // Only stop at price if there's enough name before it
+      var possibleName = l.substring(nameStart, decNums[0].pos).trim();
+      if (possibleName.length > 3 && /[A-Z]{2,}/i.test(possibleName)) nameEnd = decNums[0].pos;
+    }
+    // Stop at qty-pack sequence like "1 10S" or "6 10'S"
+    var qpM = l.substring(nameStart).match(/\s+(\d{1,2})\s+(\d{1,3}['\x60]?\s*[SsTt])/);
+    if (qpM && qpM.index > 3) nameEnd = Math.min(nameEnd, nameStart + qpM.index);
+
+    var name = l.substring(nameStart, nameEnd).replace(/[|\\]/g, "").replace(/\s+/g, " ").trim();
+    name = name.replace(/\s+\d+\s*$/, "").trim(); // remove trailing number
+
+    if (!name || name.length < 2 || !/[A-Za-z]{2,}/.test(name)) continue;
+    // Skip header-like names
+    if (/^(NO\.|HUNT|MOBILE|EMAIL|GSTIN|STATE|DL|PAN|EWB|IRN|ACK|TAX|PAGE|CHECK|SALES|CARRIER|CREDIT|VALID|AREA|VEHICLE|PLACE|S\.?No)/i.test(name)) continue;
+
+    // Prices: find MRP and PTR from decimal numbers
+    var prices = decNums.filter(function(n) { return n.val >= 5 && n.val < 100000; }).sort(function(a, b) { return b.val - a.val; });
+    if (prices.length < 1) continue;
+
+    // Remove 0.00 values
+    var nonZeroPrices = prices.filter(function(p) { return p.val > 0.01; });
+    if (nonZeroPrices.length < 1) continue;
+
+    var mrp = nonZeroPrices[0].val;
+    var ptr = nonZeroPrices.length >= 2 ? nonZeroPrices[1].val : Math.round(mrp * 0.8 * 100) / 100;
+    if (ptr > mrp) { var tmp = mrp; mrp = ptr; ptr = tmp; }
+
+    // Qty: small integer before the prices
+    var qty = 1;
+    var priceStart = nonZeroPrices.length > 0 ? Math.min.apply(null, nonZeroPrices.map(function(p) { return p.pos; })) : l.length;
+    var qtyNums = intNums.filter(function(n) { return n.val >= 1 && n.val <= 200 && n.pos < priceStart && n.pos > nameStart; });
+    if (qtyNums.length > 0) qty = qtyNums[0].val;
+
+    // Batch
+    var batch = "";
+    var batchM2 = l.match(/\b([A-Z]{1,5}\d{4,}[A-Z0-9]*)\b/);
+    if (batchM2) batch = batchM2[1];
+
+    // Expiry
+    var expiry = "";
+    var expM = l.match(/\b(\d{1,2})[\/-](\d{2,4})\b/);
+    if (expM) {
+      var yr = expM[2].length === 2 ? "20" + expM[2] : expM[2];
+      expiry = yr + "-" + expM[1].padStart(2, "0");
     }
 
-    var name = l.substring(nameStart, nameEnd).replace(/[|\\~*]/g, "").replace(/\s+/g, " ").trim();
-    name = name.replace(/\s+\d+\s*$/, "").trim();
-    if (!name || name.length < 3 || !/[A-Za-z]{2,}/.test(name)) continue;
-    if (/^(NO\.|HUNT|MOBILE|EMAIL|GSTIN|STATE|DL|PAN|ACK|INVOICE|PAGE|BENGALURU)/i.test(name)) continue;
+    // Pack
+    var pack = "";
+    if (packM) pack = packM[1];
 
-    var decNums = [], decRe = /(\d+\.\d{2})/g, dm;
-    while ((dm = decRe.exec(l)) !== null) { var v = parseFloat(dm[1]); if (v > 0) decNums.push(v); }
-    var sorted = decNums.slice().sort(function(a,b){ return b-a; });
-    var mrp = sorted[0] || 0;
-    var ptr = sorted[1] || mrp * 0.85;
-    if (mrp <= 0) continue;
+    // Disc%: look for X.00 pattern (4.00, 5.00 etc) or standalone small decimal
+    var discPct = 0;
+    var discNums = decNums.filter(function(n) { return n.val >= 1 && n.val <= 30 && n.val === Math.floor(n.val); });
+    if (discNums.length > 0) discPct = discNums[discNums.length - 1].val;
 
-    var allNums = [], numRe = /(\d+\.?\d*)/g, nm;
-    while ((nm = numRe.exec(l)) !== null) allNums.push(parseFloat(nm[1]));
-    var qty = allNums.filter(function(n){ return n>=1&&n<=99&&n===Math.floor(n); })[0] || 1;
+    // GST: look for 5, 12, 18, 28 standalone
+    var gstRate = 5;
+    var gstM2 = l.match(/\b(5|12|18|28)\b/g);
+    if (gstM2) gstRate = parseInt(gstM2[gstM2.length - 1]);
 
-    var batchM = l.match(/\b([A-Z]{1,5}\d{4,}[A-Z0-9]*)\b/);
-    var batch = batchM ? batchM[1] : "";
-    var expM = l.match(/\b(\d{1,2})[\/\-](\d{2,4})\b/);
-    var expiry = "";
-    if (expM) { var yr = expM[2].length===2?"20"+expM[2]:expM[2]; expiry=yr+"-"+expM[1].padStart(2,"0"); }
-    var discM = l.match(/\b(\d{1,2}\.00)\b/g);
-    var discPct = discM ? Math.min.apply(null, discM.map(parseFloat).filter(function(n){return n>0&&n<=30;})) : 0;
-    var gstM = l.match(/\b(5|12|18|28)\b/);
-    var gstRate = gstM ? parseInt(gstM[1]) : 5;
-    var pack = packM ? packM[1].trim() : "";
+    // Free qty: look for small integer near "free" or in free column position
+    var freeQty = 0;
 
-    items.push({ name:name.slice(0,80), manufacturer:"", hsn:"300490", batch:batch, expiry:expiry,
-      pack:pack, mrp:Math.round(mrp*100)/100, qty:Math.max(1,qty), freeQty:0,
-      ptr:Math.round(ptr*100)/100, gstRate:gstRate, rack:rackM?rackM[1]:"",
-      packQty:0, discPct:discPct||0, schemePct:0, amount:0 });
+    items.push({
+      name: name.slice(0, 80), manufacturer: "", hsn: "300490",
+      batch: batch, expiry: expiry, pack: pack,
+      mrp: Math.round(mrp * 100) / 100,
+      qty: Math.max(1, qty), freeQty: freeQty,
+      ptr: Math.round(ptr * 100) / 100,
+      gstRate: gstRate, rack: "", packQty: 0,
+      discPct: discPct, schemePct: 0, amount: 0
+    });
   }
-  return items;
+
+  return { supplier: supplier || "Distributor", invoiceNo: invoiceNo, date: date, items: items };
 }
-
-// Backward compat alias
-function parseVardhmanText(text) { return parseInvoiceTable(text).items; }
-
-// ── Main entry point called by doImg ─────────────────────────────────────────
-function parseImageBillToItems(text) {
-  const clean = normalizeInvoiceText(text);
-  console.log("[PARSER] parseImageBillToItems called, text length:", text.length);
-
-  // PRIMARY: Generic pipe-table parser (works with OCR.space Engine 3 output)
-  const tableParsed = parseInvoiceTable(clean);
-  if (tableParsed && tableParsed.items && tableParsed.items.length >= 1) {
-    console.log("[PARSER] Table parser succeeded:", tableParsed.items.length, "items");
-    return tableParsed;
-  }
-
-  // FALLBACK 1: structured PDF-style parser
-  const pdfParsed = parsePdfToItems(clean);
-  if (pdfParsed && pdfParsed.items && pdfParsed.items.length >= 2) {
-    console.log("[PARSER] PDF parser succeeded:", pdfParsed.items.length, "items");
-    return pdfParsed;
-  }
-
-  const lines = clean.split("\n").map(l => l.trim()).filter(Boolean);
-  let supplier = "", invoiceNo = "", date = "";
-  for (const l of lines.slice(0, 50)) {
-    if (!invoiceNo) { const m = l.match(/Tax\s*Inv\.?\s*No\.?\s*[:\s]+([A-Z0-9\-\/]+)/i) || l.match(/\b(VE-\d{2}-\d{4,})\b/i) || l.match(/Invoice[\s.#-]*No[\s.:]*([A-Z0-9\/-]+)/i); if (m) invoiceNo = m[1].trim(); }
-    if (!date) { const d = l.match(/Invoice\s*Date\s*[:\s]+([\d]{1,2}[\/\-][\d]{1,2}[\/\-][\d]{2,4})/i) || l.match(/(\d{2}[\/\-]\d{2}[\/\-]\d{4})/); if (d) date = parseDateToISO(d[1]); }
-    if (!supplier && /vardhman/i.test(l)) supplier = "Vardhman Medisales";
-    else if (!supplier && /medisales|pharma|distributor|health|medical|drugs|traders|agencies/i.test(l))
-      supplier = l.replace(/[|:]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
-  }
-
-  // Fallback 2: line-by-line numeric parser
-  var items = [];
-  for (var li = 0; li < lines.length; li++) {
-    var l = lines[li];
-    if (l.length < 10) continue;
-    if (/^(total|grand|taxable|cgst|sgst|igst|round|gst|bank|pan|dl|gstin|address|phone|email|invoice|page|schedule|checked|mobile|hunt|sales|order|case|mrp printed)/i.test(l)) continue;
-    // Look for lines with medicine name + numbers (MRP, PTR, qty)
-    var nums = l.match(/\d+\.?\d{0,2}/g);
-    if (!nums || nums.length < 2) continue;
-    var nameMatch = l.match(/^[A-Z][A-Z0-9\s&\-\(\)]+/);
-    if (!nameMatch || nameMatch[0].trim().length < 3) continue;
-    var name = nameMatch[0].trim();
-    // Skip if looks like a header
-    if (/^(RACK|DESC|QTY|PACK|BATCH|EXP|MRP|TRADE|DISC|HSN|NET|TAXABLE|GST|BILLED|FREE)/i.test(name)) continue;
-    var prices = nums.map(function(n) { return parseFloat(n); }).filter(function(n) { return n > 1; });
-    if (prices.length < 1) continue;
-    var mrp = prices.length >= 2 ? Math.max(prices[0], prices[1]) : prices[0];
-    var ptr = prices.length >= 2 ? Math.min(prices[0], prices[1]) : mrp * 0.85;
-    var qty = 1;
-    var qtyMatch = l.match(/\b(\d{1,3})\b/);
-    if (qtyMatch) qty = parseInt(qtyMatch[1]) || 1;
-    items.push({ name: name.slice(0, 80), manufacturer: "", hsn: "300490", batch: "", expiry: "", pack: "", mrp: Math.round(mrp * 100) / 100, qty: Math.max(1, qty), freeQty: 0, ptr: Math.round(ptr * 100) / 100, gstRate: 5, rack: "", packQty: 0, discPct: 0, schemePct: 0, amount: 0 });
-  }
-
-  if (items.length >= 1) return { supplier: supplier || "Image Bill", invoiceNo, date, items: items };
-  return { supplier: supplier || "Image Bill", invoiceNo, date, items: [] };
-}
-
-
 
 function csvToItems(rows) {
   if (rows.length < 2) return null; const h = rows[0].map((x) => x.toLowerCase().trim()); const ix = (n) => h.findIndex((x) => x.includes(n));
@@ -1280,15 +833,128 @@ function BillView({ bill, onClose, fromHistory }) {
     const html = "<html><head><title>Bill_" + bill.billNo + "</title><style>body{font-family:sans-serif;font-size:12px;padding:0;max-width:800px;margin:0 auto}table{width:100%;border-collapse:collapse}th,td{border:1px solid #333;padding:8px;font-size:12px}th{background:#f2f2f2;text-align:left}</style></head><body>" + el.innerHTML + "</body></html>";
     setDlLink(URL.createObjectURL(new Blob([html], { type: "text/html" })));
   };
+  const [pdfReady, setPdfReady] = useState(null);
+  const [waPhone, setWaPhone] = useState("");
+  const preparePdf = async function() {
+    var custPhone = (bill.patientContact || "").replace(/[^0-9]/g, "");
+    if (!custPhone || custPhone.length < 10) {
+      custPhone = prompt("Enter customer WhatsApp number (10 digits):", "");
+      if (!custPhone) return;
+      custPhone = custPhone.replace(/[^0-9]/g, "");
+    }
+    if (custPhone.length === 10) custPhone = "91" + custPhone;
+    setWaPhone(custPhone);
+
+    var el = document.getElementById("bill-print-area");
+    if (!el) { alert("Bill not ready"); return; }
+    try {
+      if (!window.html2canvas) {
+        var h2cUrls = ["https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js","https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js","https://unpkg.com/html2canvas@1.4.1/dist/html2canvas.min.js"];
+        for (var hi = 0; hi < h2cUrls.length; hi++) { try { await new Promise(function(res,rej){var s=document.createElement("script");s.src=h2cUrls[hi];s.onload=res;s.onerror=rej;document.head.appendChild(s);}); if(window.html2canvas)break; } catch(e){} }
+        if (!window.html2canvas) throw new Error("html2canvas failed");
+      }
+      if (!window.jspdf) {
+        var jpUrls = ["https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js","https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js","https://unpkg.com/jspdf@2.5.2/dist/jspdf.umd.min.js"];
+        for (var ji = 0; ji < jpUrls.length; ji++) { try { await new Promise(function(res,rej){var s=document.createElement("script");s.src=jpUrls[ji];s.onload=res;s.onerror=rej;document.head.appendChild(s);}); if(window.jspdf)break; } catch(e){} }
+        if (!window.jspdf) throw new Error("jsPDF failed");
+      }
+      var canvas = await html2canvas(el, { scale: 2, useCORS: true, backgroundColor: "#ffffff" });
+      var imgData = canvas.toDataURL("image/jpeg", 0.95);
+      var pdf = new jspdf.jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+      var pW = pdf.internal.pageSize.getWidth(), pH = pdf.internal.pageSize.getHeight();
+      var iW = pW - 20, iH = (canvas.height / canvas.width) * iW;
+      if (iH > pH - 20) { iW = iW * (pH - 20) / iH; iH = pH - 20; }
+      pdf.addImage(imgData, "JPEG", 10, 10, iW, iH);
+      setPdfReady(pdf.output("blob"));
+    } catch(err) { alert("PDF failed: " + err.message); }
+  };
+  const sendWhatsApp = function() {
+    var phone = waPhone;
+    var thankMsg = "Thank you for visiting " + PH.name + "! Your bill " + bill.billNo + " for Rs." + f2(bill.netAmount) + " is attached. For any orders or enquiries, just call or WhatsApp us on +917619639377. We are happy to help! Get well soon!";
+    var shared = false;
+
+    if (pdfReady) {
+      var pdfFile = new File([pdfReady], "Bill_" + bill.billNo + ".pdf", { type: "application/pdf" });
+      try {
+        if (navigator.share && navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
+          navigator.share({ title: "Bill " + bill.billNo, text: thankMsg, files: [pdfFile] }).then(function() {
+            // After share completes, open WhatsApp chat with template message
+            if (phone) (function openWA(p, t) {
+              var encoded = encodeURIComponent(t);
+              var isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
+              if (isMobile) {
+                var intentUrl = "intent://send?phone=" + p + "&text=" + encoded + "#Intent;scheme=whatsapp;package=com.whatsapp;end;";
+                var waUrl = "https://api.whatsapp.com/send?phone=" + p + "&text=" + encoded;
+                // Try intent for Android
+                if (/Android/i.test(navigator.userAgent)) {
+                  location.href = intentUrl;
+                } else {
+                  // iOS - use api.whatsapp.com
+                  location.href = waUrl;
+                }
+              } else {
+                window.open("https://web.whatsapp.com/send?phone=" + p + "&text=" + encoded, "_blank");
+              }
+            })(phone, thankMsg);
+          }).catch(function() {
+            // User cancelled share or error - still open WhatsApp with text
+            if (phone) (function openWA(p, t) {
+              var encoded = encodeURIComponent(t);
+              var isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
+              if (isMobile) {
+                var intentUrl = "intent://send?phone=" + p + "&text=" + encoded + "#Intent;scheme=whatsapp;package=com.whatsapp;end;";
+                var waUrl = "https://api.whatsapp.com/send?phone=" + p + "&text=" + encoded;
+                // Try intent for Android
+                if (/Android/i.test(navigator.userAgent)) {
+                  location.href = intentUrl;
+                } else {
+                  // iOS - use api.whatsapp.com
+                  location.href = waUrl;
+                }
+              } else {
+                window.open("https://web.whatsapp.com/send?phone=" + p + "&text=" + encoded, "_blank");
+              }
+            })(phone, thankMsg);
+          });
+          shared = true;
+        }
+      } catch(e) {}
+      if (!shared) {
+        // Fallback: download PDF
+        var a = document.createElement("a"); a.href = URL.createObjectURL(pdfReady); a.download = "Bill_" + bill.billNo + ".pdf"; a.click();
+      }
+    }
+    // If share API not available, open WhatsApp with text
+    if (!shared && phone) (function openWA(p, t) {
+              var encoded = encodeURIComponent(t);
+              var isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
+              if (isMobile) {
+                var intentUrl = "intent://send?phone=" + p + "&text=" + encoded + "#Intent;scheme=whatsapp;package=com.whatsapp;end;";
+                var waUrl = "https://api.whatsapp.com/send?phone=" + p + "&text=" + encoded;
+                // Try intent for Android
+                if (/Android/i.test(navigator.userAgent)) {
+                  location.href = intentUrl;
+                } else {
+                  // iOS - use api.whatsapp.com
+                  location.href = waUrl;
+                }
+              } else {
+                window.open("https://web.whatsapp.com/send?phone=" + p + "&text=" + encoded, "_blank");
+              }
+            })(phone, thankMsg);
+  };
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center", padding: 10 }}>
       <div style={{ background: "#fff", borderRadius: 12, width: "100%", maxWidth: 800, maxHeight: "95vh", overflow: "auto", padding: 20 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 6 }}>
           <b style={{ fontSize: 16 }}>Bill {fromHistory ? "" : "Generated"}</b>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            {fromHistory && !dlLink && <button onClick={makePdf} style={{ ...bts(true) }}>Prepare PDF</button>}
-            {fromHistory && dlLink && <a href={dlLink} download={"Bill_" + bill.billNo + ".html"} style={{ padding: "8px 16px", background: "#059669", color: "#fff", borderRadius: 7, fontSize: 13, fontWeight: 600, textDecoration: "none" }}>Download PDF</a>}
-            <button onClick={() => { setDlLink(null); onClose(); }} style={{ ...bts(false) }}>Close</button>
+          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            {!pdfReady && <button onClick={preparePdf} style={{ border: "none", borderRadius: 7, padding: "8px 14px", fontWeight: 600, cursor: "pointer", fontSize: 12, background: "#25D366", color: "#fff", fontFamily: "inherit" }}>Prepare WhatsApp Bill</button>}
+            {pdfReady && <button onClick={sendWhatsApp} style={{ border: "none", borderRadius: 7, padding: "8px 14px", fontWeight: 600, cursor: "pointer", fontSize: 12, background: "#25D366", color: "#fff", fontFamily: "inherit", animation: "fadeIn 0.3s" }}>Send via WhatsApp</button>}
+            <button onClick={function() { var el = document.getElementById("bill-print-area"); if (el) { var w = window.open("","_blank"); w.document.write("<html><head><title>Bill_" + bill.billNo + "</title><style>body{font-family:sans-serif;font-size:12px;padding:0;max-width:800px;margin:0 auto}table{width:100%;border-collapse:collapse}th,td{border:1px solid #333;padding:8px;font-size:12px}th{background:#f2f2f2;text-align:left}</style></head><body>" + el.innerHTML + "</body></html>"); w.document.close(); w.print(); } }} style={{ ...bts(true), padding: "8px 14px", fontSize: 12 }}>Print</button>
+            {fromHistory && !dlLink && <button onClick={makePdf} style={{ ...bts(false), padding: "8px 14px", fontSize: 12 }}>Download</button>}
+            {fromHistory && dlLink && <a href={dlLink} download={"Bill_" + bill.billNo + ".html"} style={{ padding: "8px 14px", background: "#059669", color: "#fff", borderRadius: 7, fontSize: 12, fontWeight: 600, textDecoration: "none" }}>Save File</a>}
+            <button onClick={() => { setDlLink(null); onClose(); }} style={{ ...bts(false), padding: "8px 14px", fontSize: 12 }}>Close</button>
           </div></div>
         <div id="bill-print-area" style={{ fontFamily: "sans-serif", fontSize: 12, border: "1px solid #ccc" }}>
           {/* Dark header */}
@@ -1311,7 +977,7 @@ function BillView({ bill, onClose, fromHistory }) {
             <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 15, fontSize: 12 }}>
               <thead>
                 <tr style={{ background: "#f2f2f2" }}>
-                  {["#","Item","Rack","Batch","Exp","Qty","Price","Dis%","GST","Amt"].map((h) => <th key={h} style={{ border: "1px solid #333", padding: "8px", textAlign: "left" }}>{h}</th>)}
+                  {["#","Item","Batch","Exp","Qty","Price","Dis%","GST","Amt"].map((h) => <th key={h} style={{ border: "1px solid #333", padding: "8px", textAlign: "left" }}>{h}</th>)}
                 </tr>
               </thead>
               <tbody>
@@ -1319,7 +985,6 @@ function BillView({ bill, onClose, fromHistory }) {
                   <tr key={i}>
                     <td style={{ border: "1px solid #333", padding: "8px" }}>{i + 1}</td>
                     <td style={{ border: "1px solid #333", padding: "8px" }}>{it.loose ? "[L] " : ""}{it.name}</td>
-                    <td style={{ border: "1px solid #333", padding: "8px", color: "#92400E", fontWeight: 600 }}>{it.rack || "—"}</td>
                     <td style={{ border: "1px solid #333", padding: "8px" }}>{it.batch}</td>
                     <td style={{ border: "1px solid #333", padding: "8px" }}>{it.expiry}</td>
                     <td style={{ border: "1px solid #333", padding: "8px" }}>{it.qty}{it.loose ? "pc" : ""}</td>
@@ -1350,187 +1015,54 @@ function BillView({ bill, onClose, fromHistory }) {
 // ══════════════════════════════════════════════
 function Login({ onLogin }) {
   const [email, setEmail] = useState("");
-  const [otp, setOtp] = useState("");
-  const [step, setStep] = useState("email"); // "email" | "otp"
-  const [loading, setLoading] = useState(false);
+  const [pass, setPass] = useState("");
   const [err, setErr] = useState("");
-  const [info, setInfo] = useState("");
-  const [resendCd, setResendCd] = useState(0);
-
-  // Countdown timer for resend
-  useEffect(() => {
-    if (resendCd <= 0) return;
-    const t = setTimeout(() => setResendCd(c => c - 1), 1000);
-    return () => clearTimeout(t);
-  }, [resendCd]);
-
-  const sendOtp = async () => {
-    const em = email.trim().toLowerCase();
-    if (!em || !em.includes("@")) { setErr("Enter a valid email address"); return; }
-    setLoading(true); setErr(""); setInfo("");
-    try {
-      // Check if user is registered (owner or in userProfiles)
-      const isOwner = OWNER_EMAILS.includes(em);
-      let profile = null;
-      if (!isOwner) {
-        profile = await loadUserProfile(em);
-        if (!profile) { setErr("This email is not registered. Contact owner to add you."); setLoading(false); return; }
-        if (profile.disabled) { setErr("Your account has been disabled. Contact owner."); setLoading(false); return; }
-      }
-      const code = genOTP();
-      await saveOTP(em, code);
-      var emailOk = false;
-      var emailErr = "";
-      var fallbackOk = false;
-      try {
-        await sendOTPEmail(em, code, isOwner ? "Owner" : (profile && profile.name) || em);
-        emailOk = true;
-      } catch(mailErr) {
-        emailErr = mailErr.message || "Unknown error";
-        // Try sending to admin as fallback
-        if (em.toLowerCase() !== "krishkwish@gmail.com") {
-          fallbackOk = await sendOTPFallback(em, code);
-        }
-      }
-      setStep("otp");
-      setResendCd(60);
-      if (emailOk) {
-        setInfo("OTP sent to " + em + ". Check inbox & spam.");
-      } else if (fallbackOk) {
-        setInfo("OTP sent to admin (krishkwish@gmail.com). Please ask admin for the OTP code.");
-      } else {
-        setErr("Email failed: " + emailErr);
-        setInfo("Could not send OTP email. Please contact admin.");
-      }
-    } catch(e) {
-      setErr("Failed to send OTP: " + e.message);
-    }
-    setLoading(false);
-  };
-
-  const verifyOtp = async () => {
-    if (!otp.trim() || otp.trim().length !== 6) { setErr("Enter the 6-digit OTP"); return; }
+  const [loading, setLoading] = useState(false);
+  const go = async () => {
     setLoading(true); setErr("");
     try {
-      const result = await verifyOTP(email.trim().toLowerCase(), otp.trim());
-      if (!result.ok) { setErr(result.err); setLoading(false); return; }
-      // Successful OTP — sign in via Firebase Anonymous or load profile
-      const em = email.trim().toLowerCase();
-      const isOwner = OWNER_EMAILS.includes(em);
-      let profile = isOwner ? { name: em === "krishkwish@gmail.com" ? "Krish" : "Saloni", role: "owner", pages: null } : await loadUserProfile(em);
-      if (!profile) { setErr("Profile not found. Contact owner."); setLoading(false); return; }
-      // Update last login
-      if (!isOwner) await saveUserProfile(em, { ...profile, lastLogin: new Date().toISOString() });
-      onLogin({
-        id: em.replace(/[^a-z0-9]/gi, "_"),
-        email: em,
-        name: profile.name || em,
-        role: isOwner ? "owner" : "staff",
-        pages: isOwner ? null : (profile.pages || []), // null = all pages for owner
-        outlets: isOwner ? null : (profile.outlets || Object.keys(OUTLETS)), // null = all outlets for owner
-      });
-    } catch(e) {
-      setErr("Verification failed: " + e.message);
+      const cred = await auth.signInWithEmailAndPassword(email, pass);
+      const role = ROLES[cred.user.email] || "staff";
+      const name = ROLE_NAMES[cred.user.email] || email;
+      onLogin({ id: cred.user.uid, email: cred.user.email, name, role });
+    } catch (e) {
+      setErr(e.message.includes("user-not-found") ? "User not found" : e.message.includes("wrong-password") ? "Wrong password" : "Login failed: " + e.message);
     }
     setLoading(false);
   };
-
-  const inp = { width: "100%", border: "1.5px solid #E5E7EB", borderRadius: 10, padding: "13px 14px", fontSize: 15, outline: "none", background: "#FAFAF7", fontFamily: "inherit" };
-  const btn = (primary) => ({ width: "100%", padding: 13, fontSize: 15, fontWeight: 700, borderRadius: 10, border: "none", cursor: "pointer", background: primary ? "linear-gradient(135deg,#0D6B5B,#0C2E24)" : "#F3F4F6", color: primary ? "#fff" : "#374151" });
-
   return (
     <div style={{ minHeight: "100vh", background: "linear-gradient(135deg,#0C2E24,#1A5744,#0C2E24)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-      <div style={{ background: "#fff", borderRadius: 20, padding: "36px 32px", width: "100%", maxWidth: 420, boxShadow: "0 24px 80px rgba(0,0,0,.35)" }}>
-        {/* Logo */}
-        <div style={{ textAlign: "center", marginBottom: 30 }}>
-          <div style={{ width: 60, height: 60, background: "linear-gradient(135deg,#0D6B5B,#34D399)", borderRadius: 16, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 28, marginBottom: 12 }}>💊</div>
-          <div style={{ fontSize: 23, fontWeight: 800, fontFamily: "'Playfair Display',serif", color: "#0C2E24" }}>A to Z Pharmacy</div>
-          <div style={{ fontSize: 12, color: "#999", marginTop: 3 }}>Management System</div>
-        </div>
-
-        {step === "email" ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <div>
-              <label style={{ fontSize: 11, fontWeight: 700, color: "#6B7280", display: "block", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>Email Address</label>
-              <input value={email} onChange={e => { setEmail(e.target.value); setErr(""); }}
-                placeholder="your@email.com" onKeyDown={e => e.key === "Enter" && sendOtp()}
-                style={inp} autoComplete="email" inputMode="email" type="email" />
-            </div>
-            {err && <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "10px 14px", color: "#DC2626", fontSize: 13 }}>{err}</div>}
-            <button onClick={sendOtp} disabled={loading} style={{ ...btn(true), opacity: loading ? 0.7 : 1 }}>
-              {loading ? "Sending OTP..." : "Send OTP →"}
-            </button>
-            <div style={{ textAlign: "center", fontSize: 12, color: "#9CA3AF", marginTop: 4 }}>
-              You'll receive a 6-digit code on your email
-            </div>
-          </div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <div style={{ background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 10, padding: "12px 16px" }}>
-              <div style={{ fontSize: 12, color: "#166534", fontWeight: 600 }}>OTP sent to</div>
-              <div style={{ fontSize: 14, color: "#0C2E24", fontWeight: 700, marginTop: 2 }}>{email}</div>
-            </div>
-            <div>
-              <label style={{ fontSize: 11, fontWeight: 700, color: "#6B7280", display: "block", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>Enter 6-Digit OTP</label>
-              <input value={otp} onChange={e => { setOtp(e.target.value.replace(/\D/g,"")); setErr(""); }}
-                placeholder="123456" maxLength={6} onKeyDown={e => e.key === "Enter" && verifyOtp()}
-                style={{ ...inp, fontSize: 28, fontWeight: 800, letterSpacing: 8, textAlign: "center" }}
-                inputMode="numeric" autoComplete="one-time-code" />
-            </div>
-            {info && <div style={{ background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 8, padding: "10px 14px", color: "#1D4ED8", fontSize: 12.5, whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{info}</div>}
-            {err && <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "10px 14px", color: "#DC2626", fontSize: 13 }}>{err}</div>}
-            <button onClick={verifyOtp} disabled={loading} style={{ ...btn(true), opacity: loading ? 0.7 : 1 }}>
-              {loading ? "Verifying..." : "Verify & Login →"}
-            </button>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <button onClick={() => { setStep("email"); setOtp(""); setErr(""); setInfo(""); }}
-                style={{ background: "none", border: "none", color: "#6B7280", fontSize: 13, cursor: "pointer", padding: 0 }}>
-                ← Change email
-              </button>
-              <button onClick={sendOtp} disabled={resendCd > 0 || loading}
-                style={{ background: "none", border: "none", color: resendCd > 0 ? "#9CA3AF" : "#0D6B5B", fontSize: 13, cursor: resendCd > 0 ? "default" : "pointer", fontWeight: 600, padding: 0 }}>
-                {resendCd > 0 ? `Resend in ${resendCd}s` : "Resend OTP"}
-              </button>
-            </div>
-          </div>
-        )}
-
-        <div style={{ marginTop: 24, paddingTop: 18, borderTop: "1px solid #F3F4F6", textAlign: "center", fontSize: 11.5, color: "#9CA3AF" }}>
-          🔒 Secure OTP login · No password needed
-        </div>
-      </div>
-    </div>
+      <div style={{ background: "#fff", borderRadius: 16, padding: 36, width: "100%", maxWidth: 400, boxShadow: "0 20px 60px rgba(0,0,0,.3)" }}>
+        <div style={{ textAlign: "center", marginBottom: 28 }}>
+          <div style={{ width: 56, height: 56, background: "linear-gradient(135deg,#0D6B5B,#34D399)", borderRadius: 14, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 26, marginBottom: 12 }}>💊</div>
+          <div style={{ fontSize: 22, fontWeight: 800, fontFamily: "'Playfair Display',serif", color: "#0C2E24" }}>A to Z Pharmacy</div>
+          <div style={{ fontSize: 12.5, color: "#999", marginTop: 4 }}>Management System</div></div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div><label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Email</label>
+            <input value={email} onChange={(e) => { setEmail(e.target.value); setErr(""); }} placeholder="owner@atozpharmacy.com" onKeyDown={(e) => e.key === "Enter" && go()} style={{ ...inps, padding: "12px 14px", fontSize: 15 }} /></div>
+          <div><label style={{ fontSize: 11, fontWeight: 600, color: "#888", display: "block", marginBottom: 4 }}>Password</label>
+            <input type="password" value={pass} onChange={(e) => { setPass(e.target.value); setErr(""); }} placeholder="Password" onKeyDown={(e) => e.key === "Enter" && go()} style={{ ...inps, padding: "12px 14px", fontSize: 15 }} /></div>
+          {err && <div style={{ color: "#DC2626", fontSize: 12.5, textAlign: "center" }}>{err}</div>}
+          <button onClick={go} disabled={loading} style={{ ...bts(true), padding: 13, fontSize: 15, width: "100%", opacity: loading ? 0.6 : 1 }}>{loading ? "Signing in..." : "Sign In"}</button></div>
+        <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid #eee", textAlign: "center", fontSize: 11, color: "#bbb" }}><b>Owner:</b> owner@atozpharmacy.com<br/><b>Staff:</b> staff@atozpharmacy.com</div>
+      </div></div>
   );
 }
+
 // ══════════════════════════════════════════════
 // SIDEBAR
 // ══════════════════════════════════════════════
-function Sidebar({ page, setPage, user, onLogout, counts, mob, sideOpen, setSideOpen, currentOutletId, switchOutlet }) {
+function Sidebar({ page, setPage, user, onLogout, counts, mob, sideOpen, setSideOpen }) {
   const isO = user.role === "owner";
-  // For owners: show all pages. For staff: show only their permitted pages.
-  const allowedPages = isO ? null : (user.pages || []);
-  const canSee = (id) => isO || (allowedPages && allowedPages.includes(id));
-  const nav = ALL_PAGES
-    .filter(p => canSee(p.id))
-    .map(p => ({ id: p.id, i: p.icon, l: p.label }));
+  const nav = [{ id: "dash", i: "📊", l: "Dashboard" }, ...(isO ? [{ id: "purch", i: "📦", l: "Purchases" }, { id: "returns", i: "↩️", l: "Returns" }] : []), { id: "inv", i: "💊", l: "Inventory" }, { id: "rack", i: "🗄", l: "Racks" }, ...(isO ? [{ id: "audit", i: "📝", l: "Audit" }] : []), { id: "bill", i: "🧾", l: "New Bill" }, ...(isO ? [{ id: "profit", i: "💹", l: "Profit Margin" }] : []), { id: "stock", i: "📋", l: "Stock" }, { id: "hist", i: "🗂", l: "Bills" }, ...(isO ? [{ id: "reports", i: "📑", l: "Reports" }] : []), { id: "customers", i: "👤", l: "Customers" }, { id: "compare", i: "⚖️", l: "Price Compare" }, { id: "ency", i: "📚", l: "Encyclopedia" }, ...(isO ? [{ id: "users", i: "👥", l: "Users" }, { id: "backup", i: "💾", l: "Backup" }] : [])];
   if (mob && !sideOpen) return null;
   return (
     <div>
       {mob && <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.4)", zIndex: 998 }} onClick={() => setSideOpen(false)} />}
       <div style={{ width: mob ? 260 : 210, background: "linear-gradient(180deg,#0C2E24,#153D31)", color: "#fff", display: "flex", flexDirection: "column", height: "100%", flexShrink: 0, ...(mob ? { position: "fixed", left: 0, top: 0, bottom: 0, zIndex: 999 } : {}) }}>
-        <div style={{ padding: "18px 16px", borderBottom: "1px solid rgba(255,255,255,.08)" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div><div style={{ fontSize: 9, letterSpacing: 3, opacity: .5, fontFamily: "monospace" }}>PHARMACY</div><div style={{ fontSize: 17, fontWeight: 800, fontFamily: "'Playfair Display',serif", marginTop: 2 }}>A to Z</div></div>
-            {mob && <button onClick={() => setSideOpen(false)} style={{ background: "none", border: "none", color: "#fff", fontSize: 20, cursor: "pointer" }}>X</button>}
-          </div>
-          {isO && <select value={currentOutletId} onChange={function(e) { switchOutlet(e.target.value); }} style={{ width: "100%", marginTop: 8, fontSize: 11, padding: "6px 8px", borderRadius: 6, border: "1px solid rgba(255,255,255,.2)", background: "rgba(52,211,153,.15)", color: "#34D399", fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
-            {Object.keys(OUTLETS).map(function(k) { return <option key={k} value={k} style={{ background: "#0C2E24", color: "#fff" }}>{OUTLETS[k].shortName}</option>; })}
-          </select>}
-          {!isO && user.outlets && user.outlets.length > 1 && <select value={currentOutletId} onChange={function(e) { switchOutlet(e.target.value); }} style={{ width: "100%", marginTop: 8, fontSize: 11, padding: "6px 8px", borderRadius: 6, border: "1px solid rgba(255,255,255,.2)", background: "rgba(52,211,153,.15)", color: "#34D399", fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
-            {user.outlets.map(function(k) { return OUTLETS[k] ? <option key={k} value={k} style={{ background: "#0C2E24", color: "#fff" }}>{OUTLETS[k].shortName}</option> : null; })}
-          </select>}
-          {!isO && (!user.outlets || user.outlets.length <= 1) && <div style={{ marginTop: 6, fontSize: 10, color: "#34D399", fontWeight: 600 }}>{PH.shortName || PH.name}</div>}
-        </div>
+        <div style={{ padding: "18px 16px", borderBottom: "1px solid rgba(255,255,255,.08)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div><div style={{ fontSize: 9, letterSpacing: 3, opacity: .5, fontFamily: "monospace" }}>PHARMACY</div><div style={{ fontSize: 17, fontWeight: 800, fontFamily: "'Playfair Display',serif", marginTop: 2 }}>A to Z</div></div>
+          {mob && <button onClick={() => setSideOpen(false)} style={{ background: "none", border: "none", color: "#fff", fontSize: 20, cursor: "pointer" }}>X</button>}</div>
         <div style={{ padding: "10px 14px", borderBottom: "1px solid rgba(255,255,255,.08)", display: "flex", gap: 10, alignItems: "center" }}>
           <div style={{ width: 30, height: 30, borderRadius: 8, background: "rgba(52,211,153,.2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13 }}>{isO ? "👑" : "👤"}</div>
           <div><div style={{ fontSize: 12, fontWeight: 600 }}>{user.name}</div><div style={{ fontSize: 10, opacity: .5, textTransform: "capitalize" }}>{user.role}</div></div></div>
@@ -1615,11 +1147,11 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm, inv, s
           alert("PDF parsed but no items detected. Try a cleaner PDF or CSV.");
         }
       } else {
-        setImgStatus("Sending to OCR.space...");
+        setImgStatus("Reading invoice...");
         const text = await extractImageBillText(file, (m) => {
           if (m && m.progress !== undefined) {
             const pct = Math.round(m.progress * 100);
-            setImgStatus("OCR.space reading bill... " + pct + "%");
+            setImgStatus("Reading invoice " + pct + "%...");
           }
         });
         setImgStatus("Parsing table structure...");
@@ -1627,7 +1159,7 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm, inv, s
         if (parsed.items && parsed.items.length > 0) {
           setRev({ ...parsed, srcType: "image", srcFile: file.name, rawText: text });
         } else {
-          alert("OCR ran but no medicine rows found.\n\nTips:\n• Use a clear, well-lit photo\n• Make sure BREVO_API_KEY and OCR_SPACE_KEY are set in Cloudflare Worker secrets\n• Try CSV export instead");
+          alert("OCR ran but could not find medicine rows.\n\nTips:\n• Use a straight, flat, well-lit photo\n• Make sure the full bill is in frame\n• Try CSV export from your distributor portal instead");
         }
       }
     } catch (err) {
@@ -1763,16 +1295,9 @@ function PurchPage({ purch, addPurchase, deletePurchase, mob, askConfirm, inv, s
           <b style={{ color: "#0D6B5B", fontSize: 14 }}>Total: Rs.{f2(rev.items.reduce((s, i) => s + (i.amount || purchCalcAmt(i)), 0))}</b></div>
       </div>) : (<div style={cds}>
         <div style={{ display: "flex", gap: 3, background: "#E8E4DD", borderRadius: 8, padding: 3, marginBottom: 16 }}>
-          {[["csv","CSV"],["image","Photo/PDF"],["aiExtract","AI Extract"],["manual","Manual"],["dist","Distributors"]].map(([id, l]) => <button key={id} onClick={() => setTab(id)} style={{ flex: 1, padding: 8, border: "none", borderRadius: 6, fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: tab === id ? "#fff" : "transparent", color: tab === id ? "#0D6B5B" : "#888", boxShadow: tab === id ? "0 1px 3px rgba(0,0,0,.1)" : "none" }}>{l}</button>)}</div>
+          {[["csv","CSV"],["image","Photo/PDF"],["manual","Manual"],["dist","Distributors"]].map(([id, l]) => <button key={id} onClick={() => setTab(id)} style={{ flex: 1, padding: 8, border: "none", borderRadius: 6, fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: tab === id ? "#fff" : "transparent", color: tab === id ? "#0D6B5B" : "#888", boxShadow: tab === id ? "0 1px 3px rgba(0,0,0,.1)" : "none" }}>{l}</button>)}</div>
         {tab === "csv" && <div style={{ border: "2px dashed #bbb", borderRadius: 10, padding: 36, textAlign: "center", cursor: "pointer", background: "#FAFAF7" }} onClick={() => csvR.current && csvR.current.click()}><input ref={csvR} type="file" accept=".csv" onChange={doCSV} style={{ display: "none" }} /><div style={{ fontSize: 36 }}>📄</div><div style={{ fontSize: 14, fontWeight: 600, color: "#555", marginTop: 8 }}>Upload CSV</div></div>}
-        {tab === "image" && <div style={{ border: "2px dashed #bbb", borderRadius: 10, padding: 36, textAlign: "center", cursor: "pointer", background: "#FAFAF7" }} onClick={() => !imgP && imgR.current && imgR.current.click()}><input ref={imgR} type="file" accept="image/*,.pdf,application/pdf" onChange={doImg} style={{ display: "none" }} />{imgP ? <div><div style={{ fontSize: 36 }}>🔄</div><div style={{ fontSize: 14, fontWeight: 600, color: "#0D6B5B", marginTop: 8 }}>{imgStatus || "Processing..."}</div><div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>OCR.space — do not close this page</div></div> : <div><div style={{ fontSize: 36 }}>📸</div><div style={{ fontSize: 14, fontWeight: 600, color: "#555", marginTop: 8 }}>Upload Invoice (Photo or PDF)</div></div>}</div>}
-        {tab === "aiExtract" && <div style={{ borderRadius: 10, overflow: "hidden", border: "1px solid #ddd", background: "#fff" }}>
-          <div style={{ padding: "10px 14px", background: "#F0FDF4", borderBottom: "1px solid #ddd", fontSize: 12 }}>
-            <span style={{ fontWeight: 700, color: "#0D6B5B" }}>🤖 AI Data Extraction</span>
-            <span style={{ color: "#888", marginLeft: 8 }}>Upload invoice photo/PDF → get structured table → copy to manual entry</span>
-          </div>
-          <iframe src="https://docstrange.nanonets.com/app" style={{ width: "100%", height: mob ? 500 : 650, border: "none" }} allow="camera; clipboard-read; clipboard-write" title="Nanonets AI Extract" />
-        </div>}
+        {tab === "image" && <div style={{ border: "2px dashed #bbb", borderRadius: 10, padding: 36, textAlign: "center", cursor: "pointer", background: "#FAFAF7" }} onClick={() => !imgP && imgR.current && imgR.current.click()}><input ref={imgR} type="file" accept="image/*,.pdf,application/pdf" onChange={doImg} style={{ display: "none" }} />{imgP ? <div><div style={{ fontSize: 36 }}>🔄</div><div style={{ fontSize: 14, fontWeight: 600, color: "#0D6B5B", marginTop: 8 }}>{imgStatus || "Processing..."}</div><div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>Advanced OCR — do not close this page</div></div> : <div><div style={{ fontSize: 36 }}>📸</div><div style={{ fontSize: 14, fontWeight: 600, color: "#555", marginTop: 8 }}>Upload Invoice (Photo or PDF)</div></div>}</div>}
         {tab === "manual" && <div>
           <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr 1fr", gap: 10, marginBottom: 14 }}>
             <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Supplier *</label><input value={mf.sup} onChange={(e) => setMf((f) => ({ ...f, sup: e.target.value }))} style={inps} /></div>
@@ -1956,16 +1481,7 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
           {templateLink && <a href={templateLink} download="AtoZ_Inventory_Template.csv" style={{ padding: "8px 16px", background: "#059669", color: "#fff", borderRadius: 7, fontSize: 12, fontWeight: 600, textDecoration: "none" }}>Download Template</a>}
           <input ref={bulkRef} type="file" accept=".csv" onChange={handleBulkCSV} style={{ display: "none" }} />
           <button onClick={() => bulkRef.current && bulkRef.current.click()} style={{ ...bts(true), fontSize: 12 }}>Upload CSV</button></div></div>}
-      <div style={{ position: "relative", marginBottom: 14 }}>
-      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, batch, UID, distributor... (tap mic)" style={{ ...inps, paddingRight: 40, width: "100%" }} />
-      <button onClick={function() {
-        var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-        if (!SR) { alert("Voice not supported"); return; }
-        var r = new SR(); r.lang = "en-IN"; r.continuous = false; r.interimResults = false;
-        r.onresult = function(e) { if (e.results && e.results[0]) { var t = e.results[0][0].transcript || ""; setQ(t.trim().replace(/[.,!?]+$/, "")); } };
-        r.onerror = function() {}; r.start();
-      }} style={{ position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 20, padding: 4 }} title="Voice Search">🎤</button>
-      </div>
+      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, batch, UID, distributor..." style={{ ...inps, marginBottom: 14 }} />
       {sf && <div style={{ ...cds, border: "2px solid #0D6B5B" }}><b style={{ color: "#0D6B5B" }}>{ed ? "Edit" : "Add"} Medicine</b>
         <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "1fr 1fr 1fr 1fr", gap: 10, marginTop: 12 }}>
           {[["name","Name*"],["manufacturer","Mfg"],["batch","Batch*"],["expiry","Expiry"],["pack","Pack"],["rack","Rack"],["distributor","Distributor"],["hsn","HSN"]].map(([k, l]) => <div key={k}><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>{l}</label><input value={fm[k] || ""} onChange={(e) => setFm((f) => ({ ...f, [k]: e.target.value }))} style={inps} /></div>)}
@@ -2073,16 +1589,15 @@ function InvPage({ inv, saveInv, isO, mob, askConfirm, bills, showBill }) {
 // ══════════════════════════════════════════════
 // BILLING PAGE
 // ══════════════════════════════════════════════
-function BillPage({ inv, saveInv, addBill, mob, showBill, user }) {
+function BillPage({ inv, saveInv, addBill, mob, showBill }) {
   const [pt, setPt] = useState(""); const [pc, setPc] = useState(""); const [pa, setPa] = useState(""); const [doc, setDoc] = useState(""); const [dc, setDc] = useState(""); const [pm, setPm] = useState("Cash");
   const [billDate, setBillDate] = useState(new Date().toISOString().slice(0, 10));
   const [items, setItems] = useState([]); const [sq, setSq] = useState(""); const [so, setSo] = useState(false); const [billDisc, setBillDisc] = useState(0);
-  const voiceActive = useRef(false); // prevents onBlur closing dropdown during voice recognition
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState(null);
   const camRef = useRef(null);
   const res = sq.length >= 1 ? inv.filter((m) => { const s = sq.toLowerCase(); return (m.name.toLowerCase().includes(s) || m.batch.toLowerCase().includes(s) || (m.uid || "") === sq.toUpperCase() || (m.uid || "").toLowerCase().includes(s)) && m.stock > 0; }).slice(0, 8) : [];
-  const addIt = (med) => { const ex = items.findIndex((i) => i.mid === med.id && !i.loose); if (ex >= 0) setItems((p) => p.map((i, idx) => idx === ex ? { ...i, qty: i.qty + 1 } : i)); else setItems((p) => [...p, { mid: med.id, name: med.name, manufacturer: med.manufacturer || "", pack: med.pack || "", batch: med.batch, expiry: med.expiry, mrp: med.mrp, ptr: med.ptr || 0, gstRate: med.gstRate || 5, qty: 1, discount: 0, loose: false, packQty: med.packQty || 0, unitPrice: med.mrp, unitPtr: med.ptr || 0, uid: med.uid || "", rack: med.rack || "", purchaseBillNo: med.purchaseBillNo || "", purchaseDistributor: med.purchaseDistributor || med.distributor || "", purchaseDate: med.purchaseDate || "", unitCost: med.unitCost || 0, purchDiscPct: med.purchDiscPct || 0, purchSchemePct: med.purchSchemePct || 0, purchFreeRatio: med.purchFreeRatio || 1 }]); setSq(""); setSo(false); };
+  const addIt = (med) => { const ex = items.findIndex((i) => i.mid === med.id && !i.loose); if (ex >= 0) setItems((p) => p.map((i, idx) => idx === ex ? { ...i, qty: i.qty + 1 } : i)); else setItems((p) => [...p, { mid: med.id, name: med.name, manufacturer: med.manufacturer || "", pack: med.pack || "", batch: med.batch, expiry: med.expiry, mrp: med.mrp, ptr: med.ptr || 0, gstRate: med.gstRate || 5, qty: 1, discount: 0, loose: false, packQty: med.packQty || 0, unitPrice: med.mrp, unitPtr: med.ptr || 0, uid: med.uid || "", purchaseBillNo: med.purchaseBillNo || "", purchaseDistributor: med.purchaseDistributor || med.distributor || "", purchaseDate: med.purchaseDate || "", unitCost: med.unitCost || 0, purchDiscPct: med.purchDiscPct || 0, purchSchemePct: med.purchSchemePct || 0, purchFreeRatio: med.purchFreeRatio || 1 }]); setSq(""); setSo(false); };
 
   // Camera scan - reads medicine strip/box image using local Tesseract.js v5 OCR (no API needed)
   const doScan = async (e) => {
@@ -2322,7 +1837,7 @@ function BillPage({ inv, saveInv, addBill, mob, showBill, user }) {
       }
     }
     var chosenDate = billDate ? new Date(billDate + "T" + new Date().toLocaleTimeString("en-US", { hour12: false, timeZone: "Asia/Kolkata" })) : new Date(getIST());
-    const bill = { billNo: mkBill(), date: chosenDate.toISOString(), dateIST: chosenDate.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true }), patient: pt, patientContact: pc, patientAddress: pa, doctor: doc, doctorContact: dc, paymentMode: pm, createdBy: user ? (user.name || user.email) : "", items: items.map((i) => ({ ...i, amount: ca(i) })), totalMRP: tMRP, totalDiscount: tDisc, billDiscount: billDisc, netAmount: net, cgst: tGST / 2, sgst: tGST / 2 };
+    const bill = { billNo: mkBill(), date: chosenDate.toISOString(), dateIST: chosenDate.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true }), patient: pt, patientContact: pc, patientAddress: pa, doctor: doc, doctorContact: dc, paymentMode: pm, items: items.map((i) => ({ ...i, amount: ca(i) })), totalMRP: tMRP, totalDiscount: tDisc, billDiscount: billDisc, netAmount: net, cgst: tGST / 2, sgst: tGST / 2 };
     const updInv = inv.map((m) => { const sold = items.filter((i) => i.mid === m.id); if (!sold.length) return m; const totalSold = sold.reduce((s, i) => i.loose ? s + (i.qty / (i.packQty || 10)) : s + i.qty, 0); var newMrp = m.mrp; var fullPack = sold.find(function(i) { return !i.loose && i.unitPrice !== m.mrp; }); if (fullPack) newMrp = fullPack.unitPrice; return { ...m, stock: Math.max(0, Math.round((m.stock - totalSold) * 10000) / 10000), mrp: newMrp }; });
     saveInv(updInv); addBill(bill); showBill(bill); setPt(""); setPc(""); setPa(""); setDoc(""); setDc(""); setItems([]); setPm("Cash"); setBillDisc(0); setBillDiscPct(0); setBillDate(new Date().toISOString().slice(0, 10)); };
 
@@ -2330,25 +1845,13 @@ function BillPage({ inv, saveInv, addBill, mob, showBill, user }) {
     <div><h2 style={hds}>New Bill</h2>
       <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr", gap: 14, marginBottom: 14 }}>
         <div style={cds}><b style={{ color: "#0D6B5B", fontSize: 13 }}>Patient</b><div style={{ display: "grid", gap: 8, marginTop: 10 }}><input value={pt} onChange={(e) => setPt(e.target.value)} placeholder="Patient Name *" style={inps} /><input value={pc} onChange={(e) => setPc(e.target.value)} placeholder="Contact" style={inps} /><input value={pa} onChange={(e) => setPa(e.target.value)} placeholder="Address" style={inps} /></div></div>
-        <div style={cds}><b style={{ color: "#0D6B5B", fontSize: 13 }}>Doctor, Payment & Date</b><div style={{ display: "grid", gap: 8, marginTop: 10 }}><input value={doc} onChange={(e) => setDoc(e.target.value)} placeholder="Doctor" style={inps} /><input value={dc} onChange={(e) => setDc(e.target.value)} placeholder="Doctor Contact" style={inps} /><select value={pm} onChange={(e) => setPm(e.target.value)} style={{ ...inps, background: "#fff" }}>{"Cash,UPI,Debit Card,Credit Card,Pending".split(",").map((m) => <option key={m}>{m}</option>)}</select><div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Bill Date (IST)</label><input type="date" value={billDate} onChange={(e) => setBillDate(e.target.value)} style={inps} /></div></div></div></div>
+        <div style={cds}><b style={{ color: "#0D6B5B", fontSize: 13 }}>Doctor, Payment & Date</b><div style={{ display: "grid", gap: 8, marginTop: 10 }}><input value={doc} onChange={(e) => setDoc(e.target.value)} placeholder="Doctor" style={inps} /><input value={dc} onChange={(e) => setDc(e.target.value)} placeholder="Doctor Contact" style={inps} /><select value={pm} onChange={(e) => setPm(e.target.value)} style={{ ...inps, background: "#fff" }}>{"Cash,UPI,Card,Credit".split(",").map((m) => <option key={m}>{m}</option>)}</select><div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Bill Date (IST)</label><input type="date" value={billDate} onChange={(e) => setBillDate(e.target.value)} style={inps} /></div></div></div></div>
       <div style={cds}><b style={{ color: "#0D6B5B", fontSize: 13 }}>Add Medicines</b>
         <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
           <div style={{ flex: 1, position: "relative", minWidth: 200 }}>
-            <div style={{ position: "relative", flex: 1 }}>
-            <input value={sq} onChange={(e) => { setSq(e.target.value); setSo(true); }} onFocus={() => setSo(true)} onBlur={() => setTimeout(() => { if (!voiceActive.current) setSo(false); }, 250)} placeholder="Name or UID... (tap mic to speak)" style={{ ...inps, fontSize: 15, padding: "12px 14px", paddingRight: 40, border: "2px solid #D4D0C8", width: "100%" }} />
-            <button onClick={function() {
-              var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-              if (!SR) { alert("Voice not supported"); return; }
-              var r = new SR(); r.lang = "en-IN"; r.continuous = false; r.interimResults = false;
-              voiceActive.current = true;
-              r.onresult = function(e) { if (e.results && e.results[0]) { var t = e.results[0][0].transcript || ""; setSq(t.trim().replace(/[.,!?]+$/, "")); setSo(true); } };
-              r.onerror = function() { voiceActive.current = false; };
-              r.onend = function() { voiceActive.current = false; setSo(true); };
-              r.start();
-            }} style={{ position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 20, padding: 4 }} title="Voice Search">🎤</button>
-            </div>
+            <input value={sq} onChange={(e) => { setSq(e.target.value); setSo(true); }} onFocus={() => setSo(true)} onBlur={() => setTimeout(() => setSo(false), 200)} placeholder="Name or UID..." style={{ ...inps, fontSize: 15, padding: "12px 14px", border: "2px solid #D4D0C8" }} />
             {so && res.length > 0 && <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: "1px solid #ddd", borderRadius: 8, boxShadow: "0 8px 24px rgba(0,0,0,.12)", maxHeight: 220, overflowY: "auto", zIndex: 100 }}>
-              {res.map((m) => (<button key={m.id} onClick={() => addIt(m)} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", width: "100%", padding: "10px 14px", border: "none", borderBottom: "1px solid #f5f5f0", background: m.stock <= 0 ? "#FEF2F2" : "transparent", cursor: "pointer", textAlign: "left", fontSize: 13 }}><span style={{ flex: 1, minWidth: 0 }}><span style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}><b style={{ color: "#0C2E24" }}>{m.name}</b>{m.uid && <span style={{ color: "#7C3AED", fontSize: 10 }}>({m.uid})</span>}{m.rack && <span style={{ background: "#FEF3C7", color: "#92400E", borderRadius: 4, padding: "1px 6px", fontSize: 10, fontWeight: 700 }}>🗄 {m.rack}</span>}</span><span style={{ fontSize: 11, color: "#888", display: "block", marginTop: 2 }}>Batch: {m.batch || "—"}{m.expiry ? " · Exp: " + m.expiry : ""}{m.distributor ? " · " + m.distributor : ""}</span></span><span style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3, marginLeft: 10, whiteSpace: "nowrap" }}><span style={{ fontWeight: 700, fontSize: 12, color: m.stock <= 0 ? "#DC2626" : m.stock < 3 ? "#D97706" : "#059669", background: m.stock <= 0 ? "#FEE2E2" : m.stock < 3 ? "#FEF3C7" : "#D1FAE5", padding: "2px 6px", borderRadius: 4 }}>{fStock(m.stock, m.packQty)}</span><span style={{ color: "#0D6B5B", fontWeight: 600, fontSize: 12 }}>Rs.{f2(m.mrp)}</span></span></button>))}</div>}</div>
+              {res.map((m) => (<button key={m.id} onClick={() => addIt(m)} style={{ display: "flex", justifyContent: "space-between", width: "100%", padding: "10px 14px", border: "none", borderBottom: "1px solid #f5f5f0", background: m.stock <= 0 ? "#FEF2F2" : "transparent", cursor: "pointer", textAlign: "left", fontSize: 13 }}><span><b>{m.name}</b> {m.uid && <span style={{ color: "#7C3AED", fontSize: 10 }}>({m.uid})</span>} - {m.batch}</span><span style={{ display: "flex", gap: 8, alignItems: "center", whiteSpace: "nowrap", marginLeft: 8 }}><span style={{ fontWeight: 700, fontSize: 12, color: m.stock <= 0 ? "#DC2626" : m.stock < 3 ? "#D97706" : "#059669", background: m.stock <= 0 ? "#FEE2E2" : m.stock < 3 ? "#FEF3C7" : "#D1FAE5", padding: "2px 6px", borderRadius: 4 }}>{fStock(m.stock, m.packQty)}</span><span style={{ color: "#0D6B5B", fontWeight: 600 }}>Rs.{f2(m.mrp)}</span></span></button>))}</div>}</div>
           <div>
             <input ref={camRef} type="file" accept="image/*" onChange={doScan} style={{ display: "none" }} />
             <button onClick={() => camRef.current && camRef.current.click()} disabled={scanning} style={{ ...bts(false), padding: "12px 16px", fontSize: 13, opacity: scanning ? 0.6 : 1 }}>{scanning ? "Reading..." : "📷 Scan / Upload"}</button>
@@ -2698,7 +2201,7 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
       }, 0);
       var ret = { id: mkId(), billNo: retBill.billNo, patient: retBill.patient, date: new Date().toISOString(), items: returnItems, refundAmount: Math.round(refundAmt * 100) / 100 };
       // Save to Firebase
-      db.ref(getOutletPath("billReturns/" + ret.id)).set(ret);
+      db.ref("billReturns/" + ret.id).set(ret);
 
       // Add stock back to inventory
       var updInv = inv.map(function(m) {
@@ -2763,7 +2266,7 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
           <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr 1fr", gap: 8, marginBottom: 12 }}>
             <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Patient</label><input value={editBill.patient} onChange={(e) => setEditBill((p) => ({ ...p, patient: e.target.value }))} style={inps} /></div>
             <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Doctor</label><input value={editBill.doctor || ""} onChange={(e) => setEditBill((p) => ({ ...p, doctor: e.target.value }))} style={inps} /></div>
-            <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Payment</label><select value={editBill.paymentMode} onChange={(e) => setEditBill((p) => ({ ...p, paymentMode: e.target.value }))} style={{ ...inps, background: "#fff" }}>{["Cash","UPI","Debit Card","Credit Card","Pending"].map((m) => <option key={m}>{m}</option>)}</select></div></div>
+            <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Payment</label><select value={editBill.paymentMode} onChange={(e) => setEditBill((p) => ({ ...p, paymentMode: e.target.value }))} style={{ ...inps, background: "#fff" }}>{["Cash","UPI","Card","Credit"].map((m) => <option key={m}>{m}</option>)}</select></div></div>
           <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: 650 }}><thead><tr>
             {["Medicine","Type","Qty","Price","Disc%","Disc Rs","GST%","Amt",""].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
             {editBill.items.map((it, i) => {
@@ -2838,9 +2341,9 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, deleteBi
 
   const BILL_COLS = [
     { key: "bill", label: "Bill No" }, { key: "date", label: "Date" }, { key: "patient", label: "Patient" },
-    { key: "amount", label: "Amount" }, { key: "pay", label: "Payment" }, { key: "billedby", label: "Billed By" },
+    { key: "amount", label: "Amount" }, { key: "pay", label: "Payment" },
   ];
-  const [colVis, setColVis] = React.useState({ bill: true, date: true, patient: true, amount: true, pay: true, billedby: true });
+  const [colVis, setColVis] = React.useState({ bill: true, date: true, patient: true, amount: true, pay: true });
   const sh = (k) => colVis[k] !== false;
 
   const toggleSort = (col) => {
@@ -2866,7 +2369,6 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, deleteBi
     else if (sortCol === "patient") { va = (a.patient || "").toLowerCase(); vb = (b.patient || "").toLowerCase(); }
     else if (sortCol === "amount") { va = a.netAmount; vb = b.netAmount; }
     else if (sortCol === "pay") { va = (a.paymentMode || ""); vb = (b.paymentMode || ""); }
-    else if (sortCol === "billedby") { va = (a.createdBy || "").toLowerCase(); vb = (b.createdBy || "").toLowerCase(); }
     else { va = 0; vb = 0; }
     if (va < vb) return sortDir === "asc" ? -1 : 1;
     if (va > vb) return sortDir === "asc" ? 1 : -1;
@@ -2893,7 +2395,7 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, deleteBi
                 <Tag bg={b.paymentMode === "Cash" ? "#D1FAE5" : "#DBEAFE"} fg={b.paymentMode === "Cash" ? "#065F46" : "#1E40AF"}>{b.paymentMode}</Tag></div>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6, fontSize: 12 }}>
-              <span style={{ fontWeight: 600 }}>{b.patient}</span>
+              <span><b>{b.patient}</b></span>
               <span style={{ color: "#888" }}>{b.items.length} item(s)</span>
             </div>
             <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
@@ -2915,7 +2417,6 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, deleteBi
               <SortTh col="patient" label="Patient" />
               <SortTh col="amount" label="Amount" />
               <SortTh col="pay" label="Pay" />
-              <SortTh col="billedby" label="Billed By" />
               <th style={ths}>Items</th>
               <th style={ths}></th>
               <th style={ths}></th>
@@ -2932,7 +2433,6 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, deleteBi
                       {sh("patient") && <td style={{ ...tds, fontWeight: 500 }}>{b.patient}</td>}
                       {sh("amount") && <td style={{ ...tds, fontWeight: 700 }}>Rs.{f2(b.netAmount)}</td>}
                       {sh("pay") && <td style={tds}><Tag bg={b.paymentMode === "Cash" ? "#D1FAE5" : "#DBEAFE"} fg={b.paymentMode === "Cash" ? "#065F46" : "#1E40AF"}>{b.paymentMode}</Tag></td>}
-                      {sh("billedby") && <td style={{ ...tds, fontSize: 12, color: "#6B7280" }}>{b.createdBy || <span style={{ color: "#D1D5DB" }}>—</span>}</td>}
                       <td style={tds}><button onClick={() => setExpanded(isOpen ? null : b.billNo)} style={{ ...bts(false), padding: "4px 10px", fontSize: 11, background: isOpen ? "#D1FAE5" : undefined, color: isOpen ? "#065F46" : undefined }}>{isOpen ? "▲ Hide" : "▼ " + b.items.length + " items"}</button></td>
                       <td style={tds}><button onClick={() => showBill(b, true)} style={{ ...bts(true), padding: "5px 12px", fontSize: 11 }}>View</button></td>
                       <td style={tds}><button onClick={() => setEditBill(b)} style={{ ...bts(false), padding: "5px 12px", fontSize: 11 }}>Edit</button></td>
@@ -2944,13 +2444,12 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, deleteBi
                           <div style={{ overflowX: "auto", padding: "8px 12px" }}>
                             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                               <thead><tr>
-                                {["Medicine","Rack","Batch","Qty","Price","Purchase Bill","Distributor","Purchase Date"].map((h) => <th key={h} style={{ ...ths, fontSize: 11, background: "#DCFCE7" }}>{h}</th>)}
+                                {["Medicine","Batch","Qty","Price","Purchase Bill","Distributor","Purchase Date"].map((h) => <th key={h} style={{ ...ths, fontSize: 11, background: "#DCFCE7" }}>{h}</th>)}
                               </tr></thead>
                               <tbody>
                                 {b.items.map((it, i) => (
                                   <tr key={i}>
                                     <td style={{ ...tds, fontWeight: 500 }}>{it.name}{it.loose ? <span style={{ color: "#B45309", fontSize: 10, marginLeft: 4 }}>[Loose]</span> : ""}</td>
-                                    <td style={{ ...tds }}>{it.rack ? <span style={{ background: "#FEF3C7", color: "#92400E", borderRadius: 4, padding: "2px 7px", fontSize: 11, fontWeight: 700 }}>🗄 {it.rack}</span> : <span style={{ color: "#D1D5DB" }}>—</span>}</td>
                                     <td style={{ ...tds, fontFamily: "monospace", fontSize: 11 }}>{it.batch || "-"}</td>
                                     <td style={tds}>{it.qty}{it.loose ? " pcs" : ""}</td>
                                     <td style={tds}>Rs.{f2(it.unitPrice || it.mrp)}</td>
@@ -2979,233 +2478,21 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, deleteBi
 // ══════════════════════════════════════════════
 // USERS PAGE
 // ══════════════════════════════════════════════
-function UsersPage({ sessions, mob, user }) {
-  const [users, setUsers] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [showAdd, setShowAdd] = useState(false);
-  const [editUser, setEditUser] = useState(null); // user being edited
-  const [newEmail, setNewEmail] = useState("");
-  const [newName, setNewName] = useState("");
-  const [newPages, setNewPages] = useState(ALL_PAGES.map(p => p.id)); // default: all checked
-  const [newOutlets, setNewOutlets] = useState(Object.keys(OUTLETS)); // default: all outlets
-  const [saving, setSaving] = useState(false);
-  const [msg, setMsg] = useState("");
-
-  // Load all user profiles from Firebase
-  const loadUsers = async () => {
-    setLoading(true);
-    try {
-      const snap = await new Promise(res => db.ref("userProfiles").once("value", res));
-      const data = snap.val() || {};
-      const list = Object.entries(data).map(([key, val]) => ({ ...val, _key: key }));
-      setUsers(list);
-    } catch(e) { console.error(e); }
-    setLoading(false);
-  };
-
-  useEffect(() => { loadUsers(); }, []);
-
-  const resetForm = () => { setNewEmail(""); setNewName(""); setNewPages(ALL_PAGES.map(p => p.id)); setNewOutlets(Object.keys(OUTLETS)); setShowAdd(false); setEditUser(null); setMsg(""); };
-
-  const saveUser = async () => {
-    const em = (editUser ? editUser.email : newEmail).trim().toLowerCase();
-    const nm = newName.trim();
-    if (!em.includes("@")) { setMsg("❌ Enter a valid email"); return; }
-    if (!nm) { setMsg("❌ Enter a name"); return; }
-    if (OWNER_EMAILS.includes(em)) { setMsg("❌ This email is an owner — cannot add as staff"); return; }
-    setSaving(true); setMsg("");
-    try {
-      await saveUserProfile(em, {
-        email: em, name: nm,
-        role: "staff",
-        pages: newPages,
-        outlets: newOutlets,
-        addedBy: user.email,
-        addedAt: editUser ? (editUser.addedAt || new Date().toISOString()) : new Date().toISOString(),
-        lastLogin: editUser ? (editUser.lastLogin || null) : null,
-        disabled: editUser ? (editUser.disabled || false) : false,
-      });
-      setMsg("✅ User " + (editUser ? "updated" : "added") + " successfully!");
-      await loadUsers();
-      setTimeout(resetForm, 1500);
-    } catch(e) { setMsg("❌ Failed: " + e.message); }
-    setSaving(false);
-  };
-
-  const toggleDisable = async (u) => {
-    if (!window.confirm((u.disabled ? "Re-enable" : "Disable") + " " + u.name + "?")) return;
-    await saveUserProfile(u.email, { ...u, disabled: !u.disabled });
-    await loadUsers();
-  };
-
-  const deleteUser = async (u) => {
-    if (!window.confirm("Delete " + u.name + " (" + u.email + ")? They will not be able to login.")) return;
-    const key = u.email.replace(/\./g, "_").replace(/@/g, "__");
-    await db.ref("userProfiles/" + key).remove();
-    await loadUsers();
-  };
-
-  const startEdit = (u) => {
-    setEditUser(u);
-    setNewName(u.name || "");
-    setNewPages(u.pages || ALL_PAGES.map(p => p.id));
-    setNewOutlets(u.outlets || Object.keys(OUTLETS));
-    setShowAdd(true);
-  };
-
-  const togglePage = (id) => {
-    setNewPages(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
-  };
-
-  const inp = { width: "100%", border: "1.5px solid #E5E7EB", borderRadius: 10, padding: "11px 14px", fontSize: 14, outline: "none", background: "#FAFAF7", fontFamily: "inherit" };
-
+function UsersPage({ sessions, mob }) {
   return (
-    <div style={{ maxWidth: 800, margin: "0 auto" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-        <h2 style={hds}>Users & Roles</h2>
-        {!showAdd && <button onClick={() => { resetForm(); setShowAdd(true); }} style={{ ...bts(true), padding: "9px 18px", fontSize: 13 }}>+ Add User</button>}
-      </div>
-
-      {/* ── Add / Edit User Form ── */}
-      {showAdd && (
-        <div style={{ ...cds, marginBottom: 20, background: "#F0FDF4", border: "1.5px solid #86EFAC" }}>
-          <div style={{ fontWeight: 700, fontSize: 16, color: "#0C2E24", marginBottom: 16 }}>
-            {editUser ? "✏️ Edit User: " + editUser.name : "➕ Add New User"}
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            {!editUser && (
-              <div>
-                <label style={{ fontSize: 11, fontWeight: 700, color: "#6B7280", display: "block", marginBottom: 5, textTransform: "uppercase" }}>Email Address *</label>
-                <input value={newEmail} onChange={e => setNewEmail(e.target.value)} placeholder="staff@email.com" style={inp} type="email" />
-              </div>
-            )}
-            {editUser && (
-              <div style={{ background: "#fff", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: "#374151" }}>
-                <b>Email:</b> {editUser.email}
-              </div>
-            )}
-            <div>
-              <label style={{ fontSize: 11, fontWeight: 700, color: "#6B7280", display: "block", marginBottom: 5, textTransform: "uppercase" }}>Display Name *</label>
-              <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="e.g. Ramesh Kumar" style={inp} />
-            </div>
-
-            {/* Outlet Assignment */}
-            <div>
-              <label style={{ fontSize: 11, fontWeight: 700, color: "#6B7280", display: "block", marginBottom: 8, textTransform: "uppercase" }}>
-                Outlet Access (which stores can this user access)
-              </label>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-                {Object.keys(OUTLETS).map(oid => {
-                  const o = OUTLETS[oid];
-                  const checked = newOutlets.includes(oid);
-                  return (
-                    <label key={oid} style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 14px", borderRadius: 8, cursor: "pointer", background: checked ? "#DBEAFE" : "#F9FAFB", border: "1.5px solid " + (checked ? "#60A5FA" : "#E5E7EB"), fontSize: 13, userSelect: "none" }}>
-                      <input type="checkbox" checked={checked} onChange={() => setNewOutlets(prev => prev.includes(oid) ? prev.filter(x => x !== oid) : [...prev, oid])} style={{ width: 15, height: 15, accentColor: "#2563EB" }} />
-                      <div>
-                        <div style={{ fontWeight: checked ? 700 : 400, color: checked ? "#1E40AF" : "#555" }}>🏪 {o.shortName}</div>
-                        <div style={{ fontSize: 10, color: "#9CA3AF", marginTop: 1 }}>{o.name}</div>
-                      </div>
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Page Permissions */}
-            <div>
-              <label style={{ fontSize: 11, fontWeight: 700, color: "#6B7280", display: "block", marginBottom: 8, textTransform: "uppercase" }}>
-                Page Access (check what this user can see)
-              </label>
-              <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
-                <button onClick={() => setNewPages(ALL_PAGES.map(p => p.id))} style={{ ...bts(false), padding: "5px 12px", fontSize: 11 }}>Select All</button>
-                <button onClick={() => setNewPages([])} style={{ ...bts(false), padding: "5px 12px", fontSize: 11 }}>Clear All</button>
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-                {ALL_PAGES.map(p => (
-                  <label key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", borderRadius: 8, cursor: "pointer", background: newPages.includes(p.id) ? "#DCFCE7" : "#F9FAFB", border: "1.5px solid " + (newPages.includes(p.id) ? "#4ADE80" : "#E5E7EB"), fontSize: 13, userSelect: "none" }}>
-                    <input type="checkbox" checked={newPages.includes(p.id)} onChange={() => togglePage(p.id)} style={{ width: 15, height: 15, accentColor: "#0C2E24" }} />
-                    <span>{p.icon}</span> <span style={{ fontWeight: newPages.includes(p.id) ? 600 : 400 }}>{p.label}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            {msg && <div style={{ padding: "10px 14px", borderRadius: 8, background: msg.startsWith("✅") ? "#F0FDF4" : "#FEF2F2", color: msg.startsWith("✅") ? "#166534" : "#DC2626", fontSize: 13 }}>{msg}</div>}
-
-            <div style={{ display: "flex", gap: 10 }}>
-              <button onClick={saveUser} disabled={saving} style={{ ...bts(true), padding: "10px 24px", flex: 1, opacity: saving ? 0.7 : 1 }}>{saving ? "Saving..." : (editUser ? "Update User" : "Add User")}</button>
-              <button onClick={resetForm} style={{ ...bts(false), padding: "10px 24px" }}>Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Owners (hardcoded) ── */}
+    <div><h2 style={hds}>Users and Sessions</h2>
       <div style={cds}>
-        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12, color: "#92400E" }}>👑 Owners (Full Access)</div>
-        {OWNER_EMAILS.map(em => (
-          <div key={em} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", background: "#FEF3C7", borderRadius: 10, marginBottom: 8, border: "1px solid #FDE68A" }}>
-            <div>
-              <div style={{ fontWeight: 700, fontSize: 14 }}>{em === "krishkwish@gmail.com" ? "Krish" : "Saloni"}</div>
-              <div style={{ fontSize: 11, color: "#92400E", fontFamily: "monospace" }}>{em}</div>
-            </div>
-            <Tag bg="#FEF3C7" fg="#92400E">OWNER</Tag>
-          </div>
-        ))}
-      </div>
-
-      {/* ── Staff Users ── */}
-      <div style={cds}>
-        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>👤 Staff Users</div>
-        {loading && <div style={{ color: "#9CA3AF", fontSize: 13, padding: 12 }}>Loading users...</div>}
-        {!loading && users.length === 0 && <div style={{ color: "#9CA3AF", fontSize: 13, padding: 12 }}>No staff users yet. Click "Add User" to get started.</div>}
-        {users.map(u => (
-          <div key={u._key} style={{ border: "1.5px solid " + (u.disabled ? "#FEE2E2" : "#E5E7EB"), borderRadius: 12, padding: "14px 16px", marginBottom: 10, background: u.disabled ? "#FFF7F7" : "#FAFAF7" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 8 }}>
-              <div>
-                <div style={{ fontWeight: 700, fontSize: 14, color: u.disabled ? "#9CA3AF" : "#0C2E24" }}>{u.name} {u.disabled && <span style={{ fontSize: 11, color: "#DC2626" }}>(disabled)</span>}</div>
-                <div style={{ fontSize: 11.5, color: "#6B7280", fontFamily: "monospace", marginTop: 2 }}>{u.email}</div>
-                <div style={{ fontSize: 11, color: "#9CA3AF", marginTop: 3 }}>
-                  Last login: {u.lastLogin ? new Date(u.lastLogin).toLocaleDateString("en-IN") : "Never"} &nbsp;·&nbsp; Added: {u.addedAt ? new Date(u.addedAt).toLocaleDateString("en-IN") : "—"}
-                </div>
-              </div>
-              <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
-                <button onClick={() => startEdit(u)} style={{ ...bts(false), padding: "6px 14px", fontSize: 12 }}>Edit</button>
-                <button onClick={() => toggleDisable(u)} style={{ ...bts(false), padding: "6px 14px", fontSize: 12, color: u.disabled ? "#059669" : "#D97706" }}>{u.disabled ? "Enable" : "Disable"}</button>
-                <button onClick={() => deleteUser(u)} style={{ ...bts(false), padding: "6px 14px", fontSize: 12, color: "#DC2626" }}>Delete</button>
-              </div>
-            </div>
-            {/* Page access chips */}
-            <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 5 }}>
-              {(u.outlets || Object.keys(OUTLETS)).map(oid => {
-                const o = OUTLETS[oid];
-                return o ? <span key={oid} style={{ background: "#DBEAFE", color: "#1E40AF", borderRadius: 6, padding: "3px 9px", fontSize: 11, fontWeight: 600 }}>🏪 {o.shortName}</span> : null;
-              })}
-              {(u.pages || ALL_PAGES.map(p => p.id)).map(pid => {
-                const pg = ALL_PAGES.find(x => x.id === pid);
-                return pg ? <span key={pid} style={{ background: "#DCFCE7", color: "#166534", borderRadius: 6, padding: "3px 9px", fontSize: 11, fontWeight: 600 }}>{pg.icon} {pg.label}</span> : null;
-              })}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* ── Active Sessions ── */}
-      {sessions.length > 0 && (
-        <div style={cds}>
-          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>🟢 Active Sessions</div>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
-              {["User","Device","Last Active"].map(h => <th key={h} style={ths}>{h}</th>)}
-            </tr></thead><tbody>
-              {sessions.map((s, i) => <tr key={i}><td style={tds}>{s.user}</td><td style={tds}>{s.device}</td><td style={tds}>{s.lastActive}</td></tr>)}
-            </tbody></table>
-          </div>
-        </div>
-      )}
-    </div>
+        <b>Login Accounts</b>
+        <p style={{ fontSize: 12, color: "#888", margin: "8px 0" }}>Manage users in Firebase Console &gt; Authentication &gt; Users</p>
+        <div style={{ overflowX: "auto", marginTop: 10 }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
+          {["Email","Role"].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
+          {Object.entries(ROLES).map(([email, role]) => (<tr key={email}><td style={{ ...tds, fontFamily: "monospace" }}>{email}</td>
+            <td style={tds}><Tag bg={role === "owner" ? "#FEF3C7" : "#DBEAFE"} fg={role === "owner" ? "#92400E" : "#1E40AF"}>{role.toUpperCase()}</Tag></td></tr>))}</tbody></table></div></div>
+      {sessions.length > 0 && <div style={cds}><b>Active Sessions</b><div style={{ overflowX: "auto", marginTop: 10 }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>{["User","Device","Last Active"].map((h) => <th key={h} style={ths}>{h}</th>)}</tr></thead><tbody>
+        {sessions.map((s, i) => (<tr key={i}><td style={tds}>{s.user}</td><td style={tds}>{s.device}</td><td style={tds}>{s.lastActive}</td></tr>))}</tbody></table></div></div>}</div>
   );
 }
+
 // ══════════════════════════════════════════════
 // PURCHASE TRACEABILITY MIGRATION HELPER
 // ══════════════════════════════════════════════
@@ -3288,8 +2575,8 @@ function BackupPage({ inv, bills, purch, saveAll, askConfirm, saveInv, saveBills
   useEffect(() => {
     fbListen("returns", (data) => { setReturns(data ? Object.values(data) : []); });
     fbListen("billReturns", (data) => { setBillReturns(data ? Object.values(data) : []); });
-    db.ref(getOutletPath("racks")).once("value").then(function(s) { setRacks(s.val()); });
-    db.ref(getOutletPath("audits")).once("value").then(function(s) { setAudits(s.val()); });
+    db.ref("racks").once("value").then(function(s) { setRacks(s.val()); });
+    db.ref("audits").once("value").then(function(s) { setAudits(s.val()); });
   }, []);
 
   const doBackup = () => {
@@ -3357,39 +2644,6 @@ function BackupPage({ inv, bills, purch, saveAll, askConfirm, saveInv, saveBills
 
   return (
     <div><h2 style={hds}>Backup, Restore, Reset</h2>
-        {/* Multi-Outlet Data Migration */}
-        <div style={{ ...cds, marginTop: 20, border: "2px solid #0D6B5B" }}>
-          <b style={{ color: "#0D6B5B", fontSize: 14 }}>Multi-Outlet Data Migration</b>
-          <p style={{ fontSize: 12, color: "#555", marginTop: 6, lineHeight: 1.6 }}>
-            Migrate existing flat data (at root level) into the current outlet's namespace.
-            This copies inventory, bills, purchases, returns, racks, audits, and customers from <b>/inventory</b> to <b>/outlets/{getCurrentOutlet()}/inventory</b> etc.
-          </p>
-          <p style={{ fontSize: 11, color: "#D97706", marginTop: 6 }}>Current outlet: <b>{getCurrentOutlet()}</b> ({PH.shortName}). Only run this ONCE per outlet.</p>
-          <button onClick={function() {
-            askConfirm("Migrate ALL root data to outlet '" + getCurrentOutlet() + "' (" + PH.shortName + ")? This copies data - original root data stays intact.", function() {
-              var outletId = getCurrentOutlet();
-              var paths = ["inventory", "bills", "purchases", "returns", "billReturns", "racks", "audits", "customers", "ledger"];
-              var done = 0;
-              paths.forEach(function(p) {
-                db.ref(p).once("value").then(function(snap) {
-                  var val = snap.val();
-                  if (val) {
-                    db.ref("outlets/" + outletId + "/" + p).set(val).then(function() {
-                      done++;
-                      if (done === paths.length) {
-                        alert("Migration complete! " + done + " data paths copied to outlets/" + outletId + "/. Reload the page.");
-                        window.location.reload();
-                      }
-                    });
-                  } else { done++; if (done === paths.length) { alert("Migration complete! Reload the page."); window.location.reload(); } }
-                });
-              });
-            });
-          }} style={{ ...bts(true), marginTop: 10, padding: "10px 20px", background: "#0D6B5B" }}>
-            Migrate Root Data to {getCurrentOutlet()}
-          </button>
-        </div>
-
       <div style={{ ...cds, marginBottom: 14, fontSize: 12, color: "#555" }}>
         <b>Data Summary:</b> {inv.length} medicines, {bills.length} bills, {purch.length} purchases, {returns.length} purchase returns, {billReturns.length} bill returns
       </div>
@@ -3657,75 +2911,6 @@ function BackupPage({ inv, bills, purch, saveAll, askConfirm, saveInv, saveBills
     </div>
   );
 }
-function BillExpandedRow({ b, bills, calcItemProfit, calcBillProfit, getStockForItem, showBill, setPage, saveBills }) {
-  var isMigrated = b.items.some(function(it) { return it.marginPct !== undefined; });
-  var [localItems, setLocalItems] = useState(b.items);
-  var [dirty, setDirty] = useState(false);
-  var calcLocal = function(items) {
-    var tSale = 0, tCost = 0, tDisc = 0;
-    items.forEach(function(it) { var iP = calcItemProfit(it); tSale += iP.netSale; tCost += iP.totalCost; tDisc += (it.unitPrice || it.mrp) * it.qty * (it.discount || 0) / 100; });
-    tDisc += (b.billDiscount || 0);
-    var net = tSale - (b.billDiscount || 0);
-    return { netSale: net, totalCost: tCost, totalDisc: tDisc, profit: net - tCost, margin: net > 0 ? ((net - tCost) / net * 100) : 0 };
-  };
-  var lp = calcLocal(localItems);
-  return <div style={{ padding: 14, background: "#fff", overflowX: "auto" }}>
-    {isMigrated && <div style={{ fontSize: 11, color: "#2563EB", marginBottom: 8, fontWeight: 600 }}>✏️ PTR is editable — change it to correct the profit margin for this migrated bill.</div>}
-    <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
-      {["Medicine","Type","Qty","Sale Price","Disc%","Sale Amt", isMigrated ? "PTR (edit)" : "PTR","GST%","Cost","Profit","Margin%","Stock"].map(function(h) { return <th key={h} style={{ ...ths, fontSize: 10, background: "#DCFCE7" }}>{h}</th>; })}</tr></thead><tbody>
-      {localItems.map(function(it, i) {
-        var iP = calcItemProfit(it);
-        var iM = iP.netSale > 0 ? (iP.profit / iP.netSale * 100) : 0;
-        var sl = getStockForItem(it);
-        var ptrVal = it.unitPtr || (it.loose && it.ptr ? it.ptr / (it.packQty || 10) : it.ptr) || 0;
-        return <tr key={i}>
-          <td style={{ ...tds, fontWeight: 500 }}>{it.name}</td>
-          <td style={tds}>{it.loose ? <Tag bg="#FEF3C7" fg="#92400E">Loose</Tag> : <Tag bg="#DBEAFE" fg="#1E40AF">Pack</Tag>}</td>
-          <td style={tds}>{it.qty}{it.loose ? " pcs" : ""}</td>
-          <td style={tds}>Rs.{f2(it.unitPrice || it.mrp)}</td>
-          <td style={tds}>{it.discount || 0}%</td>
-          <td style={{ ...tds, fontWeight: 600 }}>Rs.{f2(iP.netSale)}</td>
-          <td style={{ ...tds, padding: "2px 4px" }}>
-            {isMigrated
-              ? <input type="number" step="0.01" defaultValue={f2(ptrVal)} onBlur={function(e) {
-                  var newPtr = parseFloat(e.target.value) || 0;
-                  if (Math.abs(newPtr - ptrVal) < 0.001) return;
-                  setLocalItems(function(prev) { return prev.map(function(x, j) {
-                    if (j !== i) return x;
-                    var updPtr = x.loose ? newPtr * (x.packQty || 10) : newPtr;
-                    return Object.assign({}, x, { ptr: updPtr, unitPtr: newPtr, unitCost: 0, purchDiscPct: 0, purchSchemePct: 0, purchFreeRatio: 1 });
-                  }); });
-                  setDirty(true);
-                }} style={{ width: 60, border: "1px solid #93C5FD", borderRadius: 4, padding: "2px 4px", fontSize: 11, textAlign: "right", background: "#EFF6FF", fontFamily: "inherit" }} />
-              : <span style={{ color: "#2563EB", fontSize: 11 }}>Rs.{f2(ptrVal)}</span>}
-          </td>
-          <td style={{ ...tds, fontSize: 11 }}>{it.gstRate || 0}%</td>
-          <td style={{ ...tds, color: "#B45309" }}>Rs.{f2(iP.totalCost)}</td>
-          <td style={{ ...tds, fontWeight: 700, color: iP.profit >= 0 ? "#059669" : "#DC2626" }}>Rs.{f2(iP.profit)}</td>
-          <td style={{ ...tds, fontWeight: 600, color: iM >= 20 ? "#059669" : iM >= 10 ? "#D97706" : "#DC2626" }}>{f2(iM)}%</td>
-          <td style={tds}><span style={{ fontWeight: 600, color: sl === "0" ? "#DC2626" : "#059669" }}>{sl}</span></td>
-        </tr>;
-      })}</tbody></table>
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8, paddingTop: 8, borderTop: "1px solid #eee", flexWrap: "wrap", gap: 8 }}>
-      <div style={{ display: "flex", gap: 6 }}>
-        <button onClick={function() { showBill(b, true); }} style={{ ...bts(true), padding: "6px 14px", fontSize: 11 }}>View Bill</button>
-        <button onClick={function() { setPage("hist"); setTimeout(function() { window.dispatchEvent(new CustomEvent("editBill", { detail: b.billNo })); }, 300); }} style={{ ...bts(false), padding: "6px 14px", fontSize: 11 }}>Edit Bill</button>
-        {isMigrated && dirty && <button onClick={function() {
-          var updatedBills = bills.map(function(x) { return x.billNo === b.billNo ? Object.assign({}, x, { items: localItems }) : x; });
-          saveBills(updatedBills);
-          setDirty(false);
-          alert("PTR saved for bill " + b.billNo + ". Margins updated.");
-        }} style={{ border: "none", borderRadius: 7, padding: "6px 14px", fontWeight: 700, cursor: "pointer", fontSize: 11, background: "#059669", color: "#fff", fontFamily: "inherit" }}>💾 Save PTR Changes</button>}
-      </div>
-      <div style={{ display: "flex", gap: 12, fontSize: 12 }}>
-        {lp.totalDisc > 0 && <span style={{ color: "#DC2626" }}>Discounts: -Rs.{f2(lp.totalDisc)}</span>}
-        <span style={{ color: "#B45309" }}>Total Cost: Rs.{f2(lp.totalCost)}</span>
-        <span style={{ fontWeight: 800, color: lp.profit >= 0 ? "#059669" : "#DC2626" }}>Net Profit: Rs.{f2(lp.profit)} ({f2(lp.margin)}%)</span>
-      </div>
-    </div>
-  </div>;
-}
-
 function ProfitPage({ bills, inv, mob, purch, saveBills, showBill, setPage }) {
   const [view, setView] = useState("bill");
   const [profitSearch, setProfitSearch] = useState("");
@@ -3956,16 +3141,51 @@ function ProfitPage({ bills, inv, mob, purch, saveBills, showBill, setPage }) {
                   <span style={{ color: "#888" }}>{isExp ? "\u25B2" : "\u25BC"}</span>
                 </div>
               </div>
-              {isExp && <BillExpandedRow b={b} bills={bills} calcItemProfit={calcItemProfit} calcBillProfit={calcBillProfit} getStockForItem={getStockForItem} showBill={showBill} setPage={setPage} saveBills={saveBills} />}
+              {isExp && <div style={{ padding: 14, background: "#fff", overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
+                  {["Medicine","Type","Qty","Sale Price","Disc%","Sale Amt","PTR","GST%","Cost","Profit","Margin%","Stock"].map(function(h) { return <th key={h} style={{ ...ths, fontSize: 10, background: "#DCFCE7" }}>{h}</th>; })}</tr></thead><tbody>
+                  {b.items.map(function(it, i) {
+                    var iP = calcItemProfit(it);
+                    var iM = iP.netSale > 0 ? (iP.profit / iP.netSale * 100) : 0;
+                    var sl = getStockForItem(it);
+                    var ptrVal = it.unitPtr || (it.loose && it.ptr ? it.ptr / (it.packQty || 10) : it.ptr) || 0;
+                    return <tr key={i}>
+                      <td style={{ ...tds, fontWeight: 500 }}>{it.name}</td>
+                      <td style={tds}>{it.loose ? <Tag bg="#FEF3C7" fg="#92400E">Loose</Tag> : <Tag bg="#DBEAFE" fg="#1E40AF">Pack</Tag>}</td>
+                      <td style={tds}>{it.qty}{it.loose ? " pcs" : ""}</td>
+                      <td style={tds}>Rs.{f2(it.unitPrice || it.mrp)}</td>
+                      <td style={tds}>{it.discount || 0}%</td>
+                      <td style={{ ...tds, fontWeight: 600 }}>Rs.{f2(iP.netSale)}</td>
+                      <td style={{ ...tds, color: "#2563EB", fontSize: 11 }}>Rs.{f2(ptrVal)}</td>
+                      <td style={{ ...tds, fontSize: 11 }}>{it.gstRate || 0}%</td>
+                      <td style={{ ...tds, color: "#B45309" }}>Rs.{f2(iP.totalCost)}</td>
+                      <td style={{ ...tds, fontWeight: 700, color: iP.profit >= 0 ? "#059669" : "#DC2626" }}>Rs.{f2(iP.profit)}</td>
+                      <td style={{ ...tds, fontWeight: 600, color: iM >= 20 ? "#059669" : iM >= 10 ? "#D97706" : "#DC2626" }}>{f2(iM)}%</td>
+                      <td style={tds}><span style={{ fontWeight: 600, color: sl === "0" ? "#DC2626" : "#059669" }}>{sl}</span></td>
+                    </tr>;
+                  })}</tbody></table>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8, paddingTop: 8, borderTop: "1px solid #eee", flexWrap: "wrap", gap: 8 }}>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button onClick={function() { showBill(b, true); }} style={{ ...bts(true), padding: "6px 14px", fontSize: 11 }}>View Bill</button>
+                    <button onClick={function() { setPage("hist"); setTimeout(function() { window.dispatchEvent(new CustomEvent("editBill", { detail: b.billNo })); }, 300); }} style={{ ...bts(false), padding: "6px 14px", fontSize: 11 }}>Edit Bill</button>
+                  </div>
+                  <div style={{ display: "flex", gap: 12, fontSize: 12 }}>
+                    {p.totalDisc > 0 && <span style={{ color: "#DC2626" }}>Discounts: -Rs.{f2(p.totalDisc)}</span>}
+                    <span style={{ color: "#B45309" }}>Total Cost: Rs.{f2(p.totalCost)}</span>
+                    <span style={{ fontWeight: 800, color: p.profit >= 0 ? "#059669" : "#DC2626" }}>Net Profit: Rs.{f2(p.profit)} ({f2(p.margin)}%)</span>
+                  </div>
+                </div>
+              </div>}
             </div>;
           })}
         </div>}
-
-        
       </div>
     </div>
   );
 }
+
+// ══════════════════════════════════════════════
+// RACK MANAGEMENT PAGE
 // ══════════════════════════════════════════════
 function RackPage({ inv, saveInv, mob }) {
   const [selected, setSelected] = useState([]);
@@ -4180,7 +3400,7 @@ function AuditPage({ inv, mob }) {
     };
 
     // Save to Firebase
-    db.ref(getOutletPath("audits/" + report.id)).set(report);
+    db.ref("audits/" + report.id).set(report);
     setAuditReport(report);
     setAuditStarted(false);
   };
@@ -4213,26 +3433,8 @@ function AuditPage({ inv, mob }) {
       </div>
 
       {/* Action buttons */}
-      {!auditStarted && !auditReport && <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+      {!auditStarted && !auditReport && <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
         <button onClick={startAudit} style={{ ...bts(true), padding: "12px 28px", fontSize: 14 }}>Start New Audit</button>
-        <button onClick={function() {
-          var html = "<html><head><title>Inventory Audit Sheet - " + new Date().toLocaleDateString("en-IN") + "</title><style>body{font-family:sans-serif;font-size:11px;padding:20px;max-width:1000px;margin:0 auto}table{width:100%;border-collapse:collapse;margin:8px 0}th,td{border:1px solid #999;padding:5px 7px;font-size:10px;text-align:left}th{background:#eee;font-weight:700}h2,h3{margin:6px 0}h3{margin-top:16px;border-bottom:1px solid #ccc;padding-bottom:4px}.blank{background:#f9f9f9}@media print{button{display:none}}</style></head><body>";
-          html += "<h2>A to Z Pharmacy &mdash; Inventory Audit Sheet</h2>";
-          html += "<p><b>Date:</b> " + new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: true }) + " &nbsp;|&nbsp; <b>Total Items:</b> " + inv.length + " &nbsp;|&nbsp; Audited by: ___________________</p>";
-          var rackGroups = {};
-          inv.forEach(function(m) { var r = m.rack || "Unassigned"; if (!rackGroups[r]) rackGroups[r] = []; rackGroups[r].push(m); });
-          Object.keys(rackGroups).sort().forEach(function(rack) {
-            var meds = rackGroups[rack];
-            html += "<h3>" + rack + " &nbsp;(" + meds.length + " items)</h3>";
-            html += "<table><thead><tr><th>#</th><th>Medicine</th><th>Batch</th><th>Expiry</th><th>System Stock</th><th>Actual Stock</th><th>Difference</th><th>MRP</th></tr></thead><tbody>";
-            meds.forEach(function(m, i) {
-              html += "<tr class='blank'><td>" + (i+1) + "</td><td><b>" + m.name + "</b></td><td style='font-family:monospace'>" + (m.batch || "-") + "</td><td>" + (m.expiry || "-") + "</td><td style='text-align:center;font-weight:700'>" + fStock(m.stock, m.packQty) + "</td><td style='text-align:center'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</td><td style='text-align:center'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</td><td>Rs." + f2(m.mrp) + "</td></tr>";
-            });
-            html += "</tbody></table>";
-          });
-          html += "</body></html>";
-          var w = window.open("", "_blank"); if (w) { w.document.write(html); w.document.close(); w.print(); }
-        }} style={{ ...bts(false), padding: "12px 28px", fontSize: 14 }}>🖨 Print Audit Sheet</button>
       </div>}
 
       {auditStarted && <div style={{ ...cds, background: "#FFFBEB", border: "2px solid #F59E0B", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
@@ -4391,7 +3593,7 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm, bills, s
         if (idx >= 0) nextInv[idx] = Object.assign({}, nextInv[idx], { stock: (Number(nextInv[idx].stock) || 0) + qty });
       });
       saveInv(nextInv);
-      db.ref(getOutletPath("returns/" + r.id)).remove();
+      db.ref("returns/" + r.id).remove();
       alert("Purchase return cancelled.");
     });
   };
@@ -4406,7 +3608,7 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm, bills, s
         if (idx >= 0) nextInv[idx] = Object.assign({}, nextInv[idx], { stock: Math.max(0, (Number(nextInv[idx].stock) || 0) - qty) });
       });
       saveInv(nextInv);
-      db.ref(getOutletPath("billReturns/" + r.id)).remove();
+      db.ref("billReturns/" + r.id).remove();
       alert("Bill return cancelled.");
     });
   };
@@ -4496,6 +3698,9 @@ function ReturnsPage({ purch, inv, saveInv, savePurch, mob, askConfirm, bills, s
   );
 }
 
+// ══════════════════════════════════════════════
+// ENCYCLOPEDIA (MedGuide India Live)
+// ══════════════════════════════════════════════
 // ══════════════════════════════════════════════
 // PRICE COMPARE DASHBOARD  -  mirrors dashboard UI
 // ══════════════════════════════════════════════
@@ -5358,6 +4563,140 @@ function ComparePage({ inv, mob }) {
   );
 }
 
+function EncyclopediaPage({ inv, mob }) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState(null);
+  const [alts, setAlts] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [altsLoading, setAltsLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  var searchBrand = function(q) {
+    if (!q.trim()) return;
+    setLoading(true); setResults(null); setAlts(null); setError("");
+    var url = "https://www.medguideindia.info/show_brand.php?search_type=brand&brandname=" + encodeURIComponent(q.trim()) + "&submit=FIND";
+    fetch(PROXY_URL + "/medguide?url=" + encodeURIComponent(url))
+    .then(function(r) { if (!r.ok) throw new Error("Status " + r.status); return r.text(); })
+    .then(function(html) {
+      var parsed = parseMedGuideHTML(html);
+      setResults(parsed);
+      setLoading(false);
+      if (parsed.length > 0 && parsed[0].constituents) searchAlts(parsed[0].constituents);
+    })
+    .catch(function(err) { setError("Could not reach MedGuide India. Please update Cloudflare Worker with /medguide route."); setLoading(false); });
+  };
+
+  var searchAlts = function(constituents) {
+    var parts = constituents.split(/[,;+&]/).map(function(p) { return p.trim(); });
+    var main = "";
+    for (var i = 0; i < parts.length; i++) {
+      var c = parts[i].replace(/[-]\s*[\d.]+\s*(%|mg|ml|gm|mcg|iu|g|w\/v|w\/w)/gi, "").trim();
+      if (c.length > 2 && c.match(/[a-zA-Z]/)) { main = c; break; }
+    }
+    if (!main) return;
+    setAltsLoading(true);
+    var url = "https://www.medguideindia.info/show_brand.php?search_type=generic&genericname=" + encodeURIComponent(main) + "&submit=FIND";
+    fetch(PROXY_URL + "/medguide?url=" + encodeURIComponent(url))
+    .then(function(r) { return r.text(); })
+    .then(function(html) { setAlts({ generic: main, items: parseMedGuideHTML(html) }); setAltsLoading(false); })
+    .catch(function() { setAltsLoading(false); });
+  };
+
+  var doSearch = function() { searchBrand(query); };
+
+  return (
+    <div><h2 style={hds}>Medicine Encyclopedia</h2>
+      <div style={{ fontSize: 12, color: "#888", marginBottom: 14 }}>Search 50,000+ Indian medicine brands  -  powered by MedGuide India</div>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+        <input value={query} onChange={function(e){setQuery(e.target.value);}} onKeyDown={function(e){if(e.key==="Enter")doSearch();}} placeholder="Type brand or medicine name..." style={{ ...inps, flex: 1, fontSize: 16, padding: "14px 18px" }} />
+        <button onClick={doSearch} disabled={loading} style={{ ...bts(true), padding: "14px 28px", fontSize: 14, opacity: loading ? 0.6 : 1 }}>{loading ? "Searching..." : "Search"}</button>
+      </div>
+
+      {error && <div style={{ padding: "12px 16px", background: "#FEF3C7", border: "1px solid #D97706", borderRadius: 10, fontSize: 13, color: "#92400E", marginBottom: 16 }}>{error}</div>}
+
+      {loading && <div style={{ ...cds, textAlign: "center", padding: 40 }}><div style={{ fontSize: 32, marginBottom: 8 }}>🔍</div><div style={{ color: "#888", fontSize: 14 }}>Searching MedGuide India...</div></div>}
+
+      {/* Results as cards */}
+      {results && results.length > 0 && results.map(function(r, i) {
+        var isInv = inv.some(function(im) { return im.name.toLowerCase().indexOf(r.name.split("(")[0].trim().toLowerCase()) >= 0; });
+        var invItems = inv.filter(function(im) { return im.name.toLowerCase().indexOf(r.name.split("(")[0].trim().toLowerCase()) >= 0; });
+        return <div key={i} style={{ ...cds, borderLeft: "4px solid #0D6B5B", marginBottom: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+            <div>
+              <div style={{ fontSize: 20, fontWeight: 800, color: "#0C2E24" }}>{r.name}</div>
+              <div style={{ fontSize: 13, color: "#888", marginTop: 2 }}>{r.manufacturer}</div>
+            </div>
+            <div style={{ display: "flex", gap: 5 }}>
+              {r.type && <Tag bg="#F3E8FF" fg="#6B21A8">{r.type}</Tag>}
+              {isInv && <Tag bg="#D1FAE5" fg="#065F46">IN STOCK</Tag>}
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr 1fr", gap: 12, marginTop: 14 }}>
+            <div style={{ padding: "10px 14px", background: "#F5F3EE", borderRadius: 10 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#888", marginBottom: 4 }}>CONSTITUENTS</div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#0D6B5B" }}>{r.constituents || "-"}</div>
+            </div>
+            <div style={{ padding: "10px 14px", background: "#F5F3EE", borderRadius: 10 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#888", marginBottom: 4 }}>UNIT / PACKAGE</div>
+              <div style={{ fontSize: 13 }}>{r.unit || "-"} / {r.packageUnit || "-"}</div>
+            </div>
+            <div style={{ padding: "10px 14px", background: "#F0FDF4", borderRadius: 10, border: "1px solid #D1FAE5" }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#888", marginBottom: 4 }}>PRICE</div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: "#0D6B5B" }}>Rs. {r.price || "-"}</div>
+              {r.pricePerUnit && <div style={{ fontSize: 11, color: "#888" }}>{r.pricePerUnit}/unit</div>}
+            </div>
+          </div>
+          {isInv && invItems.length > 0 && <div style={{ marginTop: 10, padding: "8px 12px", background: "#F0FDF4", borderRadius: 8, border: "1px solid #059669" }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#059669", marginBottom: 4 }}>Your Inventory</div>
+            {invItems.map(function(im) { return <div key={im.id} style={{ fontSize: 12 }}>{im.name} | Batch: {im.batch || "-"} | Stock: {fStock(im.stock, im.packQty)} | MRP: Rs.{f2(im.mrp)}</div>; })}
+          </div>}
+          {r.constituents && i === 0 && !alts && !altsLoading && <button onClick={function() { searchAlts(r.constituents); }} style={{ marginTop: 10, border: "none", borderRadius: 8, padding: "8px 18px", fontWeight: 600, cursor: "pointer", fontSize: 12, background: "#7C3AED", color: "#fff" }}>Find Alternatives</button>}
+        </div>;
+      })}
+
+      {results && results.length === 0 && !loading && <div style={{ ...cds, textAlign: "center", padding: 30, color: "#888" }}>No brands found for "<b>{query}</b>"</div>}
+
+      {/* Alternatives */}
+      {altsLoading && <div style={{ ...cds, textAlign: "center", padding: 24, borderLeft: "4px solid #7C3AED" }}><div style={{ color: "#888", fontSize: 13 }}>Finding alternative brands...</div></div>}
+      {alts && alts.items && alts.items.length > 0 && <div style={{ ...cds, borderLeft: "4px solid #7C3AED" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div><b style={{ fontSize: 15, color: "#7C3AED" }}>Alternatives for "{alts.generic}"</b><div style={{ fontSize: 11, color: "#888" }}>{alts.items.length} brand(s) found with same salt</div></div>
+        </div>
+        <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
+          {["#","Brand","Type","Constituents","Price","Manufacturer","Stock"].map(function(h) { return <th key={h} style={ths}>{h}</th>; })}</tr></thead><tbody>
+          {alts.items.map(function(r, i) {
+            var isInv = inv.some(function(im) { return im.name.toLowerCase().indexOf(r.name.split("(")[0].trim().toLowerCase()) >= 0; });
+            return <tr key={i} style={{ background: isInv ? "#F0FDF4" : i % 2 === 0 ? "transparent" : "#FAFAF7" }}>
+              <td style={{ ...tds, color: "#888" }}>{i + 1}</td>
+              <td style={{ ...tds, fontWeight: 600 }}>{r.name}</td>
+              <td style={tds}>{r.type || "-"}</td>
+              <td style={{ ...tds, fontSize: 11 }}>{r.constituents || "-"}</td>
+              <td style={{ ...tds, fontWeight: 600, color: "#0D6B5B" }}>Rs.{r.price || "-"}</td>
+              <td style={{ ...tds, fontSize: 11, color: "#888" }}>{r.manufacturer || "-"}</td>
+              <td style={tds}>{isInv ? <Tag bg="#D1FAE5" fg="#065F46">Yes</Tag> : ""}</td>
+            </tr>;
+          })}</tbody></table></div>
+      </div>}
+
+      {/* Empty state */}
+      {!results && !loading && <div style={{ textAlign: "center", padding: 50, color: "#888" }}>
+        <div style={{ fontSize: 56, marginBottom: 16, opacity: 0.3 }}>📚</div>
+        <div style={{ fontSize: 18, fontWeight: 700, color: "#555", marginBottom: 8 }}>Medicine Encyclopedia</div>
+        <div style={{ fontSize: 13, marginBottom: 20, color: "#888" }}>Search across 50,000+ Indian medicine brands with live data from MedGuide India</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center", maxWidth: 550, margin: "0 auto" }}>
+          {["Dolo 650","Crocin","Azithromycin","Pan 40","Augmentin","Metformin","Combiflam","Cetirizine","Betadine","Montair LC","Diclofenac","Omeprazole","Losartan","Amoxicillin","Atorvastatin","Clopidogrel","Shelcal","Becosules"].map(function(s) {
+            return <button key={s} onClick={function() { setQuery(s); searchBrand(s); }} style={{ padding: "7px 16px", background: "#F5F3EE", border: "1px solid #E8E4DD", borderRadius: 20, fontSize: 12, cursor: "pointer", color: "#555" }}>{s}</button>;
+          })}
+        </div>
+      </div>}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════
+// REPORTS PAGE (with Profit Margin)
+// ══════════════════════════════════════════════
 function ReportsPage({ bills, inv, mob, showBill }) {
   const [period, setPeriod] = useState("today");
   const [from, setFrom] = useState("");
@@ -5534,7 +4873,6 @@ function ReportsPage({ bills, inv, mob, showBill }) {
         <Stat icon="🏷" label="Discounts" value={"Rs." + f2(totalDisc)} color="#DC2626" />
         <Stat icon="📈" label={"Profit (" + f2(totalMargin) + "%)"} value={"Rs." + f2(totalProfit)} color={totalProfit >= 0 ? "#059669" : "#DC2626"} />
         <Stat icon="🚫" label="Out of Stock" value={inv.filter(function(m) { return !m.stock || m.stock <= 0; }).length} color="#DC2626" />
-        <Stat icon="⏰" label="Expiring (90d)" value={inv.filter(function(m) { if (!m.expiry || (m.stock||0) <= 0) return false; var parts = String(m.expiry).split(/[-\/]/); var yr, mo; if (parts.length === 2) { if (parts[0].length === 4) { yr=parseInt(parts[0]); mo=parseInt(parts[1]); } else if (parts[1].length === 4) { yr=parseInt(parts[1]); mo=parseInt(parts[0]); } else { yr=2000+parseInt(parts[1]); mo=parseInt(parts[0]); } } else if (parts.length === 3) { var p0=parseInt(parts[0]),p2=parseInt(parts[2]); if (parts[0].length===4||p0>31) { yr=p0; mo=parseInt(parts[1]); } else if (parts[2].length===4||p2>31) { yr=p2; mo=parseInt(parts[1]); } else { yr=2000+p2; mo=parseInt(parts[1]); } } else return false; if(yr<100)yr=2000+yr; var ed=new Date(yr,(mo||1)-1,28); return (ed-new Date())/86400000<=90 && (ed-new Date())/86400000>0; }).length} color="#D97706" />
       </div>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
@@ -5748,13 +5086,13 @@ function CustomersPage({ bills, mob, showBill }) {
   var addCustomer = function() {
     if (!newCust.name.trim()) { alert("Name required"); return; }
     var c = { id: mkId(), name: newCust.name.trim(), contact: newCust.contact.trim(), address: newCust.address.trim(), source: "manual", addedDate: new Date().toISOString() };
-    db.ref(getOutletPath("customers/" + c.id)).set(c);
+    db.ref("customers/" + c.id).set(c);
     setNewCust({ name: "", contact: "", address: "" });
     setAddMode(false);
   };
 
   var deleteCustomer = function(id) {
-    db.ref(getOutletPath("customers/" + id)).remove();
+    db.ref("customers/" + id).remove();
   };
 
   // Get bills for a customer
@@ -5834,606 +5172,6 @@ function CustomersPage({ bills, mob, showBill }) {
   );
 }
 
-// ══════════════════════════════════════════════
-// EXPIRY MANAGEMENT PAGE
-// ══════════════════════════════════════════════
-function ExpiryPage({ inv, mob }) {
-  const [filter, setFilter] = useState("90");
-  const [q, setQ] = useState("");
-  const [sortBy, setSortBy] = useState("expiry");
-
-  var today = new Date();
-  var getExpiryDate = function(m) {
-    if (!m.expiry) return null;
-    var parts = String(m.expiry).split(/[-\/]/);
-    if (parts.length === 2) {
-      // YYYY-MM or MM-YY
-      var a = parseInt(parts[0]), b = parseInt(parts[1]);
-      if (parts[0].length === 4) return new Date(a, b - 1, 28); // 2028-03
-      if (parts[1].length === 4) return new Date(b, a - 1, 28); // 03-2028
-      // MM/YY
-      return new Date(2000 + b, a - 1, 28);
-    }
-    if (parts.length === 3) {
-      // Find which part is the year (4 digits or > 31)
-      var p = parts.map(function(x) { return parseInt(x); });
-      var yr, mo;
-      if (parts[0].length === 4 || p[0] > 31) { yr = p[0]; mo = p[1]; } // YYYY-MM-DD
-      else if (parts[2].length === 4 || p[2] > 31) { yr = p[2]; mo = p[1]; } // DD-MM-YYYY or MM-DD-YYYY
-      else { yr = 2000 + p[2]; mo = p[1]; } // DD-MM-YY
-      if (yr < 100) yr = 2000 + yr;
-      return new Date(yr, (mo || 1) - 1, 28);
-    }
-    return null;
-  };
-
-  var getDaysLeft = function(m) {
-    var ed = getExpiryDate(m);
-    if (!ed) return 9999;
-    return Math.floor((ed - today) / (1000 * 60 * 60 * 24));
-  };
-
-  var getStatus = function(days) {
-    if (days <= 0) return { label: "EXPIRED", color: "#DC2626", bg: "#FEF2F2" };
-    if (days <= 30) return { label: "< 1 Month", color: "#DC2626", bg: "#FEF2F2" };
-    if (days <= 60) return { label: "< 2 Months", color: "#EA580C", bg: "#FFF7ED" };
-    if (days <= 90) return { label: "< 3 Months", color: "#D97706", bg: "#FFFBEB" };
-    if (days <= 180) return { label: "< 6 Months", color: "#CA8A04", bg: "#FEFCE8" };
-    return { label: "OK", color: "#059669", bg: "#F0FDF4" };
-  };
-
-  var filtered = inv.filter(function(m) {
-    if (!m.expiry || (m.stock || 0) <= 0) return false;
-    var days = getDaysLeft(m);
-    if (filter === "expired") return days <= 0;
-    if (filter === "30") return days > 0 && days <= 30;
-    if (filter === "60") return days > 0 && days <= 60;
-    if (filter === "90") return days > 0 && days <= 90;
-    if (filter === "180") return days > 0 && days <= 180;
-    if (filter === "all") return true;
-    return days <= parseInt(filter) || 90;
-  }).filter(function(m) {
-    if (!q) return true;
-    var lq = q.toLowerCase();
-    return m.name.toLowerCase().indexOf(lq) >= 0 || (m.batch || "").toLowerCase().indexOf(lq) >= 0 || (m.manufacturer || "").toLowerCase().indexOf(lq) >= 0;
-  });
-
-  if (sortBy === "expiry") filtered.sort(function(a, b) { return getDaysLeft(a) - getDaysLeft(b); });
-  else if (sortBy === "name") filtered.sort(function(a, b) { return a.name.localeCompare(b.name); });
-  else if (sortBy === "stock") filtered.sort(function(a, b) { return (b.stock || 0) - (a.stock || 0); });
-  else if (sortBy === "value") filtered.sort(function(a, b) { return (b.mrp * (b.stock || 0)) - (a.mrp * (a.stock || 0)); });
-
-  // Summary counts
-  var expiredCount = inv.filter(function(m) { return m.expiry && (m.stock || 0) > 0 && getDaysLeft(m) <= 0; }).length;
-  var in30 = inv.filter(function(m) { return m.expiry && (m.stock || 0) > 0 && getDaysLeft(m) > 0 && getDaysLeft(m) <= 30; }).length;
-  var in60 = inv.filter(function(m) { return m.expiry && (m.stock || 0) > 0 && getDaysLeft(m) > 30 && getDaysLeft(m) <= 60; }).length;
-  var in90 = inv.filter(function(m) { return m.expiry && (m.stock || 0) > 0 && getDaysLeft(m) > 60 && getDaysLeft(m) <= 90; }).length;
-  var totalAtRisk = filtered.reduce(function(s, m) { return s + (m.mrp * (m.stock || 0)); }, 0);
-  var noExpiry = inv.filter(function(m) { return (m.stock || 0) > 0 && !m.expiry; }).length;
-
-  var printReport = function() {
-    var html = "<html><head><title>Expiry Report</title><style>body{font-family:sans-serif;font-size:11px;padding:20px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #999;padding:4px 6px;font-size:10px}th{background:#eee}.red{color:#DC2626;font-weight:700}.orange{color:#EA580C}.yellow{color:#D97706}</style></head><body>";
-    html += "<h2>A to Z Pharmacy - Expiry Report</h2><p>Generated: " + new Date().toLocaleDateString("en-IN") + " | Filter: " + filter + " days | Items: " + filtered.length + " | At-risk value: Rs." + f2(totalAtRisk) + "</p>";
-    html += "<table><tr><th>#</th><th>Medicine</th><th>Batch</th><th>Expiry</th><th>Days Left</th><th>Stock</th><th>MRP</th><th>Value</th><th>Status</th></tr>";
-    filtered.forEach(function(m, i) {
-      var days = getDaysLeft(m);
-      var st = getStatus(days);
-      html += "<tr><td>" + (i + 1) + "</td><td>" + m.name + "</td><td>" + (m.batch || "-") + "</td><td>" + (m.expiry || "-") + "</td><td class='" + (days <= 0 ? "red" : days <= 30 ? "red" : days <= 60 ? "orange" : "yellow") + "'>" + days + "</td><td>" + fStock(m.stock, m.packQty) + "</td><td>Rs." + f2(m.mrp) + "</td><td>Rs." + f2(m.mrp * (m.stock || 0)) + "</td><td>" + st.label + "</td></tr>";
-    });
-    html += "</table></body></html>";
-    var w = window.open("", "_blank"); if (w) { w.document.write(html); w.document.close(); w.print(); }
-  };
-
-  return (
-    <div><h2 style={hds}>Expiry Management</h2>
-
-      <div style={{ display: "grid", gridTemplateColumns: mob ? "repeat(2,1fr)" : "repeat(5,1fr)", gap: 10, marginBottom: 16 }}>
-        <div onClick={function() { setFilter("expired"); }} style={{ ...cds, cursor: "pointer", borderLeft: "4px solid #DC2626", background: filter === "expired" ? "#FEF2F2" : "#fff" }}>
-          <div style={{ fontSize: 24, fontWeight: 800, color: "#DC2626" }}>{expiredCount}</div><div style={{ fontSize: 10, color: "#888" }}>Expired</div></div>
-        <div onClick={function() { setFilter("30"); }} style={{ ...cds, cursor: "pointer", borderLeft: "4px solid #EA580C", background: filter === "30" ? "#FFF7ED" : "#fff" }}>
-          <div style={{ fontSize: 24, fontWeight: 800, color: "#EA580C" }}>{in30}</div><div style={{ fontSize: 10, color: "#888" }}>Within 30 days</div></div>
-        <div onClick={function() { setFilter("60"); }} style={{ ...cds, cursor: "pointer", borderLeft: "4px solid #D97706", background: filter === "60" ? "#FFFBEB" : "#fff" }}>
-          <div style={{ fontSize: 24, fontWeight: 800, color: "#D97706" }}>{in60}</div><div style={{ fontSize: 10, color: "#888" }}>30-60 days</div></div>
-        <div onClick={function() { setFilter("90"); }} style={{ ...cds, cursor: "pointer", borderLeft: "4px solid #CA8A04", background: filter === "90" ? "#FEFCE8" : "#fff" }}>
-          <div style={{ fontSize: 24, fontWeight: 800, color: "#CA8A04" }}>{in90}</div><div style={{ fontSize: 10, color: "#888" }}>60-90 days</div></div>
-        <div onClick={function() { setFilter("all"); }} style={{ ...cds, cursor: "pointer", borderLeft: "4px solid #059669", background: filter === "all" ? "#F0FDF4" : "#fff" }}>
-          <div style={{ fontSize: 24, fontWeight: 800, color: "#059669" }}>{inv.filter(function(m){return m.expiry && (m.stock||0)>0;}).length}</div><div style={{ fontSize: 10, color: "#888" }}>All with expiry</div></div>
-      </div>
-
-      {noExpiry > 0 && <div style={{ padding: "6px 12px", background: "#FEF3C7", borderRadius: 8, fontSize: 11, color: "#92400E", marginBottom: 12 }}>{noExpiry} medicines in stock have no expiry date set</div>}
-
-      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-        <input value={q} onChange={function(e) { setQ(e.target.value); }} placeholder="Search medicine, batch..." style={{ ...inps, flex: 1, minWidth: 180 }} />
-        <select value={sortBy} onChange={function(e) { setSortBy(e.target.value); }} style={{ ...inps, maxWidth: 150 }}>
-          <option value="expiry">Sort: Expiry (urgent first)</option>
-          <option value="name">Sort: Name A-Z</option>
-          <option value="stock">Sort: Stock (high first)</option>
-          <option value="value">Sort: Value (high first)</option>
-        </select>
-        <button onClick={printReport} style={{ ...bts(true), padding: "8px 16px", fontSize: 12 }}>Print Report</button>
-      </div>
-
-      <div style={{ ...cds, padding: "8px 14px", marginBottom: 12, display: "flex", justifyContent: "space-between", background: "#FEF2F2" }}>
-        <span style={{ fontWeight: 600 }}>{filtered.length} items | At-risk value: <b style={{ color: "#DC2626" }}>Rs.{f2(totalAtRisk)}</b></span>
-      </div>
-
-      {filtered.length === 0 ? <div style={{ ...cds, textAlign: "center", padding: 40, color: "#888" }}>
-        <div style={{ fontSize: 40, marginBottom: 12, opacity: 0.3 }}>✅</div>
-        <div style={{ fontSize: 14 }}>No medicines expiring in this period</div>
-      </div> :
-      <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
-        {["#","Medicine","Batch","Expiry","Days Left","Stock","MRP","Value","Status"].map(function(h) { return <th key={h} style={ths}>{h}</th>; })}</tr></thead><tbody>
-        {filtered.map(function(m, i) {
-          var days = getDaysLeft(m);
-          var st = getStatus(days);
-          return <tr key={m.id} style={{ background: st.bg }}>
-            <td style={{ ...tds, color: "#888" }}>{i + 1}</td>
-            <td style={{ ...tds, fontWeight: 600 }}>{m.name}</td>
-            <td style={{ ...tds, fontFamily: "monospace", fontSize: 11 }}>{m.batch || "-"}</td>
-            <td style={tds}>{m.expiry || "-"}</td>
-            <td style={{ ...tds, fontWeight: 800, color: st.color, fontSize: 14 }}>{days <= 0 ? "EXPIRED" : days + "d"}</td>
-            <td style={{ ...tds, fontWeight: 600 }}>{fStock(m.stock, m.packQty)}</td>
-            <td style={tds}>Rs.{f2(m.mrp)}</td>
-            <td style={{ ...tds, fontWeight: 600 }}>Rs.{f2(m.mrp * (m.stock || 0))}</td>
-            <td style={tds}><span style={{ padding: "2px 8px", borderRadius: 10, fontSize: 10, fontWeight: 600, background: st.bg, color: st.color, border: "1px solid " + st.color }}>{st.label}</span></td>
-          </tr>;
-        })}</tbody></table></div>}
-    </div>
-  );
-}
-
-// ══════════════════════════════════════════════
-// VOICE SEARCH HOOK
-// ══════════════════════════════════════════════
-function useVoiceSearch(onResult) {
-  const [listening, setListening] = useState(false);
-  const recogRef = useRef(null);
-
-  const startListening = useCallback(function() {
-    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) { alert("Voice search not supported on this browser"); return; }
-
-    if (recogRef.current) { recogRef.current.stop(); }
-    var recog = new SR();
-    recog.lang = "en-IN";
-    recog.continuous = false;
-    recog.interimResults = false;
-    recog.maxAlternatives = 3;
-
-    recog.onstart = function() { setListening(true); };
-    recog.onend = function() { setListening(false); };
-    recog.onerror = function(e) { setListening(false); };
-    recog.onresult = function(e) {
-      var text = "";
-      if (e.results && e.results.length > 0) {
-        text = e.results[0][0].transcript || "";
-      }
-      setListening(false);
-      if (text && onResult) onResult(text.trim().replace(/[.,!?]+$/, ""));
-    };
-
-    recogRef.current = recog;
-    recog.start();
-  }, [onResult]);
-
-  var stopListening = function() {
-    if (recogRef.current) recogRef.current.stop();
-    setListening(false);
-  };
-
-  return { listening: listening, startListening: startListening, stopListening: stopListening };
-}
-
-// ══════════════════════════════════════════════
-// GST REPORTS PAGE
-// ══════════════════════════════════════════════
-function GSTPage({ bills, inv, purch, mob }) {
-  const [period, setPeriod] = useState("month");
-  const [fromD, setFromD] = useState(new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10));
-  const [toD, setToD] = useState(new Date().toISOString().slice(0, 10));
-
-  var filterBills = function() {
-    return bills.filter(function(b) {
-      var d = new Date(b.date);
-      if (period === "month") { var now = new Date(); return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear(); }
-      if (period === "lastmonth") { var lm = new Date(); lm.setMonth(lm.getMonth() - 1); return d.getMonth() === lm.getMonth() && d.getFullYear() === lm.getFullYear(); }
-      if (period === "quarter") { var now2 = new Date(); var qStart = new Date(now2.getFullYear(), Math.floor(now2.getMonth() / 3) * 3, 1); return d >= qStart && d <= now2; }
-      if (period === "year") { return d.getFullYear() === new Date().getFullYear(); }
-      if (period === "custom") { return d >= new Date(fromD) && d <= new Date(toD + "T23:59:59"); }
-      return true;
-    });
-  };
-
-  var fb = filterBills();
-
-  // GST breakdown by rate
-  var gstBreakdown = {};
-  fb.forEach(function(b) {
-    (b.items || []).forEach(function(it) {
-      var rate = it.gstRate || 0;
-      var key = rate + "%";
-      if (!gstBreakdown[key]) gstBreakdown[key] = { rate: rate, taxableValue: 0, cgst: 0, sgst: 0, igst: 0, totalTax: 0, count: 0 };
-      var saleAmt = (it.unitPrice || it.mrp) * it.qty * (1 - (it.discount || 0) / 100);
-      var taxable = saleAmt / (1 + rate / 100);
-      var tax = saleAmt - taxable;
-      gstBreakdown[key].taxableValue += taxable;
-      gstBreakdown[key].cgst += tax / 2;
-      gstBreakdown[key].sgst += tax / 2;
-      gstBreakdown[key].totalTax += tax;
-      gstBreakdown[key].count++;
-    });
-  });
-  var gstRows = Object.values(gstBreakdown).sort(function(a, b) { return a.rate - b.rate; });
-  var totTaxable = gstRows.reduce(function(s, r) { return s + r.taxableValue; }, 0);
-  var totCGST = gstRows.reduce(function(s, r) { return s + r.cgst; }, 0);
-  var totSGST = gstRows.reduce(function(s, r) { return s + r.sgst; }, 0);
-  var totTax = gstRows.reduce(function(s, r) { return s + r.totalTax; }, 0);
-  var totSales = fb.reduce(function(s, b) { return s + (b.netAmount || 0); }, 0);
-
-  // Purchase GST (input tax)
-  var purchGst = {};
-  (purch || []).forEach(function(p) {
-    var pd = new Date(p.date);
-    var inRange = false;
-    if (period === "month") { var now = new Date(); inRange = pd.getMonth() === now.getMonth() && pd.getFullYear() === now.getFullYear(); }
-    else if (period === "lastmonth") { var lm = new Date(); lm.setMonth(lm.getMonth() - 1); inRange = pd.getMonth() === lm.getMonth() && pd.getFullYear() === lm.getFullYear(); }
-    else if (period === "custom") { inRange = pd >= new Date(fromD) && pd <= new Date(toD + "T23:59:59"); }
-    else inRange = true;
-    if (!inRange) return;
-    (p.items || []).forEach(function(it) {
-      var rate = it.gstRate || 0;
-      var key = rate + "%";
-      if (!purchGst[key]) purchGst[key] = { rate: rate, taxableValue: 0, cgst: 0, sgst: 0, totalTax: 0 };
-      var taxable = (it.ptr || 0) * (it.qty || 0) * (1 - (it.discPct || 0) / 100) * (1 - (it.schemePct || 0) / 100);
-      var tax = taxable * rate / 100;
-      purchGst[key].taxableValue += taxable;
-      purchGst[key].cgst += tax / 2;
-      purchGst[key].sgst += tax / 2;
-      purchGst[key].totalTax += tax;
-    });
-  });
-  var purchRows = Object.values(purchGst).sort(function(a, b) { return a.rate - b.rate; });
-  var totInputTax = purchRows.reduce(function(s, r) { return s + r.totalTax; }, 0);
-
-  var downloadCSV = function(type) {
-    var csv = "";
-    if (type === "sales") {
-      csv = "GST Rate,Taxable Value,CGST,SGST,Total Tax,Items\n";
-      gstRows.forEach(function(r) { csv += r.rate + "%," + f2(r.taxableValue) + "," + f2(r.cgst) + "," + f2(r.sgst) + "," + f2(r.totalTax) + "," + r.count + "\n"; });
-      csv += "TOTAL," + f2(totTaxable) + "," + f2(totCGST) + "," + f2(totSGST) + "," + f2(totTax) + "," + gstRows.reduce(function(s,r){return s+r.count;},0) + "\n";
-    } else if (type === "gstr1") {
-      csv = "Bill No,Date,Patient,GSTIN,Taxable Value,CGST,SGST,Total,Invoice Value\n";
-      fb.forEach(function(b) {
-        var taxable = b.items.reduce(function(s, it) { var amt = (it.unitPrice||it.mrp)*it.qty*(1-(it.discount||0)/100); return s + amt/(1+(it.gstRate||0)/100); }, 0);
-        var tax = (b.netAmount || 0) - taxable;
-        csv += b.billNo + "," + fD(b.date) + "," + (b.patient || "").replace(/,/g, " ") + ",," + f2(taxable) + "," + f2(tax/2) + "," + f2(tax/2) + "," + f2(tax) + "," + f2(b.netAmount) + "\n";
-      });
-    } else if (type === "purchase") {
-      csv = "GST Rate,Taxable Value,CGST,SGST,Total Input Tax\n";
-      purchRows.forEach(function(r) { csv += r.rate + "%," + f2(r.taxableValue) + "," + f2(r.cgst) + "," + f2(r.sgst) + "," + f2(r.totalTax) + "\n"; });
-      csv += "TOTAL," + f2(purchRows.reduce(function(s,r){return s+r.taxableValue;},0)) + "," + f2(purchRows.reduce(function(s,r){return s+r.cgst;},0)) + "," + f2(purchRows.reduce(function(s,r){return s+r.sgst;},0)) + "," + f2(totInputTax) + "\n";
-    }
-    var blob = new Blob([csv], { type: "text/csv" });
-    var a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "GST_" + type + "_" + fromD + ".csv"; a.click();
-  };
-
-  return (
-    <div><h2 style={hds}>GST Reports</h2>
-      <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
-        {[["month","This Month"],["lastmonth","Last Month"],["quarter","This Quarter"],["year","This Year"],["custom","Custom"]].map(function(p) {
-          return <button key={p[0]} onClick={function(){setPeriod(p[0]);}} style={{ padding: "8px 14px", borderRadius: 8, border: period === p[0] ? "2px solid #0D6B5B" : "1px solid #ddd", background: period === p[0] ? "#D1FAE5" : "#fff", fontWeight: 600, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>{p[1]}</button>;
-        })}
-      </div>
-      {period === "custom" && <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-        <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>From</label><input type="date" value={fromD} onChange={function(e){setFromD(e.target.value);}} style={inps} /></div>
-        <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>To</label><input type="date" value={toD} onChange={function(e){setToD(e.target.value);}} style={inps} /></div>
-      </div>}
-
-      <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(4,1fr)", gap: 12, marginBottom: 16 }}>
-        <Stat icon="💰" label="Total Sales" value={"Rs." + f2(totSales)} color="#059669" />
-        <Stat icon="📋" label="Taxable Value" value={"Rs." + f2(totTaxable)} color="#2563EB" />
-        <Stat icon="🏛" label="Output Tax (CGST+SGST)" value={"Rs." + f2(totTax)} color="#D97706" />
-        <Stat icon="📦" label="Input Tax (Purchases)" value={"Rs." + f2(totInputTax)} color="#7C3AED" />
-      </div>
-
-      <div style={{ ...cds, marginBottom: 16 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-          <b>Sales GST Summary ({fb.length} bills)</b>
-          <div style={{ display: "flex", gap: 6 }}>
-            <button onClick={function(){downloadCSV("sales");}} style={{ ...bts(true), padding: "6px 12px", fontSize: 11 }}>Export CSV</button>
-            <button onClick={function(){downloadCSV("gstr1");}} style={{ ...bts(false), padding: "6px 12px", fontSize: 11 }}>GSTR-1 Format</button>
-          </div>
-        </div>
-        <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
-          {["GST Rate","Taxable Value","CGST","SGST","Total Tax","Items"].map(function(h){return <th key={h} style={ths}>{h}</th>;})}</tr></thead><tbody>
-          {gstRows.map(function(r) { return <tr key={r.rate}>
-            <td style={{ ...tds, fontWeight: 700 }}>{r.rate}%</td>
-            <td style={tds}>Rs.{f2(r.taxableValue)}</td>
-            <td style={tds}>Rs.{f2(r.cgst)}</td>
-            <td style={tds}>Rs.{f2(r.sgst)}</td>
-            <td style={{ ...tds, fontWeight: 600, color: "#D97706" }}>Rs.{f2(r.totalTax)}</td>
-            <td style={tds}>{r.count}</td>
-          </tr>; })}
-          <tr style={{ background: "#F0FDF4", fontWeight: 700 }}>
-            <td style={tds}>TOTAL</td><td style={tds}>Rs.{f2(totTaxable)}</td><td style={tds}>Rs.{f2(totCGST)}</td><td style={tds}>Rs.{f2(totSGST)}</td><td style={{ ...tds, color: "#DC2626" }}>Rs.{f2(totTax)}</td><td style={tds}>{gstRows.reduce(function(s,r){return s+r.count;},0)}</td>
-          </tr></tbody></table></div>
-      </div>
-
-      {purchRows.length > 0 && <div style={{ ...cds, marginBottom: 16 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-          <b>Purchase Input Tax (ITC)</b>
-          <button onClick={function(){downloadCSV("purchase");}} style={{ ...bts(false), padding: "6px 12px", fontSize: 11 }}>Export CSV</button>
-        </div>
-        <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
-          {["GST Rate","Taxable Value","CGST","SGST","Total Input Tax"].map(function(h){return <th key={h} style={ths}>{h}</th>;})}</tr></thead><tbody>
-          {purchRows.map(function(r) { return <tr key={r.rate}>
-            <td style={{ ...tds, fontWeight: 700 }}>{r.rate}%</td><td style={tds}>Rs.{f2(r.taxableValue)}</td><td style={tds}>Rs.{f2(r.cgst)}</td><td style={tds}>Rs.{f2(r.sgst)}</td><td style={{ ...tds, fontWeight: 600, color: "#7C3AED" }}>Rs.{f2(r.totalTax)}</td>
-          </tr>; })}
-          </tbody></table></div>
-        <div style={{ marginTop: 8, padding: 8, background: "#F0FDF4", borderRadius: 8, fontSize: 13, fontWeight: 700 }}>
-          Net Tax Liability: <span style={{ color: totTax - totInputTax >= 0 ? "#DC2626" : "#059669" }}>Rs.{f2(totTax - totInputTax)}</span>
-          <span style={{ fontWeight: 400, color: "#888", marginLeft: 8 }}>(Output Tax Rs.{f2(totTax)} - Input Tax Rs.{f2(totInputTax)})</span>
-        </div>
-      </div>}
-    </div>
-  );
-}
-
-// ══════════════════════════════════════════════
-// SUPPLIER LEDGER PAGE
-// ══════════════════════════════════════════════
-function SupplierLedgerPage({ purch, mob }) {
-  const [q, setQ] = useState("");
-  const [expanded, setExpanded] = useState(null);
-  const [payments, setPayments] = useState({});
-  const [addPay, setAddPay] = useState(null);
-  const [payAmt, setPayAmt] = useState("");
-  const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10));
-  const [payNote, setPayNote] = useState("");
-  const [billSettle, setBillSettle] = useState(null); // { supplier, key, invoice } for per-bill settle
-  const [billSettleAmt, setBillSettleAmt] = useState("");
-  const [billSettleDate, setBillSettleDate] = useState(new Date().toISOString().slice(0, 10));
-  const [billSettleNote, setBillSettleNote] = useState("");
-
-  useEffect(function() { fbListen("ledger", function(data) { setPayments(data || {}); }); }, []);
-
-  // Build supplier summary from purchases
-  var suppliers = {};
-  (purch || []).forEach(function(p) {
-    var name = (p.supplier || "Unknown").trim();
-    if (!suppliers[name]) suppliers[name] = { name: name, totalPurchased: 0, invoices: [], firstDate: p.date, lastDate: p.date };
-    suppliers[name].totalPurchased += p.netAmount || 0;
-    suppliers[name].invoices.push(p);
-    if (p.date < suppliers[name].firstDate) suppliers[name].firstDate = p.date;
-    if (p.date > suppliers[name].lastDate) suppliers[name].lastDate = p.date;
-  });
-
-  // Add payment data
-  Object.keys(suppliers).forEach(function(name) {
-    var key = name.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
-    var pays = payments[key] ? (Array.isArray(payments[key]) ? payments[key] : Object.values(payments[key])) : [];
-    suppliers[name].payments = pays;
-    suppliers[name].totalPaid = pays.reduce(function(s, p) { return s + (p.amount || 0); }, 0);
-    suppliers[name].outstanding = suppliers[name].totalPurchased - suppliers[name].totalPaid;
-    suppliers[name].key = key;
-  });
-
-  var supList = Object.values(suppliers).filter(function(s) {
-    if (!q) return true;
-    return s.name.toLowerCase().indexOf(q.toLowerCase()) >= 0;
-  }).sort(function(a, b) { return b.outstanding - a.outstanding; });
-
-  var totalOutstanding = supList.reduce(function(s, sup) { return s + Math.max(0, sup.outstanding); }, 0);
-  var totalPurchased = supList.reduce(function(s, sup) { return s + sup.totalPurchased; }, 0);
-  var totalPaid = supList.reduce(function(s, sup) { return s + sup.totalPaid; }, 0);
-
-  var savePayment = function() {
-    if (!addPay || !payAmt) return;
-    var key = addPay.key;
-    var pay = { id: mkId(), amount: parseFloat(payAmt) || 0, date: payDate, note: payNote, addedAt: new Date().toISOString() };
-    db.ref(getOutletPath("ledger/" + key + "/" + pay.id)).set(pay);
-    setAddPay(null); setPayAmt(""); setPayNote("");
-  };
-
-  var saveBillSettle = function() {
-    if (!billSettle || !billSettleAmt) return;
-    var key = billSettle.key;
-    var inv = billSettle.invoice;
-    var note = billSettleNote || ("Invoice: " + (inv.invoiceNo || inv.id));
-    var pay = { id: mkId(), amount: parseFloat(billSettleAmt) || 0, date: billSettleDate, note: note, billRef: inv.invoiceNo || inv.id, addedAt: new Date().toISOString() };
-    db.ref(getOutletPath("ledger/" + key + "/" + pay.id)).set(pay);
-    setBillSettle(null); setBillSettleAmt(""); setBillSettleNote("");
-  };
-
-  return (
-    <div><h2 style={hds}>Supplier Ledger</h2>
-      <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(4,1fr)", gap: 12, marginBottom: 16 }}>
-        <Stat icon="📦" label="Total Purchased" value={"Rs." + f2(totalPurchased)} color="#2563EB" />
-        <Stat icon="💳" label="Total Paid" value={"Rs." + f2(totalPaid)} color="#059669" />
-        <Stat icon="⚠️" label="Outstanding" value={"Rs." + f2(totalOutstanding)} color="#DC2626" />
-        <Stat icon="🏢" label="Suppliers" value={supList.length} color="#7C3AED" />
-      </div>
-
-      <input value={q} onChange={function(e){setQ(e.target.value);}} placeholder="Search supplier..." style={{ ...inps, marginBottom: 14 }} />
-
-      {addPay && <div style={{ ...cds, border: "2px solid #0D6B5B", marginBottom: 14 }}>
-        <b style={{ color: "#0D6B5B" }}>Record Payment - {addPay.name}</b>
-        <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr 1fr", gap: 8, marginTop: 8 }}>
-          <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Amount*</label><input type="number" value={payAmt} onChange={function(e){setPayAmt(e.target.value);}} style={inps} /></div>
-          <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Date</label><input type="date" value={payDate} onChange={function(e){setPayDate(e.target.value);}} style={inps} /></div>
-          <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Note</label><input value={payNote} onChange={function(e){setPayNote(e.target.value);}} placeholder="Cheque/UPI/Cash" style={inps} /></div>
-        </div>
-        <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-          <button onClick={savePayment} style={{ ...bts(true), padding: "8px 16px", fontSize: 12 }}>Save Payment</button>
-          <button onClick={function(){setAddPay(null);}} style={{ ...bts(false), padding: "8px 16px", fontSize: 12 }}>Cancel</button>
-        </div>
-      </div>}
-
-      {billSettle && <div style={{ ...cds, border: "2px solid #D97706", marginBottom: 14 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-          <b style={{ color: "#D97706" }}>Settle Bill — {billSettle.supplier}</b>
-          <span style={{ fontSize: 11, color: "#888" }}>Invoice: {billSettle.invoice.invoiceNo || "-"} | Rs.{f2(billSettle.invoice.netAmount)}</span>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr" : "1fr 1fr 1fr", gap: 8, marginTop: 8 }}>
-          <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Amount*</label><input type="number" value={billSettleAmt} onChange={function(e){setBillSettleAmt(e.target.value);}} style={inps} /></div>
-          <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Date</label><input type="date" value={billSettleDate} onChange={function(e){setBillSettleDate(e.target.value);}} style={inps} /></div>
-          <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Note</label><input value={billSettleNote} onChange={function(e){setBillSettleNote(e.target.value);}} placeholder="Cheque/UPI/Cash" style={inps} /></div>
-        </div>
-        <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-          <button onClick={saveBillSettle} style={{ ...bts(true), padding: "8px 16px", fontSize: 12, background: "#D97706" }}>Save Settlement</button>
-          <button onClick={function(){setBillSettle(null);setBillSettleAmt("");setBillSettleNote("");}} style={{ ...bts(false), padding: "8px 16px", fontSize: 12 }}>Cancel</button>
-        </div>
-      </div>}
-
-      {supList.map(function(s) {
-        var isExp = expanded === s.name;
-        return <div key={s.name} style={{ marginBottom: 6, borderRadius: 10, border: "1px solid #eee", overflow: "hidden" }}>
-          <div onClick={function(){setExpanded(isExp ? null : s.name);}} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px", background: isExp ? "#F0FDF4" : "#FAFAF7", cursor: "pointer", borderLeft: "4px solid " + (s.outstanding > 0 ? "#DC2626" : "#059669") }}>
-            <div><b style={{ fontSize: 14 }}>{s.name}</b><span style={{ color: "#888", fontSize: 11, marginLeft: 8 }}>{s.invoices.length} invoices</span></div>
-            <div style={{ display: "flex", gap: 12, alignItems: "center", fontSize: 12 }}>
-              <span>Purchased: <b>Rs.{f2(s.totalPurchased)}</b></span>
-              <span style={{ color: "#059669" }}>Paid: Rs.{f2(s.totalPaid)}</span>
-              <span style={{ fontWeight: 800, color: s.outstanding > 0 ? "#DC2626" : "#059669" }}>{s.outstanding > 0 ? "Due: Rs." + f2(s.outstanding) : "Settled"}</span>
-              <span style={{ color: "#888" }}>{isExp ? "\u25B2" : "\u25BC"}</span>
-            </div>
-          </div>
-          {isExp && <div style={{ padding: 14, background: "#fff" }}>
-            <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
-              <button onClick={function(){setAddPay(s);setPayAmt("");setPayNote("");}} style={{ ...bts(true), padding: "6px 14px", fontSize: 11 }}>Record Payment</button>
-            </div>
-            <b style={{ fontSize: 12, color: "#888" }}>Invoices:</b>
-            <div style={{ marginTop: 4 }}>{s.invoices.sort(function(a,b){return new Date(b.date)-new Date(a.date);}).slice(0, 20).map(function(p) {
-              var billPaid = s.payments.filter(function(pay){ return pay.billRef === (p.invoiceNo || p.id); }).reduce(function(sum,pay){ return sum + (pay.amount||0); }, 0);
-              var billDue = (p.netAmount||0) - billPaid;
-              var billSettled = billDue <= 0;
-              return <div key={p.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "1px solid #eee", fontSize: 12, gap: 8 }}>
-                <span style={{ flex: 1 }}>{fD(p.date)} | <b>{p.invoiceNo || "-"}</b></span>
-                <span style={{ color: "#2563EB", fontWeight: 600 }}>Rs.{f2(p.netAmount)}</span>
-                {billPaid > 0 && <span style={{ color: "#059669", fontSize: 11 }}>Paid: Rs.{f2(billPaid)}</span>}
-                {!billSettled && <span style={{ color: "#DC2626", fontSize: 11, fontWeight: 700 }}>Due: Rs.{f2(billDue)}</span>}
-                {billSettled
-                  ? <span style={{ color: "#059669", fontSize: 10, fontWeight: 700, padding: "2px 8px", border: "1px solid #059669", borderRadius: 8 }}>✓ Settled</span>
-                  : <button onClick={function(e){ e.stopPropagation(); setBillSettle({ supplier: s.name, key: s.key, invoice: p }); setBillSettleAmt(String(f2(billDue))); setBillSettleDate(new Date().toISOString().slice(0,10)); setBillSettleNote("Invoice: " + (p.invoiceNo || p.id)); setAddPay(null); }} style={{ fontSize: 10, padding: "2px 8px", borderRadius: 8, border: "1px solid #D97706", background: "#FFFBEB", color: "#D97706", cursor: "pointer", fontWeight: 700 }}>Settle</button>
-                }
-              </div>;
-            })}</div>
-            {s.payments.length > 0 && <div style={{ marginTop: 10 }}>
-              <b style={{ fontSize: 12, color: "#059669" }}>Payments:</b>
-              {s.payments.sort(function(a,b){return new Date(b.date)-new Date(a.date);}).map(function(p) {
-                return <div key={p.id} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px solid #eee", fontSize: 12 }}>
-                  <span>{fD(p.date)} | {p.note || "-"}</span>
-                  <b style={{ color: "#059669" }}>Rs.{f2(p.amount)}</b>
-                </div>;
-              })}
-            </div>}
-          </div>}
-        </div>;
-      })}
-    </div>
-  );
-}
-
-// ══════════════════════════════════════════════
-// AI STOCK PREDICT PAGE
-// ══════════════════════════════════════════════
-function StockPredictPage({ inv, bills, mob }) {
-  const [days, setDays] = useState(30);
-  const [q, setQ] = useState("");
-  const [sortBy, setSortBy] = useState("daysLeft");
-
-  // Calculate daily consumption from bill history
-  var predictions = inv.filter(function(m) { return (m.stock || 0) > 0; }).map(function(m) {
-    // Find all bill items for this medicine in last 90 days
-    var cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 90);
-    var sold = 0, billCount = 0;
-    bills.forEach(function(b) {
-      if (new Date(b.date) < cutoff) return;
-      (b.items || []).forEach(function(it) {
-        if (it.mid === m.id || it.name === m.name) {
-          sold += it.loose ? it.qty / (it.packQty || 10) : it.qty;
-          billCount++;
-        }
-      });
-    });
-
-    var dailyRate = sold / 90;
-    var daysLeft = dailyRate > 0 ? Math.floor((m.stock || 0) / dailyRate) : 9999;
-    var reorderQty = Math.ceil(dailyRate * days);
-    var needsReorder = daysLeft <= days;
-
-    return {
-      id: m.id, name: m.name, batch: m.batch, stock: m.stock, packQty: m.packQty,
-      mrp: m.mrp, sold90: Math.round(sold * 100) / 100, dailyRate: Math.round(dailyRate * 1000) / 1000,
-      daysLeft: daysLeft, reorderQty: reorderQty, needsReorder: needsReorder, billCount: billCount
-    };
-  });
-
-  var filtered = predictions.filter(function(p) {
-    if (!q) return true;
-    return p.name.toLowerCase().indexOf(q.toLowerCase()) >= 0;
-  });
-
-  if (sortBy === "daysLeft") filtered.sort(function(a, b) { return a.daysLeft - b.daysLeft; });
-  else if (sortBy === "sold") filtered.sort(function(a, b) { return b.sold90 - a.sold90; });
-  else if (sortBy === "name") filtered.sort(function(a, b) { return a.name.localeCompare(b.name); });
-  else if (sortBy === "reorder") filtered.sort(function(a, b) { return b.reorderQty - a.reorderQty; });
-
-  var urgentCount = predictions.filter(function(p) { return p.needsReorder && p.dailyRate > 0; }).length;
-  var noMovement = predictions.filter(function(p) { return p.dailyRate === 0; }).length;
-
-  var downloadReorder = function() {
-    var reorderItems = filtered.filter(function(p) { return p.needsReorder && p.dailyRate > 0; });
-    var csv = "Medicine,Current Stock,Daily Rate,Days Left,Suggested Reorder Qty (" + days + " days),MRP\n";
-    reorderItems.forEach(function(p) {
-      csv += p.name + "," + fStock(p.stock, p.packQty) + "," + p.dailyRate + "," + p.daysLeft + "," + p.reorderQty + "," + f2(p.mrp) + "\n";
-    });
-    var blob = new Blob([csv], { type: "text/csv" });
-    var a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "Reorder_List_" + days + "days.csv"; a.click();
-  };
-
-  return (
-    <div><h2 style={hds}>AI Stock Prediction</h2>
-      <p style={{ fontSize: 12, color: "#888", marginBottom: 14 }}>Based on last 90 days of sales data. Predicts when each medicine will run out and suggests reorder quantities.</p>
-
-      <div style={{ display: "grid", gridTemplateColumns: mob ? "1fr 1fr" : "repeat(4,1fr)", gap: 12, marginBottom: 16 }}>
-        <Stat icon="🚨" label="Need Reorder" value={urgentCount} color="#DC2626" />
-        <Stat icon="📊" label="Active Items" value={predictions.length - noMovement} color="#2563EB" />
-        <Stat icon="💤" label="No Movement (90d)" value={noMovement} color="#888" />
-        <Stat icon="📦" label="Total In Stock" value={predictions.length} color="#059669" />
-      </div>
-
-      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
-        <input value={q} onChange={function(e){setQ(e.target.value);}} placeholder="Search medicine..." style={{ ...inps, flex: 1, minWidth: 180 }} />
-        <div><label style={{ fontSize: 10, fontWeight: 600, color: "#888" }}>Predict for</label><select value={days} onChange={function(e){setDays(parseInt(e.target.value));}} style={{ ...inps }}>
-          <option value="15">15 days</option><option value="30">30 days</option><option value="60">60 days</option><option value="90">90 days</option>
-        </select></div>
-        <select value={sortBy} onChange={function(e){setSortBy(e.target.value);}} style={{ ...inps, maxWidth: 160 }}>
-          <option value="daysLeft">Sort: Days Left (urgent)</option><option value="sold">Sort: Most Sold</option><option value="reorder">Sort: Reorder Qty</option><option value="name">Sort: Name</option>
-        </select>
-        <button onClick={downloadReorder} style={{ ...bts(true), padding: "8px 14px", fontSize: 12 }}>Download Reorder List</button>
-      </div>
-
-      <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse" }}><thead><tr>
-        {["Medicine","Stock","Sold (90d)","Daily Rate","Days Left","Reorder Qty","Status"].map(function(h){return <th key={h} style={ths}>{h}</th>;})}</tr></thead><tbody>
-        {filtered.slice(0, 200).map(function(p) {
-          var statusColor = p.dailyRate === 0 ? "#888" : p.daysLeft <= 7 ? "#DC2626" : p.daysLeft <= days ? "#D97706" : "#059669";
-          var statusLabel = p.dailyRate === 0 ? "No movement" : p.daysLeft <= 7 ? "CRITICAL" : p.daysLeft <= days ? "Reorder" : "OK";
-          var bg = p.dailyRate === 0 ? "#F9FAFB" : p.daysLeft <= 7 ? "#FEF2F2" : p.daysLeft <= days ? "#FFFBEB" : "#fff";
-          return <tr key={p.id} style={{ background: bg }}>
-            <td style={{ ...tds, fontWeight: 600 }}>{p.name}</td>
-            <td style={{ ...tds, fontWeight: 600 }}>{fStock(p.stock, p.packQty)}</td>
-            <td style={tds}>{p.sold90} ({p.billCount} bills)</td>
-            <td style={tds}>{p.dailyRate}/day</td>
-            <td style={{ ...tds, fontWeight: 800, color: statusColor, fontSize: 14 }}>{p.daysLeft > 9000 ? "-" : p.daysLeft + "d"}</td>
-            <td style={{ ...tds, fontWeight: 600, color: p.needsReorder ? "#DC2626" : "#888" }}>{p.dailyRate > 0 ? p.reorderQty : "-"}</td>
-            <td style={tds}><span style={{ padding: "2px 8px", borderRadius: 10, fontSize: 10, fontWeight: 600, color: statusColor, border: "1px solid " + statusColor }}>{statusLabel}</span></td>
-          </tr>;
-        })}</tbody></table></div>
-        {filtered.length > 200 && <div style={{ color: "#888", fontSize: 12, padding: 8 }}>Showing 200 of {filtered.length} items</div>}
-    </div>
-  );
-}
-
 // MAIN APP
 // ══════════════════════════════════════════════
 function App() {
@@ -6449,44 +5187,21 @@ function App() {
   const confirmCb = useRef(null);
   const [viewBill, setViewBill] = useState(null);
   const [billFromHist, setBillFromHist] = useState(false);
-  const [currentOutletId, setCurrentOutletId] = useState(getCurrentOutlet());
   const mob = useM();
   const isO = user ? user.role === "owner" : false;
 
-  const switchOutlet = useCallback(function(outletId) {
-    setCurrentOutlet(outletId);
-    setCurrentOutletId(outletId);
-    // Clear current data - will reload from new outlet
-    setInv([]); setBills([]); setPurch([]);
-    // Force re-subscribe by changing a key
-    setPage("dash");
-    // Reload page to re-attach listeners
-    window.location.reload();
-  }, []);
-
   // Check auth state on load
   useEffect(() => {
-    // Set PH from stored outlet
-    PH = OUTLETS[getCurrentOutlet()] || OUTLETS.outlet2;
-
-    // OTP-based auth: no Firebase Auth session, user stored in component state.
-    // On page reload, user must log in again (security by design for pharmacy).
-    // Check if we have a recent session in localStorage (persists across tabs/restarts).
-    const saved = localStorage.getItem("atoz_session");
-    if (saved) {
-      try {
-        const u = JSON.parse(saved);
-        if (u && u.email && u.loginTs && (Date.now() - u.loginTs) < 24 * 60 * 60 * 1000) {
-          // Session still valid (8 hours)
-          setUser(u);
-        } else {
-          localStorage.removeItem("atoz_session");
-        }
-      } catch(e) { localStorage.removeItem("atoz_session"); }
-    }
-    setLoading(false);
-    // No Firebase Auth listener needed — OTP auth is stateless
-    const unsub = () => {};
+    const unsub = auth.onAuthStateChanged((fbUser) => {
+      if (fbUser) {
+        const role = ROLES[fbUser.email] || "staff";
+        const name = ROLE_NAMES[fbUser.email] || fbUser.email;
+        setUser({ id: fbUser.uid, email: fbUser.email, name, role });
+      } else {
+        setUser(null);
+      }
+      setLoading(false);
+    });
     return unsub;
   }, []);
 
@@ -6530,17 +5245,8 @@ function App() {
   const onConfirmNo = () => { setConfirmMsg(null); confirmCb.current = null; };
   const showBill = useCallback((b, hist) => { setViewBill(b); setBillFromHist(!!hist); }, []);
 
-  const login = (u) => {
-    const withTs = { ...u, loginTs: Date.now() };
-    localStorage.setItem("atoz_session", JSON.stringify(withTs));
-    setUser(withTs);
-  };
-  const logout = () => {
-    localStorage.removeItem("atoz_session");
-    fbSet("sessions/" + (user ? user.id : ""), null);
-    setUser(null);
-    setPage("dash");
-  };
+  const login = (u) => { setUser(u); };
+  const logout = () => { auth.signOut(); fbSet("sessions/" + (user ? user.id : ""), null); setUser(null); setPage("dash"); };
 
   const addBill = useCallback((bill) => {
     setBills((p) => { const next = [...p, bill]; saveBills(next); return next; });
@@ -6607,19 +5313,11 @@ function App() {
     <div style={{ display: "flex", height: "100vh", fontFamily: "'DM Sans',sans-serif", background: "#EFECE5", overflow: "hidden" }}>
       <ConfirmModal msg={confirmMsg} onYes={onConfirmYes} onNo={onConfirmNo} />
       <BillView bill={viewBill} onClose={() => setViewBill(null)} fromHistory={billFromHist} />
-      <Sidebar page={page} setPage={setPage} user={user} onLogout={logout} counts={counts} mob={mob} sideOpen={sideOpen} setSideOpen={setSideOpen} currentOutletId={currentOutletId} switchOutlet={switchOutlet} />
+      <Sidebar page={page} setPage={setPage} user={user} onLogout={logout} counts={counts} mob={mob} sideOpen={sideOpen} setSideOpen={setSideOpen} />
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
         {mob && <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", background: "#fff", borderBottom: "1px solid #E5E2DB", flexShrink: 0 }}>
           <button onClick={() => setSideOpen(true)} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer" }}>☰</button>
-          <div style={{ textAlign: "center" }}>
-            <div style={{ fontWeight: 700, fontFamily: "'Playfair Display',serif", fontSize: 15, color: "#0C2E24" }}>{PH.shortName || PH.name}</div>
-            {isO && <select value={currentOutletId} onChange={function(e) { switchOutlet(e.target.value); }} style={{ fontSize: 9, border: "1px solid #ddd", borderRadius: 4, padding: "1px 4px", background: "#F0FDF4", color: "#0D6B5B", fontWeight: 600, cursor: "pointer", marginTop: 2 }}>
-              {Object.keys(OUTLETS).map(function(k) { return <option key={k} value={k}>{OUTLETS[k].shortName}</option>; })}
-            </select>}
-            {!isO && user && user.outlets && user.outlets.length > 1 && <select value={currentOutletId} onChange={function(e) { switchOutlet(e.target.value); }} style={{ fontSize: 9, border: "1px solid #ddd", borderRadius: 4, padding: "1px 4px", background: "#F0FDF4", color: "#0D6B5B", fontWeight: 600, cursor: "pointer", marginTop: 2 }}>
-              {user.outlets.map(function(k) { return OUTLETS[k] ? <option key={k} value={k}>{OUTLETS[k].shortName}</option> : null; })}
-            </select>}
-          </div>
+          <div style={{ fontWeight: 700, fontFamily: "'Playfair Display',serif", fontSize: 15, color: "#0C2E24" }}>A to Z Pharmacy</div>
           <div style={{ width: 30, height: 30, borderRadius: 7, background: "#E8E4DD", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13 }}>{isO ? "👑" : "👤"}</div></div>}
         <div style={{ flex: 1, padding: mob ? 14 : 24, overflow: "auto" }}>
           {page === "dash" && <DashPage inv={inv} bills={bills} purch={purch} isO={isO} mob={mob} />}
@@ -6628,18 +5326,15 @@ function App() {
           {page === "inv" && <InvPage inv={inv} saveInv={saveInv} isO={isO} mob={mob} askConfirm={askConfirm} bills={bills} showBill={showBill} />}
           {page === "rack" && <RackPage inv={inv} saveInv={saveInv} mob={mob} />}
           {page === "audit" && isO && <AuditPage inv={inv} mob={mob} />}
-          {page === "bill" && <BillPage inv={inv} saveInv={saveInv} addBill={addBill} mob={mob} showBill={showBill} user={user} />}
+          {page === "bill" && <BillPage inv={inv} saveInv={saveInv} addBill={addBill} mob={mob} showBill={showBill} />}
           {page === "profit" && isO && <ProfitPage bills={bills} inv={inv} mob={mob} purch={purch} saveBills={saveBills} showBill={showBill} setPage={setPage} />}
           {page === "stock" && <StockPage inv={inv} saveInv={saveInv} isO={isO} mob={mob} />}
-          {page === "expiry" && <ExpiryPage inv={inv} mob={mob} />}
-          {page === "gst" && isO && <GSTPage bills={bills} inv={inv} purch={purch} mob={mob} />}
-          {page === "ledger" && isO && <SupplierLedgerPage purch={purch} mob={mob} />}
-          {page === "predict" && isO && <StockPredictPage inv={inv} bills={bills} mob={mob} />}
           {page === "hist" && <HistPage bills={bills} showBill={showBill} saveBills={saveBills} askConfirm={askConfirm} inv={inv} saveInv={saveInv} purch={purch} />}
           {page === "customers" && <CustomersPage bills={bills} mob={mob} showBill={showBill} />}
           {page === "reports" && isO && <ReportsPage bills={bills} inv={inv} mob={mob} showBill={showBill} />}
+          {page === "ency" && <EncyclopediaPage inv={inv} mob={mob} />}
           {page === "compare" && <ComparePage inv={inv} mob={mob} />}
-          {page === "users" && isO && <UsersPage sessions={sessions} mob={mob} user={user} />}
+          {page === "users" && isO && <UsersPage sessions={sessions} mob={mob} />}
           {page === "backup" && isO && <BackupPage inv={inv} bills={bills} purch={purch} saveAll={saveAll} askConfirm={askConfirm} saveInv={saveInv} saveBills={saveBills} />}
         </div></div></div>
   );
