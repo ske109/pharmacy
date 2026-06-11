@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>A to Z Pharmacy v2.5.2</title>
+<title>A to Z Pharmacy v2.5.3</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💊</text></svg>">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
 
@@ -50,7 +50,7 @@ input,select,button,textarea{font-family:inherit;-webkit-appearance:none}
 }
 </style>
 
-<meta name="app-version" content="2.5.2">
+<meta name="app-version" content="2.5.3">
 <meta name="app-changes" content="["Removed Claude API dependency for image/PDF bill reading [security/privacy]", "Added local Tesseract.js OCR with canvas preprocessing for purchase bill images", "Enhanced parsing with fallback line-by-line item extraction", "Cleaner worker without hardcoded API keys or Claude proxy route", "Improved error handling and user feedback for OCR quality", "v2.2.0: Advanced multi-pass image processing with deskew, adaptive thresholding, Sauvola binarization, OTSU thresholding, unsharp mask sharpening, multi-PSM Tesseract passes, and 3-strategy invoice parser (Vardhman columnar, flexible numeric-anchor, token-based)"]">
 <script>window.APP_VERSION = {"version": "2.3.0", "changes": ["Replaced EmailJS with Cloudflare Worker + Resend for reliable OTP delivery (no Gmail scope issues)", "Added /send-otp-email route to Cloudflare Worker", "3000 free emails/month via Resend vs 200 via EmailJS", "Proper error handling — shows actual failure reason instead of silent swallow", "OTP always logged to console as fallback"], "date": "2026-05-10", "type": "production"};</script>
 
@@ -3022,6 +3022,7 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
   const mob = useM();
 
   var now = new Date();
+  var _histT0 = performance.now();
   var filteredBills = bills.filter(function(b) {
     if (hFilter === "all") return true;
     var d = new Date(b.date);
@@ -3031,6 +3032,8 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
     if (hFilter === "custom" && hFrom && hTo) return d >= new Date(hFrom) && d <= new Date(hTo + "T23:59:59");
     return true;
   });
+  var _histT1 = performance.now();
+  console.log("[HIST] filter=" + (_histT1 - _histT0).toFixed(1) + "ms totalBills=" + bills.length + " filtered=" + filteredBills.length + " (hFilter=" + hFilter + ")");
 
   const editAddItem = function(med) {
     if (!editBill) return;
@@ -3356,8 +3359,10 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, deleteBi
   const [q, setQ] = React.useState("");
   const [hpPage, setHpPage] = React.useState(1);
   const HP_PAGE_SIZE = 50;
+  const _htRenderStart = performance.now();
   // Reset to first page when the search or the upstream period filter changes
   React.useEffect(function() { setHpPage(1); }, [q, bills.length]);
+  React.useEffect(function() { console.log("[HISTTABLE] render\u2192commit = " + (performance.now() - _htRenderStart).toFixed(1) + "ms"); });
 
   const BILL_COLS = [
     { key: "bill", label: "Bill No" }, { key: "date", label: "Date" }, { key: "patient", label: "Patient" },
@@ -3382,19 +3387,26 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, deleteBi
 
   let filtered = q ? bills.filter((b) => b.billNo.toLowerCase().includes(q.toLowerCase()) || b.patient.toLowerCase().includes(q.toLowerCase()) || (b.paymentMode || "").toLowerCase().includes(q.toLowerCase())) : bills;
 
-  const sorted = [...filtered].sort((a, b) => {
-    let va, vb;
-    if (sortCol === "date") { va = new Date(a.date).getTime(); vb = new Date(b.date).getTime(); }
-    else if (sortCol === "bill") { va = a.billNo; vb = b.billNo; }
-    else if (sortCol === "patient") { va = (a.patient || "").toLowerCase(); vb = (b.patient || "").toLowerCase(); }
-    else if (sortCol === "amount") { va = a.netAmount; vb = b.netAmount; }
-    else if (sortCol === "pay") { va = (a.paymentMode || ""); vb = (b.paymentMode || ""); }
-    else if (sortCol === "billedby") { va = (a.createdBy || "").toLowerCase(); vb = (b.createdBy || "").toLowerCase(); }
-    else { va = 0; vb = 0; }
-    if (va < vb) return sortDir === "asc" ? -1 : 1;
-    if (va > vb) return sortDir === "asc" ? 1 : -1;
+  const _sortT0 = performance.now();
+  const keyOf = function(b) {
+    if (sortCol === "date") return new Date(b.date).getTime();
+    if (sortCol === "bill") return b.billNo;
+    if (sortCol === "patient") return (b.patient || "").toLowerCase();
+    if (sortCol === "amount") return b.netAmount;
+    if (sortCol === "pay") return (b.paymentMode || "");
+    if (sortCol === "billedby") return (b.createdBy || "").toLowerCase();
     return 0;
-  });
+  };
+  const sorted = filtered
+    .map(function(b) { return { b: b, k: keyOf(b) }; })
+    .sort(function(x, y) {
+      if (x.k < y.k) return sortDir === "asc" ? -1 : 1;
+      if (x.k > y.k) return sortDir === "asc" ? 1 : -1;
+      return 0;
+    })
+    .map(function(o) { return o.b; });
+  const _sortT1 = performance.now();
+  console.log("[HISTTABLE] sort=" + (_sortT1 - _sortT0).toFixed(1) + "ms n=" + sorted.length + " rendering=" + Math.min(sorted.length, HP_PAGE_SIZE));
 
   const visibleColCount = BILL_COLS.filter((c) => sh(c.key)).length + 2; // +2 for items-expand + actions
 
@@ -4276,8 +4288,10 @@ function ProfitPage({ bills, inv, mob, purch, saveBills, showBill, setPage }) {
   const [profPage, setProfPage] = useState(1);
   const PROF_PAGE_SIZE = 50;
   const now = new Date();
+  const _profRenderStart = performance.now();
   // Reset to first page whenever the period/search changes
   useEffect(function() { setProfPage(1); }, [view, profitSearch, fromD, toD]);
+  useEffect(function() { console.log("[PROFIT] render\u2192commit = " + (performance.now() - _profRenderStart).toFixed(1) + "ms"); });
 
   const filterBills = (blist) => {
     if (view === "today") return blist.filter((b) => new Date(b.date).toDateString() === now.toDateString());
@@ -4322,16 +4336,22 @@ function ProfitPage({ bills, inv, mob, purch, saveBills, showBill, setPage }) {
     return { netSale, totalCost, totalDisc, profit: netSale - totalCost, margin: netSale > 0 ? ((netSale - totalCost) / netSale * 100) : 0 };
   };
 
+  const _profT0 = performance.now();
   const fl = filterBills(bills).filter(function(b) {
     if (!profitSearch) return true;
     var q = profitSearch.toLowerCase();
     return b.billNo.toLowerCase().indexOf(q) >= 0 || (b.patient || "").toLowerCase().indexOf(q) >= 0 || b.items.some(function(it) { return (it.name || "").toLowerCase().indexOf(q) >= 0; });
   });
+  const _profT1 = performance.now();
+  console.log("[PROFIT] render view=" + view + " totalBills=" + bills.length + " filtered=" + fl.length + " | filter+search=" + (_profT1 - _profT0).toFixed(1) + "ms");
   const [profitExpand, setProfitExpand] = useState(null);
   const [showDiscBills, setShowDiscBills] = useState(false);
   var getStockForItem = function(it) { var m = inv.find(function(x) { return x.id === it.mid; }); if (!m) m = inv.find(function(x) { return x.name === it.name; }); return m ? fStock(m.stock, m.packQty) : "0"; };
 
+  const _profT2 = performance.now();
   const totals = fl.reduce((acc, b) => { const p = calcBillProfit(b); return { sale: acc.sale + p.netSale, cost: acc.cost + p.totalCost, disc: acc.disc + p.totalDisc, profit: acc.profit + p.profit }; }, { sale: 0, cost: 0, disc: 0, profit: 0 });
+  const _profT3 = performance.now();
+  console.log("[PROFIT] totals over " + fl.length + " bills = " + (_profT3 - _profT2).toFixed(1) + "ms");
   const overallMargin = totals.sale > 0 ? (totals.profit / totals.sale * 100) : 0;
 
   var recalcAll = function() {
