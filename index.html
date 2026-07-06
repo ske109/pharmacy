@@ -521,15 +521,65 @@ function fbListen(path, callback) {
 
 // Query bills by date range directly from Firebase (fixes Month/Year/Custom filters
 // which broke because the full bills collection is too large to load all at once)
+// ══════════════════════════════════════════════
+// CHANGELOG-BASED BILL RECOVERY
+// The auditTrail (Change Log) records a full before/after snapshot of every
+// bill write (see logChange/dbWrite above). That means any bill missing from
+// outlets/<outlet>/bills or root bills/ — e.g. lost to a past .set() overwrite
+// race — can still be rebuilt from its last recorded snapshot in the log.
+// This walks every "bills" audit entry in chronological order and keeps only
+// the LATEST known state per billNo, so a bill that was legitimately deleted
+// later is never resurrected.
+// ══════════════════════════════════════════════
+function reconstructBillsFromAudit(auditData) {
+  if (!auditData) return {};
+  var entries = Object.keys(auditData).map(function(k) { return auditData[k]; }).filter(function(e) { return e && e.path === "bills"; });
+  entries.sort(function(a, b) { return new Date(a.ts) - new Date(b.ts); });
+  var latest = {}; // billNo -> { deleted, bill }
+  entries.forEach(function(e) {
+    (e.changes || []).forEach(function(c) {
+      var billNo = c && c.recordId;
+      if (!billNo) return;
+      if (c.kind === "removed") { latest[billNo] = { deleted: true, bill: null }; }
+      else if (c.after && typeof c.after === "object" && c.after.billNo) { latest[billNo] = { deleted: false, bill: c.after }; }
+    });
+  });
+  var out = {};
+  Object.keys(latest).forEach(function(billNo) {
+    var rec = latest[billNo];
+    if (!rec.deleted && rec.bill) out[billNo] = Object.assign({}, rec.bill, { reconstructed: true });
+  });
+  return out;
+}
+
+// Cache the changelog recovery pass per outlet per page-load — the changelog
+// can be large, and this only needs to run once (new bills already come in
+// live through the normal bills/ listener, so nothing is lost by caching).
+var _auditRecoveryCache = {};
+function getRecoveredBills(callback) {
+  var outletId = getCurrentOutlet();
+  if (_auditRecoveryCache[outletId]) { callback(_auditRecoveryCache[outletId]); return; }
+  db.ref(getOutletPath("auditTrail")).once("value", function(snap) {
+    var recovered = reconstructBillsFromAudit(snap.val());
+    _auditRecoveryCache[outletId] = recovered;
+    callback(recovered);
+  }, function(err) {
+    console.error("[fbQuery] changelog read error:", err);
+    _auditRecoveryCache[outletId] = {};
+    callback({});
+  });
+}
+
 function fbQueryBillsByDate(fromISO, toISO, callback) {
-  // Read from BOTH root-level bills/ (legacy) and outlets/outletX/bills/ (current)
-  // then merge, deduplicate by billNo, and filter by date.
+  // Read from BOTH root-level bills/ (legacy) and outlets/outletX/bills/ (current),
+  // then reconcile against the changelog to recover any bill missing from both,
+  // merge, deduplicate by billNo, and filter by date.
   var outletPath = getOutletPath("bills");
   var rootPath = "bills";
   console.log("[fbQuery] reading outlet:", outletPath, "+ root: bills/");
-  var outletSnap = null, rootSnap = null;
+  var outletSnap = null, rootSnap = null, recoveredMap = null;
   function merge() {
-    if (outletSnap === null || rootSnap === null) return; // wait for both
+    if (outletSnap === null || rootSnap === null || recoveredMap === null) return; // wait for all three
     var seen = {};
     var all = [];
     // outlet bills first (newer, takes priority on duplicates)
@@ -540,7 +590,12 @@ function fbQueryBillsByDate(fromISO, toISO, callback) {
     (rootSnap ? Object.values(rootSnap) : []).forEach(function(b) {
       if (b && b.billNo && !seen[b.billNo]) { seen[b.billNo] = true; all.push(b); }
     });
-    console.log("[fbQuery] merged total:", all.length, "bills (outlet:", (outletSnap ? Object.keys(outletSnap).length : 0), "+ root:", (rootSnap ? Object.keys(rootSnap).length : 0), ")");
+    // changelog recovery — only fills gaps, never overrides a live bill, never resurrects a deletion
+    var recoveredCount = 0;
+    Object.keys(recoveredMap).forEach(function(billNo) {
+      if (!seen[billNo]) { seen[billNo] = true; all.push(recoveredMap[billNo]); recoveredCount++; }
+    });
+    console.log("[fbQuery] merged total:", all.length, "bills (outlet:", (outletSnap ? Object.keys(outletSnap).length : 0), "+ root:", (rootSnap ? Object.keys(rootSnap).length : 0), "+ recovered from changelog:", recoveredCount, ")");
     if (fromISO === "2000-01-01T00:00:00.000Z") {
       callback(all);
       return;
@@ -560,6 +615,7 @@ function fbQueryBillsByDate(fromISO, toISO, callback) {
     rootSnap = snap.val();
     merge();
   }, function(err) { console.error("[fbQuery] root read error:", err); rootSnap = {}; merge(); });
+  getRecoveredBills(function(recovered) { recoveredMap = recovered; merge(); });
 }
 
 // ══════════════════════════════════════════════
@@ -3304,6 +3360,10 @@ function HistPage({ bills, showBill, saveBills, askConfirm, inv, saveInv, purch 
 
   return (
     <div><h2 style={hds}>Bills ({histLoading ? "…" : filteredBills.length}{hFilter !== "all" ? "/" + bills.length : ""})</h2>
+      {!histLoading && filteredBills.some(function(b) { return b.reconstructed; }) &&
+        <div style={{ fontSize: 11.5, color: "#92400E", background: "#FEF3C7", borderRadius: 8, padding: "6px 10px", marginBottom: 10 }}>
+          ⟲ {filteredBills.filter(function(b) { return b.reconstructed; }).length} bill(s) below were recovered from the Change Log (missing from the live bills data).
+        </div>}
       <div style={{ display: "flex", gap: 3, background: "#E8E4DD", borderRadius: 7, padding: 3, marginBottom: 12, flexWrap: "wrap" }}>
         {[["all","All"],["today","Today"],["week","Week"],["month","Month"],["custom","Custom"]].map(function(x) { return <button key={x[0]} onClick={function(){setHFilter(x[0]);}} style={{ padding: "6px 12px", border: "none", borderRadius: 5, fontSize: 11.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: hFilter === x[0] ? "#fff" : "transparent", color: hFilter === x[0] ? "#0D6B5B" : "#888" }}>{x[1]}</button>; })}
       </div>
@@ -3470,7 +3530,7 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, deleteBi
         {sorted.map(function(b) {
           return <div key={b.billNo} style={{ ...cds, padding: 12, marginBottom: 8, borderLeft: "3px solid #0D6B5B" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div><div style={{ fontFamily: "monospace", fontWeight: 700, color: "#0D6B5B", fontSize: 14 }}>{b.billNo}</div>
+              <div><div style={{ fontFamily: "monospace", fontWeight: 700, color: "#0D6B5B", fontSize: 14 }}>{b.billNo}{b.reconstructed && <Tag bg="#FEF3C7" fg="#92400E"> ⟲ Recovered</Tag>}</div>
                 <div style={{ fontSize: 11, color: "#888" }}>{b.dateIST || fDT(b.date)}</div></div>
               <div style={{ textAlign: "right" }}><div style={{ fontWeight: 800, fontSize: 16, color: "#0C2E24" }}>Rs.{f2(b.netAmount)}</div>
                 <Tag bg={b.paymentMode === "Cash" ? "#D1FAE5" : "#DBEAFE"} fg={b.paymentMode === "Cash" ? "#065F46" : "#1E40AF"}>{b.paymentMode}</Tag></div>
@@ -3510,7 +3570,7 @@ function HistBillTable({ bills, showBill, setEditBill, startBillReturn, deleteBi
                 return (
                   <React.Fragment key={b.billNo}>
                     <tr style={{ background: isOpen ? "#F0FDF4" : "transparent" }}>
-                      {sh("bill") && <td style={{ ...tds, fontFamily: "monospace", fontWeight: 600, color: "#0D6B5B" }}>{b.billNo}</td>}
+                      {sh("bill") && <td style={{ ...tds, fontFamily: "monospace", fontWeight: 600, color: "#0D6B5B" }}>{b.billNo}{b.reconstructed && <span title="Recovered from Change Log — missing from the live bills collection" style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#92400E", background: "#FEF3C7", padding: "1px 6px", borderRadius: 10 }}>⟲</span>}</td>}
                       {sh("date") && <td style={tds}>{b.dateIST || fDT(b.date)}</td>}
                       {sh("patient") && <td style={{ ...tds, fontWeight: 500 }}>{b.patient}</td>}
                       {sh("amount") && <td style={{ ...tds, fontWeight: 700 }}>Rs.{f2(b.netAmount)}</td>}
@@ -4523,7 +4583,7 @@ function ProfitPage({ bills, inv, mob, purch, saveBills, showBill, setPage }) {
               return <div key={b.billNo} style={{ padding: 10, marginBottom: 6, borderRadius: 10, border: "1px solid #FEE2E2", background: "#FEF2F2" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <div>
-                    <span style={{ fontFamily: "monospace", fontWeight: 700, color: "#0D6B5B", fontSize: 13 }}>{b.billNo}</span>
+                    <span style={{ fontFamily: "monospace", fontWeight: 700, color: "#0D6B5B", fontSize: 13 }}>{b.billNo}</span>{b.reconstructed && <span title="Recovered from Change Log" style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#92400E", background: "#FEF3C7", padding: "1px 6px", borderRadius: 10 }}>⟲</span>}
                     <span style={{ color: "#888", fontSize: 11, marginLeft: 8 }}>{b.dateIST || fDT(b.date)}</span>
                     <span style={{ marginLeft: 8, fontSize: 12 }}>{b.patient}</span>
                   </div>
@@ -4557,12 +4617,16 @@ function ProfitPage({ bills, inv, mob, purch, saveBills, showBill, setPage }) {
       })()}
 
       <div style={cds}><b>Bill-wise Breakdown ({fl.length})</b>
+        {fl.some(function(b) { return b.reconstructed; }) &&
+          <div style={{ fontSize: 11.5, color: "#92400E", background: "#FEF3C7", borderRadius: 8, padding: "6px 10px", margin: "8px 0" }}>
+            ⟲ {fl.filter(function(b) { return b.reconstructed; }).length} bill(s) below were recovered from the Change Log (missing from the live bills data).
+          </div>}
         {fl.length === 0 ? <p style={{ color: "#aaa", textAlign: "center", padding: 16, fontSize: 12 }}>No bills in this period</p> :
         <div style={{ marginTop: 10 }}>
           {[...fl].reverse().map(function(b) { var p = calcBillProfit(b); var isExp = profitExpand === b.billNo;
             return <div key={b.billNo} style={{ marginBottom: 6, borderRadius: 10, border: "1px solid #eee", overflow: "hidden" }}>
               <div onClick={function() { setProfitExpand(isExp ? null : b.billNo); }} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", background: isExp ? "#F0FDF4" : "#FAFAF7", cursor: "pointer", borderLeft: "3px solid " + (p.profit >= 0 ? "#059669" : "#DC2626"), flexWrap: "wrap", gap: 4 }}>
-                <div><span style={{ fontFamily: "monospace", fontWeight: 700, color: "#0D6B5B", fontSize: 13 }}>{b.billNo}</span><span style={{ color: "#888", fontSize: 11, marginLeft: 8 }}>{fD(b.date)} | {b.patient}</span></div>
+                <div><span style={{ fontFamily: "monospace", fontWeight: 700, color: "#0D6B5B", fontSize: 13 }}>{b.billNo}</span>{b.reconstructed && <span title="Recovered from Change Log — missing from the live bills collection" style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#92400E", background: "#FEF3C7", padding: "1px 6px", borderRadius: 10 }}>⟲</span>}<span style={{ color: "#888", fontSize: 11, marginLeft: 8 }}>{fD(b.date)} | {b.patient}</span></div>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12 }}>
                   <span>Sale: <b>Rs.{f2(p.netSale)}</b></span><span style={{ color: "#B45309" }}>Cost: Rs.{f2(p.totalCost)}</span>
                   <span style={{ fontWeight: 800, color: p.profit >= 0 ? "#059669" : "#DC2626" }}>Rs.{f2(p.profit)}</span>
